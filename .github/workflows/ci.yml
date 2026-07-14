@@ -1,0 +1,41 @@
+name: CI and extension package
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Scan publishable files for secrets and personal paths
+        run: npm run security:secrets
+      - name: Check JavaScript syntax
+        run: npm run check
+      - name: Run complete test suite
+        run: npm test
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Build allowlisted extension package
+        run: npm run package:extension
+      - name: Upload unpacked extension
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: exam-cram-extension
+          path: release/exam-cram-extension
+          if-no-files-found: error
+          retention-days: 14

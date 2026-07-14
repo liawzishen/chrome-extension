@@ -1,0 +1,123 @@
+{
+  "summary": [
+    "A distributed system balances consistency, availability, and tolerance of network partitions while every service observes only part of the global state.",
+    "Replication improves resilience, but coordination, stale reads, conflict resolution, and recovery policy determine what users actually experience during failure.",
+    "Strong guarantees simplify application reasoning while eventual guarantees can preserve availability when replicas or network links are unavailable.",
+    "Monitoring, idempotent operations, bounded retries, and explicit ownership make recovery safer than treating every timeout as an isolated error.",
+    "The right design depends on the business consequence of delay, duplication, temporary inconsistency, and permanent data loss."
+  ],
+  "visualModel": {
+    "title": "Consistency and recovery in a replicated service",
+    "objective": "Trace how a client request moves through replication, coordination, failure detection, conflict handling, and recovery without assuming that every replica sees the same state immediately.",
+    "kind": "system",
+    "nodes": [
+      {
+        "id": "client-request",
+        "label": "Client request and user-visible correctness expectation",
+        "role": "entry point",
+        "detail": "A request starts with a user expectation such as read-your-writes, no duplicate payment, or a bounded response time.",
+        "why": "The user-visible guarantee determines which internal consistency and recovery tradeoffs are acceptable.",
+        "example": "A checkout request must not create two orders when the client retries after a timeout.",
+        "sourceText": "Start from the correctness guarantee that matters to the user rather than selecting a replication strategy in isolation."
+      },
+      {
+        "id": "routing",
+        "label": "Request routing across regions and temporarily unavailable replicas",
+        "role": "traffic control",
+        "detail": "Routing selects a healthy replica while considering locality, lag, capacity, and the requested consistency level.",
+        "why": "A nearby replica can be fast but too stale for an operation that requires the latest committed state.",
+        "example": "A profile read may use a local replica while a password change routes to the current leader.",
+        "sourceText": "Routing decisions combine health, locality, replica lag, and the consistency required by the operation."
+      },
+      {
+        "id": "replication",
+        "label": "Replication log, quorum acknowledgement, and durable commit boundary",
+        "role": "durability",
+        "detail": "Replicas record ordered changes and acknowledge according to a quorum or leader policy before the system reports success.",
+        "why": "The acknowledgement boundary controls the risk of losing an accepted write after a failure.",
+        "example": "A write acknowledged by only one volatile replica can disappear when that node fails.",
+        "sourceText": "The commit boundary defines how many durable acknowledgements are required before success is returned."
+      },
+      {
+        "id": "consistency",
+        "label": "Consistency guarantee observed by concurrent readers and writers",
+        "role": "semantic contract",
+        "detail": "The system defines which order of operations clients may observe, from linearizable behavior to eventual convergence.",
+        "why": "A guarantee that is stronger than necessary reduces availability, while one that is too weak moves dangerous complexity into the application.",
+        "example": "Inventory reservation may require a stronger guarantee than a public view counter.",
+        "sourceText": "Consistency is an observable contract, not merely the number of replicas in the deployment."
+      },
+      {
+        "id": "failure-detection",
+        "label": "Failure detection under delay, packet loss, and partial network partitions",
+        "role": "uncertainty management",
+        "detail": "Timeouts provide suspicion rather than proof because a slow response and a failed node can look identical.",
+        "why": "Incorrectly declaring failure can create competing leaders or unnecessary failover.",
+        "example": "A delayed heartbeat during congestion should not immediately promote another writer.",
+        "sourceText": "Distributed failure detectors operate with uncertainty because silence does not prove that a process has stopped."
+      },
+      {
+        "id": "conflicts",
+        "label": "Conflict detection and deterministic merge policy for concurrent updates",
+        "role": "convergence",
+        "detail": "Concurrent writes require rejection, ordering, application-specific merge, or a conflict-free data type.",
+        "why": "A deterministic policy prevents replicas from converging to different final values.",
+        "example": "A shopping cart can merge additions while a bank balance cannot safely use last-write-wins.",
+        "sourceText": "Conflict resolution must match the meaning of the data rather than applying one merge rule everywhere."
+      },
+      {
+        "id": "recovery",
+        "label": "Recovery, replay, idempotency, and reconciliation after service restoration",
+        "role": "repair",
+        "detail": "Recovery replays durable events, repairs divergent replicas, and makes retries safe through stable operation identifiers.",
+        "why": "Failover without reconciliation can restore availability while preserving silent inconsistency.",
+        "example": "A payment operation uses an idempotency key so a replay returns the original result.",
+        "sourceText": "Recovery includes replay and reconciliation, not only restarting the failed process."
+      },
+      {
+        "id": "observability",
+        "label": "Observability signals for lag, quorum health, retries, and user impact",
+        "role": "feedback",
+        "detail": "Metrics connect internal replica behavior with the guarantees users actually receive.",
+        "why": "A green process-health dashboard can hide stale reads, duplicate work, or excessive recovery time.",
+        "example": "Alert on replication lag and violated read freshness rather than CPU alone.",
+        "sourceText": "Operational signals should measure the promised behavior, including lag, retry amplification, and recovery progress."
+      }
+    ],
+    "edges": [
+      { "from": "client-request", "to": "routing", "label": "enters through" },
+      { "from": "routing", "to": "replication", "label": "selects replica for" },
+      { "from": "replication", "to": "consistency", "label": "implements" },
+      { "from": "failure-detection", "to": "routing", "label": "changes availability decisions" },
+      { "from": "failure-detection", "to": "replication", "label": "triggers leader or quorum change" },
+      { "from": "replication", "to": "conflicts", "label": "can expose concurrent updates to" },
+      { "from": "conflicts", "to": "recovery", "label": "requires reconciliation during" },
+      { "from": "recovery", "to": "consistency", "label": "restores the promised guarantee" },
+      { "from": "observability", "to": "failure-detection", "label": "provides evidence for" },
+      { "from": "observability", "to": "recovery", "label": "tracks progress of" },
+      { "from": "client-request", "to": "consistency", "label": "defines required contract" },
+      { "from": "routing", "to": "observability", "label": "emits decision signals to" }
+    ],
+    "scenarios": [
+      {
+        "id": "partition",
+        "label": "Regional partition",
+        "prompt": "One region loses connectivity to the leader while local clients continue sending requests.",
+        "activeIds": ["routing", "failure-detection", "consistency"],
+        "values": [],
+        "outcome": "The service follows its explicit availability and consistency policy instead of treating the timeout as proof of leader failure.",
+        "insight": "The correct response depends on the user guarantee and whether stale or conflicting writes are acceptable."
+      }
+    ],
+    "check": {
+      "prompt": "Why should a timeout not automatically trigger a new leader?",
+      "choices": ["Silence does not prove failure", "All replicas are always current", "Retries cannot duplicate work"],
+      "answer": "Silence does not prove failure",
+      "explanation": "Delay and failure are indistinguishable without additional evidence."
+    },
+    "suggestedQuestions": [
+      "Which user guarantees require a quorum?",
+      "How does idempotency make recovery safer?"
+    ]
+  }
+}

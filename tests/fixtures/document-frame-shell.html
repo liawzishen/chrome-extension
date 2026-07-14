@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>App-rendered learning page</title></head>
+  <body>
+    <nav>This top-frame shell intentionally contains navigation rather than lesson content.</nav>
+    <main>
+      <p>Loading interactive lesson workspace.</p>
+      <section id="lessonShadowHost"></section>
+      <iframe title="Embedded lesson" src="/tests/fixtures/document-frame-child.html"></iframe>
+    </main>
+    <script>
+      const shadow = document.getElementById("lessonShadowHost").attachShadow({ mode: "open" });
+      shadow.innerHTML = `
+        <p hidden>${"Hidden duplicate navigation ".repeat(500)}</p>
+        <article>
+          <h1>细胞膜运输的核心关系</h1>
+          <p>细胞膜具有选择透过性，能够控制物质进入和离开细胞，从而维持稳定的内部环境。</p>
+          <p>扩散使粒子沿浓度梯度移动，而主动运输需要能量并且可以逆着浓度梯度移动。</p>
+          <p>渗透描述水分子通过选择透过膜的移动，这些过程共同维持细胞正常功能。</p>
+        </article>`;
+    </script>
+  </body>
+</html>

@@ -1,0 +1,500 @@
+# Exam-Cram Assistant
+
+Exam-Cram is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker.
+
+The product is designed around one loop:
+
+```text
+read across pages and videos
+  -> inspect the supporting evidence
+  -> practise with a quiz
+  -> record mastery and weak concepts
+  -> choose the next chapter action
+  -> protect the study session
+```
+
+This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; Exam-Cram is optimizing for traceability, active learning, persistence, and a clear next study action.
+
+## Current Release: 0.6.0 — 14 July 2026
+
+### 0.6.0 explicit chapters, least-privilege access, and release security
+
+- adds **New chapter** beside the chapter selector in Page and Notes and to the compact Journey view; each unique chapter receives a stable ID and grows as an independent Learning Forest tree, while choosing an existing name selects its existing ID instead of silently creating or merging another record
+- changes note and source creation to require an explicitly selected chapter, passes both the stable chapter ID and display title through every creation path, and keeps same-titled legacy records isolated by IDs rather than fuzzy title matching
+- renames the collection action to **Save source to chapter** and explains its behavior in place: it stores a bounded page, document, or video/transcript snapshot without generating a note, deduplicates an exact repeated source, and lets the learner later choose **Build chapter visual note** in Journey to combine the chapter's saved evidence
+- replaces global all-sites onboarding with an **Allow this site** banner for the current HTTP/HTTPS origin; document hosts, local-file access, Focus destinations, and custom backend origins are requested separately only when their corresponding action needs them
+- binds every saved backend token to the configured endpoint origin, clears a reused token when that origin changes, sends it only to its bound origin, permits plain HTTP only for loopback hosts, and requires HTTPS for custom remote backends
+- hardens the local services with loopback-only listeners, exact origin validation, constant-time bearer-token comparison, JSON-only API posts, bounded request bodies, per-origin/address rate limits, concurrency limits, timeouts, redacted server errors, no-store responses, and restrictive CSP, framing, referrer, MIME, and permissions headers
+- adds an allowlisted extension packager and publish-safety scanner, CI verification, CodeQL analysis, Dependabot updates, a private vulnerability-reporting policy, an explicit extension CSP, and expanded regression coverage for chapter isolation, permission contracts, endpoint-bound tokens, loopback authentication, JSON-only API posts, and defensive response headers
+
+### 0.5.5 calm, adaptive interface
+
+- replaces the feature-by-feature purple styling with a small semantic system: neutral reading surfaces, one blue action accent, system typography, consistent spacing, restrained radii, and one translucent material treatment for persistent navigation
+- keeps all five study destinations in one compact symbol-and-label tab row from 320px through desktop widths, with correct tab/tabpanel semantics, roving arrow-key navigation, and visible focus
+- normalizes important controls to at least 44px hit regions, adds pressed/disabled feedback, and keeps the primary study action visually distinct from file, collection, and secondary actions
+- simplifies permission, current-source, Journey, Focus, Library, note, cheat-sheet, and dialog surfaces so content hierarchy comes from spacing and type instead of nested gradients, saturated borders, and competing shadows
+- keeps visual-note maps, selected-concept evidence, and cheat sheets in document flow; the narrow action toolbar no longer floats over study content, and connector observers/listeners are disposed when a note is replaced or closed
+- adds explicit high-contrast, reduced-transparency, and reduced-motion adaptations plus regression coverage for semantic contrast, target sizing, compact navigation, responsive overflow, keyboard behavior, and renderer teardown
+- preserves every existing action ID, storage key, source/artifact link, backend route, and exact saved-note handoff; this release changes presentation and interaction quality rather than the learning data model
+
+### 0.5.4 reliable Chrome tab-audio authorization
+
+- replaces the unreliable side-panel `getMediaStreamId()` request with Chrome's supported action-driven flow: **Start tab audio** validates and arms the exact video, then one Exam-Cram toolbar click authorizes the tab and starts recording automatically
+- keeps the armed request in `chrome.storage.session` for up to 60 seconds, so a brief service-worker suspension cannot lose the user's intent; the one-use Chrome stream ID is created only after the toolbar invocation and is consumed immediately by the offscreen recorder
+- completes backend preflight before asking for the toolbar click, preventing a slow backend, missing provider key, or invalid token from consuming Chrome's short-lived stream authorization
+- cancels the armed request on navigation, tab closure, consent dismissal, expiry, or source mismatch and never reuses it for a similar title or a different tab
+- adds a clear two-step consent callout and live waiting/authorizing/error states; users no longer need to reauthorize the toolbar and then return to press **Start tab audio** a second time
+- provides `Ctrl+Shift+Y` (`Command+Shift+Y` on macOS) as an action shortcut with the same Chrome `activeTab` grant when the toolbar icon is not pinned
+
+### 0.5.3 transcription recovery, connected notes, and cheat sheets
+
+- replaces the full Journey's original Wayfinder presentation with an interactive Learning Forest: each stable chapter ID grows one deterministic bronze particle tree, saved Visual Tutor Note concepts become its subheaders, and source-only chapters remain visible as seedlings
+- uses progressive disclosure in the forest: selecting a tree isolates its concepts without opening a panel, selecting a concept flies to its canopy and opens a compact bottom card, and full note evidence or the Journey summary opens only from an explicit action
+- adds a user-controlled **Pause motion** action, stable orbit dragging, reliable captured subheader presses, strong keyboard focus, responsive command regions, and a complete list fallback when WebGL is unavailable
+- removes the manual backend-token step for the bundled loopback server when the browser-supplied extension Origin exactly matches `ALLOWED_EXTENSION_ORIGINS`; preview pages, missing/wrong origins, and custom/remote backends still require a valid bearer token
+- performs an authenticated-or-trusted-origin transcription preflight before `REC`, so an unavailable backend, missing Gemini key, wrong origin, or stale custom token is reported before audio capture begins
+- records every audio chunk as processing, transcribed, or failed; provider errors can no longer masquerade as received chunks while the segment count remains at zero
+- sends real `audio/wav` input to Gemini, retries one invalid or empty structured transcript once, and persists the final provider error and recovery message
+- restores a professional connected mind map with a central topic, 3–4 primary branches, supporting secondary branches, always-visible SVG connections, selected-neighborhood highlighting, branch focus, and keyboard traversal
+- adds a source-grounded cheat sheet to every visual note with Topic, Main idea, Key facts/rule, Example/application, and Evidence/citation fields; video times, PDF pages, and collection-source identity are retained
+- reflows dense mind maps and semantic cheat-sheet tables at 320, 360, 429, and 640 pixels without horizontal scrolling, while exports include the bounded cheat sheet but exclude private raw evidence
+
+### 0.5.2 source-ingestion reliability
+
+- replaces Chrome's unreliable native action-to-side-panel shortcut with one explicit toolbar action that both grants the current tab invocation and opens the same persistent global panel
+- binds every short-lived tab-audio reservation to the exact tab, canonical URL, media identity, and source fingerprint; navigation, replay, replacement, expiry, or tab closure revokes it before the recorder starts
+- reads current HTTP/HTTPS HTML pages across accessible frames and open shadow roots, allowed local HTML pages, and remote or local PDF documents without generating a quiz
+- replaces the old raw character threshold with a bounded Unicode-aware readability check, so structured and multilingual study pages are not rejected merely because they use CJK text or concise sections
+- adds **Open HTML or PDF file** as a local-file fallback that does not require Chrome file-URL access
+- parses PDFs locally with bundled PDF.js, preserves page-number anchors, and reports password-protected, malformed, oversized, or scanned/image-only PDFs clearly
+- bounds HTML nodes, PDF bytes/pages/text objects, extracted text, download time, and parse time; raw PDF bytes are never stored or exported
+- tries visible/player captions and Gemini public-YouTube analysis before offering tab audio; live capture now shows elapsed input, audibility, chunk, and segment progress and stops with a clear message when no samples or only silence arrive
+- introduced an overview-first heavy-note list fallback; 0.5.3 replaces that temporary fallback with the connected, focusable hierarchy described above
+
+### 0.5.1 reliability fixes
+
+- repairs the tab-audio request/reply lifecycle so capture failures cannot silently strand the consent dialog
+- converts closed or stale worker message ports into an explicit `Reload Exam-Cram` recovery action
+- makes compact and full-Journey saved-artifact cards reflow cleanly as the side panel or browser window changes size
+- keeps each **Open note** action attached to its exact saved artifact without squeezing or truncating the button
+- preserves the 0.5 note-first workflow, persistent side panel, deduplicated source snapshots, and real DOCX/PDF exports
+
+### 0.5.0 professional UX foundation
+
+- a global Chrome side panel that stays available across tabs and websites until the user closes it
+- a note-first workflow: visual notes contain no quiz UI or quiz request until **Generate quiz** is selected
+- interactive visual notes with responsive concept, comparison, formula, flow, and relationship layouts
+- source-bound quizzes with difficulty/style controls, unique safe IDs, distinct options, and balanced answer positions
+- stale-page, stale-video, transcript-fingerprint, and collection-revision guards
+- direct, editable OOXML `.docx` and genuine `.pdf` export with a unified content preview
+- explicit collection of pages, notes, and videos from different websites into one chapter
+- a dated chapter-first Journey with `Completed`, `In progress`, `Needs review`, and `Planned` states; the current full-page presentation is the Learning Forest described below
+- bounded overall Journey summaries with a deterministic local fallback
+- a timed Focus session blocker with 1–720 minute durations and domain/path rules
+- caption-grounded video lessons with timestamped visual nodes, hints, and jumps
+- automatic public-YouTube analysis when usable captions are unavailable
+- explicit audio-only tab capture for other detectable HTML5 videos, limited to 15 minutes
+- an authenticated local AI backend with an extension-origin allowlist
+
+## Interface Design Principles
+
+The side panel applies Apple Human Interface Guidelines as cross-platform web principles rather than copying Apple branding. It uses the operating system's UI font stack and small custom SVG symbols; it does not redistribute SF Pro or SF Symbols.
+
+- **Hierarchy before decoration:** opaque neutral surfaces carry reading content, while translucent material is reserved for persistent navigation and command layers. See Apple HIG [Foundations](https://developer.apple.com/design/human-interface-guidelines/) and [Materials](https://developer.apple.com/design/human-interface-guidelines/materials).
+- **Adaptive composition:** compact widths keep five short symbol-and-label destinations in one row, stack competing controls, and place study details in normal flow so no toolbar or visual note blocks them. See [Layout](https://developer.apple.com/design/human-interface-guidelines/layout) and [Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars).
+- **Legibility and clear action priority:** system typography, a restrained weight scale, semantic contrast, one filled primary action, and sentence-case labels replace ornamental type and equally weighted controls. See [Typography](https://developer.apple.com/design/human-interface-guidelines/typography) and [Color](https://developer.apple.com/design/human-interface-guidelines/color).
+- **Direct, accessible interaction:** important controls retain at least 44px hit regions, keyboard focus is visible, tabs support arrow/Home/End navigation, and reduced-motion, reduced-transparency, and higher-contrast preferences have explicit fallbacks. See Apple's [UI design tips](https://developer.apple.com/design/tips/) and [Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility/).
+
+## Why Exam-Cram
+
+| Need | Exam-Cram approach |
+|---|---|
+| Trust | Every generated question and visual concept carries a source excerpt, saved-source link, or transcript segment. |
+| Active learning | Quiz generation validates option quality and records submitted performance separately from passive activity. |
+| Persistence | Notes, quizzes, sources, timestamps, and demonstrated progress survive outside a disposable chat. |
+| Cross-site study | A chapter combines explicitly selected sources without crawling unrelated tabs or links. |
+| Video verification | Caption times are labelled caption-grounded; automatic transcript times are labelled AI-estimated. |
+| Focus | A simple persistent session blocker is built into the study flow without claiming full LeechBlock parity. |
+
+## Market Evidence Behind The Priorities
+
+This section is a directional product-research sample checked on 11 July 2026. Reddit posts are anecdotal, self-selected, and not representative of all students. Counts overlap across a 14-thread review and should not be interpreted as population prevalence.
+
+| Recurring theme | Mentions in sample | Product response |
+|---|---:|---|
+| Trust, depth, and verifiability | 6 | Strict source IDs, evidence overlap checks, source chips, transcript confidence, and stale-source rejection. |
+| Workflow and persistence | 4 | Saved artifacts, cross-site chapters, exports, and the dated Journey. |
+| Pricing and quota clarity | 4 | Keep saved work accessible and show any future metered AI allowance before generation. |
+| Active-learning quality | 3 | Distinct plausible choices, difficulty/style controls, progressive hints, and mastery based on submitted work. |
+| Focus-blocker balance | 2 | Start with a simple configurable session blocker; add strict/scheduled modes only with clear escape behavior. |
+| Video navigation | 2 | Lead with timestamped evidence and one-click return to the exact moment, not a transcript dump. |
+
+Representative discussions:
+
+- [r/studytips: why students do or do not use AI quiz generators](https://www.reddit.com/r/studytips/comments/1mk2br0/do_you_actually_use_ai_quiz_generators_if_not_why/)
+- [r/studytips: passive AI explanations and false confidence](https://www.reddit.com/r/studytips/comments/1uogrex/i_used_ai_it_goes_horribly_wrong/)
+- [r/notebooklm: mistakes, interface complexity, and source setup](https://www.reddit.com/r/notebooklm/comments/1r6ndqd/why_most_people_dont_use_notebooklm_for_studying/)
+- [r/notebooklm: shallow summaries for logic-heavy coursework](https://www.reddit.com/r/notebooklm/comments/1o1dhc9/beware_of_relying_on_notebooklm_for_schoolwork/)
+- [r/notebooklm: saved citation navigation regression](https://www.reddit.com/r/notebooklm/comments/1hii8h6/not_able_to_get_the_source_citations_after_the_recent_update/)
+- [r/CollegeStudywithAI: saved quizzes versus disposable chat](https://www.reddit.com/r/CollegeStudywithAI/comments/1qk5soq/what_ai_tools_are_you_actually_using_for_studying/)
+- [r/productivity: why people abandon website blockers](https://www.reddit.com/r/productivity/comments/1qhm7sr/what_makes_you_stop_using_website/)
+- [r/youtube: timestamp navigation as the valuable summarizer behavior](https://www.reddit.com/r/youtube/comments/1upjh6v/summary_feature_actually_saved_my_time/)
+
+## Comparable Products And Business Models
+
+The comparison uses official product or pricing pages for business claims. Plans and limits can change.
+
+| Product | What it does especially well | Business pattern | Lesson for Exam-Cram |
+|---|---|---|---|
+| [NotebookLM](https://support.google.com/notebooklm/answer/16213268) | Source workspaces, grounded chat, mind maps, quizzes, and overviews | Free standard limits plus higher-limit Google AI, Workspace, and enterprise plans | Source grounding and workspace clarity matter more than generic chat breadth. |
+| [Recall](https://app.getrecall.ai/pricing) | Persistent knowledge graph, summaries, chat, quiz, and spaced repetition | Freemium subscription tiers | The saved knowledge graph and review loop justify recurring value. |
+| [Glasp](https://glasp.co/pricing) | Web/PDF/video highlighting, discovery, summaries, and export | Free core plus Pro subscription and student discount | Capture and export can stay free while higher AI usage is metered. |
+| [Knowt](https://knowt.com/plans?tab=Plus) and [Quizlet](https://quizlet.com/features/ai-study-tools) | Established practice modes, content libraries, imports, and school workflows | Free entry plus learner/institution subscriptions | Practice quality and migration are stronger differentiators than summary generation. |
+| [Eightify](https://eightify.app/) | Fast timestamped YouTube topics and jumps | Free installation with paid in-app access | Video value should be visible immediately through topics and exact moments. |
+| [MaxAI](https://www.maxai.me/pricing/) and [Sider](https://sider.ai/pricing) | Broad page/PDF/video assistants and multiple models | Free allowances plus subscriptions or usage credits | Competing on feature count is unattractive; Exam-Cram should stay learning-specific. |
+| [LeechBlock NG](https://chromewebstore.google.com/detail/leechblock-ng/blaaajhemilngeeffpbfkdjjoefldkok) | Highly configurable browser blocking | Free/open source | Basic browser-only blocking has a strong free expectation. |
+| [Freedom](https://support.freedom.to/en/articles/13764747-what-s-included-in-free-and-premium-plans) | Cross-device blocking, schedules, exceptions, and locked sessions | Free immediate sessions plus Premium scheduling/strict controls | Advanced cross-device and scheduled controls, not the basic timer, can support paid value. |
+
+The strongest positioning opportunity is the integrated evidence-to-mastery loop. That conclusion is an inference from the products' official positioning, not a claim that no other competing product exists.
+
+## Business Model Hypothesis
+
+No payment or quota system is implemented in this repository. The proposed model is:
+
+### Free and always accessible
+
+- manual page, note, and captioned-video study
+- saved Journey history and previously generated artifacts
+- basic visual lessons and quizzes
+- manual cross-site source collection
+- Word/PDF export
+- timed Focus sessions and custom domain/path rules
+- local deterministic fallback and optional self-hosted backend
+
+### Potential metered or premium capabilities
+
+- captionless-video processing, because it has direct media-compute cost
+- larger source collections and higher AI-generation limits
+- advanced practice such as typed recall, answer evaluation, and adaptive spaced review
+- scheduled/rolling Focus rules and optional strict mode
+- team, classroom, and institution administration after privacy and teacher controls mature
+
+Product principles for any future paid version:
+
+- show the remaining allowance before the user starts an expensive action
+- never lock notes, quizzes, citations, or exports that were already generated
+- offer a student-oriented annual plan and verified discount only after pricing research
+- retain bring-your-own-backend/local fallback to reduce cost and increase user control
+
+## Install, Configure, And Pair The Local Backend
+
+Requirements:
+
+- Chrome 116 or newer
+- Node.js 18 or newer
+- one supported provider key for note and quiz generation; automatic public-video analysis and tab-audio transcription specifically require a Gemini key
+
+1. Install the locked dependencies and build the allowlisted unpacked extension:
+
+   ```powershell
+   npm ci
+   npm run package:extension
+   ```
+
+2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `release/exam-cram-extension`. Do not load or distribute the project root; the release folder contains only the runtime files listed by `scripts/extension-files.mjs`.
+3. Copy the extension ID shown by Chrome. Use only that value in the origin setting described below; do not add it to source files or documentation.
+4. Copy the environment template and edit the private copy:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+5. Choose one note-generation provider in `.env`. The default Gemini configuration uses `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, and `GEMINI_MODEL`. The alternative uses `AI_PROVIDER=openai`, `OPENAI_API_KEY`, and `OPENAI_MODEL`; a Gemini key is still required if automatic video transcription is needed.
+6. Set the exact loaded-extension origin, with no trailing slash:
+
+   ```text
+   ALLOWED_EXTENSION_ORIGINS=chrome-extension://your-32-character-extension-id
+   ```
+
+7. Keep the bounded defaults from `.env.example` unless you have a measured reason to change them. They control provider timeouts, concurrent API work, requests per minute, request-body bytes, and maximum study, note, and collection text.
+8. Leave `BACKEND_ACCESS_TOKEN` blank to generate a private token file for non-extension clients, or supply a strong private token through the environment. Never commit `.env`, the generated token file, provider keys, tokens, browser profiles, screenshots, or logs.
+9. Start the loopback backend:
+
+   ```powershell
+   npm start
+   ```
+
+10. In Exam-Cram Settings, keep the bundled endpoint and leave the token field empty:
+
+    ```text
+    Endpoint: http://127.0.0.1:8787/api/study-session
+    Backend access token: leave blank for the allowlisted bundled backend
+    ```
+
+11. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; Exam-Cram reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
+
+The provider key stays in the backend `.env` and is never placed in the extension. The bundled server accepts tokenless API posts only when it is listening on loopback, the socket is loopback, and Chrome supplies an exact origin listed in `ALLOWED_EXTENSION_ORIGINS`. Preview pages, missing or different origins, and other clients require the generated or configured bearer token. A supplied wrong token is rejected even when the request uses the trusted extension origin.
+
+Health check:
+
+```text
+http://127.0.0.1:8787/health
+```
+
+## Preview
+
+Run the local interface preview in another terminal:
+
+```powershell
+npm run preview
+```
+
+Open `http://127.0.0.1:8788`, select **Notes**, and choose **Try the demo**. Open `http://127.0.0.1:8788/journey.html` to inspect the full Learning Forest route. Browser tab reading, blocking, timestamp jumping, the persistent side panel, and tab-audio capture require the loaded extension.
+
+## Side Panel And Page Access
+
+- The panel stays open while switching tabs and navigating across origins. Chrome's native side-panel close button is the explicit close control.
+- When the active HTTP/HTTPS page has not been granted, the panel shows **Allow this site** and requests only that site's origin pattern. Declining leaves the panel usable without reading the page; no global all-sites grant is part of onboarding.
+- Remote document hosts, the optional local-file capability, Focus destinations, and a custom backend origin use separate just-in-time permission requests. A custom backend must use HTTPS unless it is a loopback address.
+- **Current page** reports the live browser title, domain, readability/permission state, and selected Journey chapter.
+- **This note is from...** always identifies the pinned artifact separately. Refreshing page context never replaces the pinned note or quiz.
+- The panel autosaves the selected tool view, pasted notes, stable selected chapter ID, settings choices, pinned artifact, and in-progress quiz answers. A saved custom-backend token is bound to that endpoint's origin and is cleared rather than reused if the origin changes.
+- If Chrome reports `Only permissions specified in the manifest may be requested`, reload Exam-Cram from `chrome://extensions`; the running extension is still using an older manifest.
+
+### Required reload after updating an unpacked build
+
+Refreshing the side panel is not the same as reloading the extension. A refreshed panel can load newer UI files while Chrome still runs the previous service worker, which produces errors such as `The message port closed before a response was received`.
+
+1. Close the Exam-Cram side panel.
+2. Open `chrome://extensions`.
+3. Find Exam-Cram Assistant and choose **Reload**.
+4. Open the video page and start playback.
+5. Click the Exam-Cram toolbar icon to open the global panel.
+6. Choose **Create note from video**, then **Auto-transcribe** and **Start tab audio** if the video has no usable captions.
+7. Keep that playing video tab active and click the Exam-Cram toolbar icon once more, or press `Ctrl+Shift+Y`. Version 0.6.0 authorizes that exact armed request and starts recording automatically.
+
+Version 0.6.0 performs backend preflight before the final toolbar invocation and never stores an unused Chrome stream ID. Navigation intentionally cancels the armed request; on the new video page, press **Start tab audio** again and then use the toolbar action once to authorize and start it.
+
+## Core Workflows
+
+### Study and record a page
+
+1. Open an HTTP or HTTPS article or documentation page.
+2. Choose **Allow this site** if Chrome has not already granted that website.
+3. Select an existing Journey chapter, or choose **New chapter**, enter a unique name, and create it. One chapter is one Learning Forest tree.
+4. Choose **Create note from page**.
+5. Review the key points and grounded cheat sheet, then explore the connected mind map and inspect the selected concept's source evidence.
+6. Choose **Generate quiz** only when you want practice, select the settings, and submit it to record demonstrated mastery.
+
+Generation checks the tab ID, canonical URL, and content fingerprint before showing the result. A page changed during generation cannot replace the current quiz.
+
+### Study HTML and PDF documents
+
+- For an open web HTML page, choose **Create note from page**.
+- Exam-Cram combines readable content from the top page, accessible child frames, and open shadow roots. Hidden, inert, navigation, form, script, style, canvas, and duplicate content are excluded within strict node, time, chunk, and text budgets.
+- For an open PDF URL, grant that document host when requested and choose **Create note from page**. The PDF is fetched without cookies, parsed locally, and only bounded extracted text enters the normal note-generation path.
+- For a local `.html`, `.htm`, or `.pdf`, choose **Open HTML or PDF file**. This file picker works even when Chrome's file-URL toggle is off.
+- To read a local file already open in a Chrome tab, enable **Allow access to file URLs** on Exam-Cram's `chrome://extensions` details page, then refresh the source.
+- Password-protected PDFs must be unlocked and saved as an unprotected copy. Image-only/scanned PDFs require an OCR copy because Exam-Cram does not upload pages for silent OCR. These cases, malformed PDFs, and PDFs with too little selectable study text receive PDF-specific messages rather than the HTML readability error.
+
+Selecting a document prepares it as the current source; choose **Create note from document** to generate the visual note. **Refresh page** clears the selected file and returns the source card to the active browser tab.
+
+### Collect across websites
+
+**Save source to chapter** is collection, not note generation. It stores a bounded snapshot of the selected readable page/document or supported video transcript under the currently selected stable chapter ID. The action does not create a visual note, quiz, or additional tree.
+
+1. Select an existing chapter or use **New chapter** to create the tree that should own the collection.
+2. On each intended page, allow that website if prompted and choose **Save source to chapter**.
+3. Repeat on other websites or supported videos, selecting the same chapter each time.
+4. Open Journey, select that chapter, and choose **Build chapter visual note** to generate one grounded combined note from its saved sources.
+
+- collection is always explicit; the extension never crawls links or silently reads other tabs
+- saving the same source fingerprint again refreshes or deduplicates that source instead of adding an indistinguishable copy
+- all included sources receive an even bounded excerpt instead of silently dropping later sources
+- the server requires every generated citation to name a supplied source ID and overlap that source's evidence
+- finalization rechecks the chapter source revision atomically
+
+### Study a video
+
+The extension tries:
+
+1. loaded HTML5 captions
+2. a rendered transcript, including an open YouTube transcript panel
+3. a timestamped transcript the user deliberately pasted for that bound video
+4. automatic public-YouTube analysis through Gemini
+5. explicit audio-only tab capture for the detected playing tab
+
+Exam-Cram no longer depends on YouTube's private player-response or caption-track URLs. Those internal endpoints are not a stable extension interface; unopened captions therefore fall through to the documented Gemini public-video route or the explicit tab-audio path.
+
+For tab capture:
+
+- the video must be playing before capture begins
+- the user sees a consent dialog and a persistent `REC` badge
+- **Start tab audio** binds a 60-second armed request to the detected tab, canonical URL, and exact media fingerprint; it does not ask Chrome for a stream ID or begin recording yet
+- the next Exam-Cram toolbar action—or `Ctrl+Shift+Y` / `Command+Shift+Y` action shortcut—supplies Chrome's qualifying invocation, creates the one-use stream ID in the service worker, and immediately starts the offscreen recorder; there is no second Start click
+- before `REC`, the worker checks the Gemini backend, exact extension-origin allowlist, optional custom token, and provider key; the bundled loopback backend does not require a token to be copied into Settings
+- `REC` advances from live input before the first transcript response and reports elapsed audio, signal, total chunks, processing/transcribed/failed chunk counts, and validated timestamped segments separately
+- every emitted chunk must finish with at least one valid segment or a persisted provider error; a failed request can no longer leave the interface indefinitely at `0 segments`
+- if Chrome supplies no samples or the tab remains silent, capture stops with a direct instruction to play the video and unmute both the player and tab
+- navigation, tab closure, expiry, consent dismissal, or a source mismatch clears the armed request; press **Start tab audio** on the intended video again, then use the toolbar action once
+- capture is limited to 15 minutes and continues if the side panel closes
+- pause, seek, and playback-rate changes create new timestamp mapping boundaries
+- the extension captures the selected tab, not the microphone
+- transient WAV uploads are normally emitted every 15 seconds and are hard-limited to 45 seconds; they are immediately discarded, and raw audio is never written to extension storage or logs
+- navigation or media replacement aborts the job and discards its transcript evidence
+
+Chrome exposes current-tab media through [`chrome.tabCapture`](https://developer.chrome.com/docs/extensions/reference/api/tabCapture). Gemini supports [inline audio understanding](https://ai.google.dev/gemini-api/docs/generate-content/audio) and [public YouTube video input](https://ai.google.dev/gemini-api/docs/generate-content/video-understanding).
+
+Publisher-caption timestamps are labelled `caption-grounded`, pasted timestamp transcripts are labelled `user-provided`, and automatically generated timestamps are validated, bounded to the video, and labelled `AI-estimated`; the latter two may still be approximate.
+
+### Learning Journey
+
+The compact panel route and full Learning Forest page show:
+
+- explicit **New chapter** actions in Page, Notes, and Journey; a chapter can exist as an empty named tree before any source or note is added
+- one bronze particle tree per user-named Journey chapter, with source-only chapters shown as seedlings
+- a name-only forest overview when multiple note trees exist and a focused 3D concept tree when one is selected
+- up to seven grounded concept branches from the latest saved visual note, joined by stable chapter and artifact IDs
+- saved source snapshots for pages, notes, documents, and videos inside the focused tree drawer
+- generation activity separately from submitted performance
+- chapter state based on the latest submitted quiz
+- source count, study days, average score, and elapsed Focus session time
+- a bounded overall summary for today, seven days, 30 days, or all time
+- responsive saved-artifact cards whose **Open note** action restores the exact local note or quiz
+- a complete list fallback when WebGL or hardware acceleration is unavailable
+
+Learning Forest interaction model:
+
+1. Choose **New chapter** from Page, Notes, or Journey, name it, and select it. The Journey writer creates an empty chapter with a stable ID; using an existing name selects the existing chapter rather than creating a title-based duplicate.
+2. Notes, saved sources, quizzes, and forest selection carry that stable chapter ID. Similar chapter or artifact titles are not used to merge unrelated records.
+3. With one chapter, the tree is centered and its grounded concept subheaders appear immediately.
+4. With multiple chapters, the overview shows tree names only. Select a name or tree to isolate that chapter and reveal up to seven concepts.
+5. Select a concept subheader to fly to its mapped canopy, hide the directory labels, and open only the compact grounded concept card at the bottom.
+6. Use **Note details** for the complete saved Visual Tutor Note, cheat sheet, quizzes, sources, dates, status, and chapter evidence. Use **Journey summary** for range-based overall progress.
+7. Use **Back to forest** or `Escape` to leave a focused tree or concept. Use **Pause motion** to freeze the wind and continuous contour flow without disabling tree selection, zoom, or evidence access.
+
+The layout treats the canvas as the primary content region and the evidence drawer as auxiliary information. Desktop uses a centered bounded bottom panel; narrow viewports use a single-column bottom sheet. Controls retain visible 2px keyboard focus, pointer targets are at least 40px high, decorative layers cannot block labels, and `prefers-reduced-motion` starts the forest paused. These choices follow the responsive-region guidance in [GitHub Primer](https://primer-docs-preview.github.com/product/getting-started/foundations/layout/) and the target-size, focus, and motion guidance in [WCAG 2.2](https://www.w3.org/TR/WCAG22/).
+
+The renderer is bundled locally for extension CSP compliance. After editing `journey-tree/`, rebuild it with:
+
+```powershell
+npm run build:journey
+```
+
+The service worker is the sole Journey writer. Operations are serialized, idempotent, and revision checked so an open full Journey page cannot overwrite a newly captured source or score.
+
+### Focus mode
+
+Focus is a timed session blocker, not a full LeechBlock clone.
+
+1. Choose a preset or any whole-minute duration from 1 to 720.
+2. Enter one domain or path per line, such as `reddit.com` or `youtube.com/shorts`.
+3. Start Focus and approve access only to those origins.
+4. Take the fixed five-minute break or end the session at any time.
+
+The MV3 worker stores an absolute deadline, recreates alarms after restart, installs top-level session rules, and removes them after stop/expiry. The displayed metric is elapsed Focus session time, including breaks.
+
+## Evidence, Privacy, And Limitations
+
+- Generated content can still be incomplete or wrong; inspect the linked source before relying on it.
+- AI-estimated transcript times are not equivalent to publisher captions.
+- Public YouTube URL support depends on Gemini's current preview capability and provider limits.
+- Private/unlisted YouTube videos, DRM players, closed shadow roots, frames for which Chrome has not granted access, and videos without detectable audio may require a local HTML/PDF file, captions, or a pasted transcript.
+- Journey data, saved sessions, focus history, and completed automatic transcripts are stored in extension-local storage.
+- Page/video reading and tab capture are explicit user actions.
+- HTML/PDF reading is explicit. Remote PDFs are fetched without cookies or a referrer; local file-picker input stays in memory until a note is created. Only bounded extracted text is stored with the source-grounded note and sent to the configured backend; raw PDF bytes are never stored or exported.
+- PDF JavaScript evaluation is disabled. Attachments, forms, actions, and external links inside a PDF are not executed by the reader.
+- Website access is granted per site through **Allow this site**. Focus separately requests only the distracting-site origins still missing, and Exam-Cram does not inspect browsing history.
+- The local backend binds to `127.0.0.1`, validates the exact configured extension Origin, and permits that trusted loopback extension to connect without manual token entry. Other clients require the separate access token.
+- Provider keys exist only in the backend `.env`. A custom backend token is stored in extension-local settings, which is convenient but is not an operating-system password vault; use a scoped token and protect the browser profile.
+
+## Security And Publication
+
+No application can be guaranteed impossible to compromise. Version 0.6.0 reduces exposed authority, validates trust boundaries, bounds resource use, and adds repeatable release checks. See [SECURITY.md](SECURITY.md) for the supported release line, credential-response guidance, and private reporting process.
+
+### Runtime protections
+
+- Extension pages use a manifest CSP that loads scripts only from the extension package, disables plugin objects, and prevents a document base URL from being redirected. No provider key is bundled into extension code.
+- Page, document, Focus, and custom-backend permissions are requested only for the relevant site or origin when an action needs them. External source links are restricted to expected safe schemes.
+- Custom remote backend URLs must use HTTPS; unencrypted HTTP is accepted only for `localhost` and loopback addresses. URL credentials are stripped during normalization.
+- Saved bearer tokens are associated with one backend origin. Changing the endpoint origin clears a reused token, and request builders omit the token when a derived URL does not match its stored origin.
+- The bundled backend listens only on `127.0.0.1`. Tokenless API access requires both a loopback socket and an exact configured extension Origin. Other allowed clients must present the generated or configured bearer token, which is compared in constant time.
+- API posts must use JSON. Declared and streamed bodies are bounded, provider requests have timeouts, concurrent work is capped, and a per-origin/address minute bucket returns `429` when the configured limit is exceeded.
+- Backend and preview responses set no-store/MIME/framing/referrer/permissions protections and restrictive CSP headers. Server errors redact configured keys, tokens, authorization values, and credential query parameters before logging or returning a generic failure.
+- Page text, notes, transcripts, and collection blocks are handled as untrusted source data rather than executable instructions. Generated structures are schema checked and evidence checked before storage.
+
+### Secrets and local configuration
+
+- Start from `.env.example`; it documents Gemini and OpenAI provider selection, the exact extension-origin allowlist, preview origins, token behavior, and bounded resource controls.
+- Keep `.env`, `.env.*`, the generated token file, certificates, credentials, browser profiles, logs, test screenshots, coverage, and release output out of Git. `.env.example` is the only environment template intended for source control.
+- If a credential is exposed, revoke or rotate it at the provider first. Deleting it from a later commit does not remove it from Git history.
+
+### Local release checks
+
+```powershell
+npm run security:secrets
+npm run security:audit
+npm run package:extension
+```
+
+- `security:secrets` scans publishable text for common credential formats, private-key material, personal home paths, non-placeholder email addresses, and exact locally configured secrets; it also verifies the required ignore rules. It is a guardrail, not a substitute for reviewing the staged diff.
+- `security:audit` runs the publish-safety scan and fails on high-severity npm advisories.
+- `package:extension` rebuilds bundled dependencies, deletes the previous package directory, and copies only the explicit runtime allowlist into `release/exam-cram-extension`. Load, inspect, or zip that folder rather than the project root.
+
+### GitHub safeguards
+
+- `.github/workflows/ci.yml` installs the lockfile, scans for secrets and personal paths, checks syntax, runs the complete test suite, audits production dependencies, builds the allowlisted extension folder, and uploads it as a short-retention workflow artifact. Third-party Actions are pinned to commit SHAs.
+- `.github/workflows/codeql.yml` analyzes JavaScript on pushes, pull requests, and a weekly schedule with least-privilege workflow permissions.
+- `.github/dependabot.yml` checks npm dependencies weekly and GitHub Actions monthly.
+- Security reports should use the private vulnerability-reporting link in [SECURITY.md](SECURITY.md), never a public issue containing credentials, private study content, or exploit details. Private vulnerability reporting is a GitHub repository setting and must remain enabled by the repository owner after publication.
+
+## Export
+
+Open a generated or saved item and choose **Export**. The unified preview shows the filename, source, and selectable sections: Visual note, Key points, Sources, Quiz, and Answer key.
+
+- **Download DOCX** creates an editable OOXML `.docx` locally in the browser.
+- **Download PDF** creates a genuine `.pdf` directly, without the print dialog.
+- Quiz sections remain unavailable until a quiz exists. The answer key defaults off before submission and on after submission.
+- Raw captured page text and raw audio are excluded; the static connected visual, bounded cheat-sheet rows, citations, source links, PDF pages, and video timestamps are preserved.
+
+Automatic transcript times retain the `AI-estimated` label in exported evidence.
+
+## Backend Routes
+
+Protected routes (exact allowlisted loopback extension Origin, or a valid bearer token for other allowed clients):
+
+- `POST /api/study-session`
+- `POST /api/notes`
+- `POST /api/quiz`
+- `POST /api/visual-followup`
+- `POST /api/journey-summary`
+- `POST /api/video-transcript`
+- `POST /api/transcript-chunk`
+- `POST /api/transcript-preflight`
+
+`POST /api/notes` accepts `webpage`, `notes`, `video`, or `collection` source types, returns a visual note plus its five-column grounded cheat sheet, and never returns quiz questions. `POST /api/quiz` requires a saved note ID plus the same source fingerprint and returns questions only. `POST /api/study-session` remains the legacy combined adapter. Video requests carry stable transcript segment IDs; collection requests carry bounded source blocks and saved-source IDs.
+
+## Verification
+
+```powershell
+npm run build
+npm run check
+npm test
+npm run security:secrets
+npm run security:audit
+npm run package:extension
+```
+
+The complete automated suite covers real DOCX/PDF exports, grounded cheat-sheet sanitization and responsive semantics, PDF-backed source labels, multi-frame/open-shadow HTML extraction, multilingual readability, adversarial HTML/PDF bounds, genuine PDF text parsing, PDF-specific failure states, per-site and file-permission contracts, Focus-rule lifecycle, empty stable-ID chapter creation, duplicate-name resolution, cross-chapter isolation, Journey schema migration and document metadata, exact artifact handoff, Learning Forest ID joins and seedlings, progressive tree/concept disclosure, responsive bottom-sheet behavior, motion pausing, stable orbit dragging, reliable subheader activation, connected 3/5/8-concept mind maps, keyboard/reflow behavior, non-obscuring narrow action controls, collection provenance and deduplication, quiz isolation, endpoint-bound tokens, exact-origin loopback authentication, wrong-token and wrong-origin rejection, JSON-only API posts, defensive response headers, visible-caption and public-YouTube routing, stable video identity, executable service-worker action authorization, expiry and changed-page rejection, source-bound one-use stream reservations, reply-before-teardown behavior, live audio health/progress, explicit zero-segment failure, transcript binding, audio chunk limits, timestamp mapping, and WAV encoding.
+
+## Market-Informed Roadmap
+
+Priority order:
+
+1. Continue trust work: visible evidence chips, coverage indicators, bad-question reporting, and evaluation fixtures for factual/citation accuracy.
+2. Improve active recall: typed answers, explain-in-your-own-words prompts, better distractor evaluation, and optional answer editing.
+3. Turn weak concepts into scheduled Journey review recommendations rather than another static quiz.
+4. Add transparent AI usage metering without restricting saved work.
+5. Add optional research unlocks, rolling per-site allowances, weekday schedules, and strict Focus mode.
+6. Consider Firefox only after the Chrome capture, storage, and permission paths are stable.
+7. Explore institution licensing only after privacy documentation, educator controls, and reliability benchmarks are mature.

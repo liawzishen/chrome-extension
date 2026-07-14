@@ -1,0 +1,31 @@
+{
+  "name": "exam-cram-assistant",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Chrome study extension with visual lessons, focus controls, video learning, and a persistent learning journey.",
+  "scripts": {
+    "start": "node server.js",
+    "preview": "node preview-server.js",
+    "build:export": "node build-export-vendor.mjs",
+    "build:documents": "node build-document-reader-vendor.mjs",
+    "build:journey": "node build-journey-tree.mjs",
+    "build": "npm run build:export && npm run build:documents && npm run build:journey",
+    "package:extension": "npm run build && node scripts/package-extension.mjs",
+    "security:secrets": "node scripts/verify-publish-safety.mjs",
+    "security:audit": "npm run security:secrets && npm audit --audit-level=high",
+    "test": "node --test tests/*.test.js",
+    "check": "node --check popup.js && node --check server.js && node --check preview-server.js && node --check export-utils.js && node --check export.js && node --check focus-utils.js && node --check background.js && node --check journey-utils.js && node --check journey-worker-utils.js && node --check journey-tree-utils.js && node --check journey-page.js && node --check video-utils.js && node --check offscreen.js && node --check cheat-sheet-utils.js && node --check journey-tree-entry.js && node --check build-journey-tree.mjs && node --check export-vendor-entry.js && node --check build-export-vendor.mjs && node --check document-reader-utils.js && node --check document-frame-reader.js && node --check document-reader-vendor-entry.js && node --check pdf-worker-entry.js && node --check build-document-reader-vendor.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "docx": "^9.7.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^4.8.69",
+    "three": "^0.178.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
+}

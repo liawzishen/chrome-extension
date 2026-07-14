@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Exam-Cram Export</title>
+    <link rel="stylesheet" href="export.css">
+  </head>
+  <body>
+    <header class="export-toolbar">
+      <div class="toolbar-copy">
+        <span class="eyebrow">Exam-Cram export</span>
+        <strong>Review before downloading</strong>
+        <span>Your note stays private and the files are created in this browser.</span>
+      </div>
+      <div class="export-actions" aria-label="Download format">
+        <button id="downloadDocxButton" type="button">Download DOCX</button>
+        <button id="downloadPdfButton" class="primary" type="button">Download PDF</button>
+      </div>
+    </header>
+
+    <div class="export-layout">
+      <aside class="export-options" aria-labelledby="optionsTitle">
+        <span class="eyebrow">Export settings</span>
+        <h1 id="optionsTitle">Choose what to include</h1>
+        <dl class="export-summary">
+          <div><dt>Filename</dt><dd id="filenamePreview">Preparing…</dd></div>
+          <div><dt>Source</dt><dd id="sourcePreview">Preparing…</dd></div>
+        </dl>
+        <fieldset id="sectionOptions">
+          <legend>Document content</legend>
+          <label class="option-row" data-option="visualNote"><input type="checkbox" value="visualNote"><span><strong>Visual note</strong><small>Static concepts, relationships, and scenarios</small></span></label>
+          <label class="option-row" data-option="keyPoints"><input type="checkbox" value="keyPoints"><span><strong>Key points</strong><small>The most important takeaways</small></span></label>
+          <label class="option-row" data-option="sources"><input type="checkbox" value="sources"><span><strong>Sources</strong><small>Original links and video timestamps</small></span></label>
+          <label class="option-row" data-option="quiz"><input type="checkbox" value="quiz"><span><strong>Quiz</strong><small data-help="quiz">Questions and your selected answers</small></span></label>
+          <label class="option-row" data-option="answerKey"><input type="checkbox" value="answerKey"><span><strong>Answer key</strong><small data-help="answerKey">Correct answers on a separate section</small></span></label>
+        </fieldset>
+        <p class="privacy-note">Captured page text and raw audio are never included. Only the study content and source references shown in this preview are exported.</p>
+        <p id="exportStatus" class="export-status" role="status" aria-live="polite"></p>
+      </aside>
+
+      <main class="preview-shell" aria-labelledby="previewTitle">
+        <div class="preview-heading"><span class="eyebrow">Preview</span><h2 id="previewTitle">Study document</h2></div>
+        <div id="exportDocument" aria-live="polite">
+          <p class="export-loading">Preparing your study document…</p>
+        </div>
+      </main>
+    </div>
+
+    <script src="export-vendor.bundle.js"></script>
+    <script src="export-utils.js"></script>
+    <script src="export.js"></script>
+  </body>
+</html>

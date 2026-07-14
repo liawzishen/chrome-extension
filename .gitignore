@@ -1,0 +1,38 @@
+# Local credentials and generated access material
+.env
+.env.*
+!.env.example
+.exam-cram-backend-token
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*.json
+client_secret*.json
+
+# Dependencies and generated verification artifacts
+node_modules/
+coverage/
+.nyc_output/
+output/
+release/
+tmp/
+temp/
+.playwright-cli/
+.codex/
+
+# Browser profiles, packaged extensions, and local releases
+chrome-profile*/
+browser-profile*/
+*.crx
+*.zip
+
+# Logs, caches, and editor/OS metadata
+*.log
+npm-debug.log*
+.cache/
+.eslintcache
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Learning Forest · Exam-Cram</title>
+    <link rel="stylesheet" href="journey.css">
+  </head>
+  <body>
+    <main id="learningForest" class="forest-app" data-mode="loading" data-renderer="loading" aria-label="Interactive learning forest">
+      <div id="forestScene" class="forest-scene" aria-hidden="true"></div>
+
+      <header class="forest-topbar">
+        <div class="forest-brand">
+          <span class="forest-brand__mark" aria-hidden="true"></span>
+          <div>
+            <span>Learning Forest</span>
+            <h1 id="pageJourneyTitle">My Learning Journey</h1>
+          </div>
+        </div>
+        <div class="forest-topbar__utility">
+          <div class="forest-topbar__meta">
+            <div class="forest-topbar__stats" aria-label="Journey metrics">
+              <span><strong id="pageProgress">0%</strong> progress</span>
+              <span><strong id="pageFocusTime">0m</strong> focus</span>
+            </div>
+            <span id="forestParticleCount" class="forest-particle-count" role="status">Generating forest</span>
+          </div>
+          <div class="forest-controls" role="group" aria-label="Journey actions and tree navigation">
+            <button id="backToForest" class="forest-control forest-control--back" type="button" hidden>Back to forest</button>
+            <button id="openTreeDetails" class="forest-control" type="button" hidden>Note details</button>
+            <button id="openJourneySummary" class="forest-control forest-control--summary" type="button">Journey summary</button>
+            <button id="toggleForestMotion" class="forest-control forest-control--motion" type="button" aria-pressed="false">Pause motion</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="forest-axis" aria-hidden="true">
+        <span>Knowledge archive</span>
+        <span class="forest-axis__rule"></span>
+        <span id="forestTreeCount">00 note trees</span>
+      </div>
+
+      <svg id="forestConnectors" class="forest-connectors" aria-hidden="true">
+        <defs>
+          <marker id="forest-arrowhead" viewBox="0 0 7 7" refX="6.2" refY="3.5" markerWidth="5" markerHeight="5" orient="auto">
+            <path d="M 1 1 L 6 3.5 L 1 6"></path>
+          </marker>
+        </defs>
+      </svg>
+      <nav id="forestLabels" class="forest-labels" aria-label="Learning trees and concepts"></nav>
+
+      <section id="forestEmpty" class="forest-state-card" hidden>
+        <span class="forest-state-card__eyebrow">Plant your first note</span>
+        <h2>No learning trees yet</h2>
+        <p>Collect related pages under a Journey chapter, then build and save a visual note. Each named chapter grows into its own tree.</p>
+        <button id="pageCreateNoteButton" type="button">Open Exam-Cram</button>
+        <small id="pageCreateNoteHelp">Choose a Journey chapter before collecting or creating a note.</small>
+      </section>
+
+      <section id="forestFallback" class="forest-fallback" aria-labelledby="forestFallbackHeading">
+        <span class="forest-state-card__eyebrow">Accessible forest directory</span>
+        <h2 id="forestFallbackHeading">Your learning trees</h2>
+        <p id="forestWebglError" class="forest-webgl-error" hidden>WebGL is unavailable. Use this complete note list, or enable hardware acceleration for the particle forest.</p>
+        <div id="forestFallbackList" class="forest-fallback__list"></div>
+      </section>
+
+      <aside id="forestDrawer" class="forest-drawer" aria-label="Learning forest bottom details" aria-hidden="true" tabindex="-1">
+        <div class="forest-drawer__chrome">
+          <header class="forest-drawer__header">
+            <div>
+              <span class="forest-drawer__eyebrow">Learning evidence</span>
+              <h2 id="forestDrawerTitle">Note details</h2>
+            </div>
+            <button id="closeForestDrawer" class="forest-drawer__close" type="button" aria-label="Close details">×</button>
+          </header>
+          <div class="forest-drawer__tabs" role="tablist" aria-label="Detail views">
+            <button id="chapterTab" role="tab" aria-selected="true" aria-controls="chapterPanel" type="button">Tree note</button>
+            <button id="summaryTab" role="tab" aria-selected="false" aria-controls="summaryPanel" type="button">Journey summary</button>
+          </div>
+        </div>
+
+        <section id="chapterPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="chapterTab">
+          <section id="pageStudyContext" class="study-context" aria-live="polite" aria-label="Last studied source"></section>
+          <article id="chapterInspector" class="chapter-inspector"></article>
+          <p id="pageArtifactStatus" class="artifact-open-status" role="status" hidden></p>
+        </section>
+
+        <section id="summaryPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="summaryTab" hidden>
+          <div class="summary-actions">
+            <label for="pageSummaryRange">Summary range</label>
+            <select id="pageSummaryRange">
+              <option value="today">Today</option>
+              <option value="week" selected>Last 7 days</option>
+              <option value="month">Last 30 days</option>
+              <option value="all">All time</option>
+            </select>
+            <button id="pageSummarizeButton" type="button">Refresh summary</button>
+          </div>
+          <div id="pageJourneySummary" class="summary-content"></div>
+        </section>
+      </aside>
+
+      <footer class="forest-legend">
+        <span><kbd>Drag</kbd> orbit</span>
+        <span class="forest-legend__dot" aria-hidden="true"></span>
+        <span><kbd>Scroll</kbd> zoom</span>
+        <span class="forest-legend__dot" aria-hidden="true"></span>
+        <span><kbd>Hover</kbd> disturb dust</span>
+      </footer>
+
+      <div id="forestLoading" class="forest-loading" role="status">
+        <span class="forest-loading__grain" aria-hidden="true"></span>
+        <span>Growing learning forest</span>
+      </div>
+      <div id="pageLoadState" class="page-load-state" role="status">Loading your learning journey...</div>
+    </main>
+
+    <script src="focus-utils.js"></script>
+    <script src="journey-utils.js"></script>
+    <script src="journey-worker-utils.js"></script>
+    <script src="cheat-sheet-utils.js"></script>
+    <script src="journey-tree-utils.js"></script>
+    <script src="journey-tree.bundle.js"></script>
+    <script src="journey-page.js"></script>
+  </body>
+</html>

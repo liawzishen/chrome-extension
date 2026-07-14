@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Exam-Cram Assistant</title>
+    <link rel="stylesheet" href="popup.css">
+    <link rel="stylesheet" href="popup-design-system.css">
+  </head>
+  <body>
+    <main class="app">
+      <header class="topbar">
+        <div>
+          <h1>Exam-Cram</h1>
+          <p id="statusText" role="status" aria-live="polite" aria-atomic="true">Create a focused study session.</p>
+          <div id="progressWrap" class="progress-wrap hidden" aria-hidden="true">
+            <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
+            <span id="progressLabel">Ready</span>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <label class="focus-quick-toggle" for="focusQuickToggle">
+            <input id="focusQuickToggle" type="checkbox" aria-label="Toggle focus mode">
+            <span class="focus-switch-track" aria-hidden="true"><span></span></span>
+            <span id="focusQuickLabel">Focus off</span>
+          </label>
+          <button id="settingsButton" class="icon-button" title="Settings" aria-label="Settings" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <section id="accessBanner" class="permission-banner hidden" aria-live="polite">
+        <span class="permission-banner__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4.6 2.7 8.1 7 10 4.3-1.9 7-5.4 7-10V6l-7-3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+        </span>
+        <div class="permission-banner__copy">
+          <strong>Allow this study source</strong>
+          <span id="accessBannerText">Grant access only to the current website. Exam-Cram reads its content after you choose a study action.</span>
+        </div>
+        <button id="grantCrossSiteAccessButton" class="secondary compact-button" type="button">Allow this site</button>
+      </section>
+
+      <section id="activeSourceCard" class="active-source-card persistent-source-card" aria-label="Current browser page">
+        <span id="activeSourceIcon" class="source-kind-icon" aria-hidden="true">R</span>
+        <div>
+          <span id="activeSourceLabel" class="source-context-label">Current page</span>
+          <strong id="activeSourceTitle">Checking the current browser page…</strong>
+          <span id="activeSourceMeta">The panel stays open while you browse.</span>
+        </div>
+        <div class="source-card-actions">
+          <button id="openPinnedArtifactButton" class="text-button hidden" type="button">Open pinned note</button>
+          <button id="refreshSourceButton" class="text-button" type="button">Refresh page</button>
+        </div>
+      </section>
+
+      <nav class="tabs" aria-label="Study modes" role="tablist">
+        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-selected="true" tabindex="0" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4V20.5H6z"></path><path d="M14 3.5v4h4M9 12h6M9 16h6"></path></svg>
+          <span>Page</span>
+        </button>
+        <button id="notesTab" class="tab" data-view="notesView" role="tab" aria-selected="false" tabindex="-1" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z"></path><path d="M8.5 9h5M8.5 13h5M17 7.5l2-2 1.5 1.5-3.5 3.5"></path></svg>
+          <span>Notes</span>
+        </button>
+        <button id="journeyTab" class="tab" data-view="journeyView" role="tab" aria-selected="false" tabindex="-1" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2z"></path><path d="M9 4v14M15 6v14"></path></svg>
+          <span>Journey</span>
+        </button>
+        <button id="focusTab" class="tab" data-view="focusView" role="tab" aria-selected="false" tabindex="-1" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>
+          <span>Focus</span>
+        </button>
+        <button id="libraryTab" class="tab" data-view="libraryView" role="tab" aria-selected="false" tabindex="-1" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v4H5zM6.5 9.5h11v9h-11z"></path><path d="M10 13h4"></path></svg>
+          <span>Library</span>
+        </button>
+      </nav>
+
+      <section id="pageView" class="view active" role="tabpanel" aria-labelledby="pageTab">
+        <div class="panel">
+          <div class="input-heading">
+            <div>
+              <span class="eyebrow">Source-grounded learning</span>
+              <h2>Create a visual note</h2>
+            </div>
+            <span class="feature-badge">Note first</span>
+          </div>
+          <p class="hint note-first-hint">Start with the ideas and relationships. A quiz is generated only after you request one from the finished note.</p>
+          <div class="chapter-field">
+            <div class="chapter-field__label-row">
+              <label for="pageChapterInput">Journey chapter</label>
+              <span>One chapter = one tree</span>
+            </div>
+            <div class="chapter-field__controls">
+              <select id="pageChapterInput" aria-describedby="pageChapterHint">
+                <option value="">Choose a chapter</option>
+              </select>
+              <button id="newPageChapterButton" class="secondary compact-button chapter-new-button" type="button">New chapter</button>
+            </div>
+            <p id="pageChapterHint" class="hint chapter-field__hint">Create a separate chapter whenever you want a new tree in your Learning Forest.</p>
+          </div>
+          <div class="source-study-actions">
+            <button id="studyPageButton" class="primary" type="button">Create note from page</button>
+            <button id="studyVideoButton" class="secondary" type="button">Create note from video</button>
+          </div>
+          <button id="openDocumentButton" class="text-button document-open-button" type="button">Open HTML or PDF file</button>
+          <input id="documentFileInput" type="file" accept=".html,.htm,.pdf,text/html,application/xhtml+xml,application/pdf" hidden aria-hidden="true" tabindex="-1">
+          <button id="addCurrentSourceButton" class="secondary source-add-button" type="button">Save source to chapter</button>
+          <details id="videoTranscriptFallback" class="video-transcript-fallback">
+            <summary>No captions? Paste a timestamped transcript</summary>
+            <label for="videoTranscriptInput">Timestamped transcript</label>
+            <textarea id="videoTranscriptInput" rows="5" placeholder="[00:12] First idea&#10;[01:05] Next explanation"></textarea>
+            <p id="videoTranscriptBinding" class="transcript-binding hidden"></p>
+            <p class="hint">Timestamps keep video hints grounded and enable Jump to time.</p>
+          </details>
+          <div id="videoCapturePanel" class="video-capture-panel hidden">
+            <div>
+              <strong id="videoCaptureTitle">Automatic transcript</strong>
+              <p id="videoCaptureStatus">Ready to capture tab audio.</p>
+            </div>
+            <div class="video-capture-actions">
+              <button id="startVideoCaptureButton" class="secondary" type="button">Auto-transcribe</button>
+              <button id="stopVideoCaptureButton" class="primary hidden" type="button">Stop &amp; process</button>
+              <button id="buildCapturedVideoButton" class="primary hidden" type="button">Build lesson</button>
+            </div>
+          </div>
+          <p class="hint source-save-explainer">Save source stores this page or transcript without generating a note. Add more sources, then combine them from Journey.</p>
+        </div>
+      </section>
+
+      <section id="notesView" class="view" role="tabpanel" aria-labelledby="notesTab">
+        <div class="panel">
+          <div class="input-heading">
+            <div>
+              <span class="eyebrow">Turn reading into an experience</span>
+              <h2>Build an interactive note</h2>
+            </div>
+            <span class="feature-badge">Visual AI</span>
+          </div>
+          <label for="notesInput">Paste your study material</label>
+          <textarea id="notesInput" rows="9" placeholder="Paste lecture notes, a textbook section, or any concept you want to explore visually."></textarea>
+          <p class="hint">The visual, scenarios, and follow-up answers stay grounded in this material. A quiz appears only when you request one.</p>
+          <div class="chapter-field">
+            <div class="chapter-field__label-row">
+              <label for="notesChapterInput">Journey chapter</label>
+              <span>One chapter = one tree</span>
+            </div>
+            <div class="chapter-field__controls">
+              <select id="notesChapterInput" aria-describedby="notesChapterHint">
+                <option value="">Choose a chapter</option>
+              </select>
+              <button id="newNotesChapterButton" class="secondary compact-button chapter-new-button" type="button">New chapter</button>
+            </div>
+            <p id="notesChapterHint" class="hint chapter-field__hint">The generated visual note will grow on the selected chapter's tree.</p>
+          </div>
+          <div class="note-actions">
+            <button id="studyNotesButton" class="primary" type="button">Generate interactive note</button>
+            <button id="demoNoteButton" class="secondary compact-button" type="button">Try the demo</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="journeyView" class="view" role="tabpanel" aria-labelledby="journeyTab">
+        <div class="panel journey-panel">
+          <div class="journey-heading">
+            <div>
+              <span class="eyebrow">Learning forest</span>
+              <h2 id="journeyTitle">My Learning Journey</h2>
+            </div>
+            <div class="journey-heading__actions">
+              <button id="newJourneyChapterButton" class="secondary compact-button" type="button">New chapter</button>
+              <button id="openJourneyButton" class="secondary compact-button" type="button">Open full trail</button>
+            </div>
+          </div>
+          <div id="journeyMetrics" class="journey-metrics"></div>
+          <div id="journeyRoute" class="journey-route" aria-label="Chapter learning trail"></div>
+          <div id="journeyChapterDetail" class="journey-chapter-detail"></div>
+          <div class="journey-summary-controls">
+            <label for="journeyRange">Summarize</label>
+            <select id="journeyRange">
+              <option value="today">Today</option>
+              <option value="week" selected>Last 7 days</option>
+              <option value="month">Last 30 days</option>
+              <option value="all">All time</option>
+            </select>
+            <button id="summarizeJourneyButton" class="primary" type="button">Summarize journey</button>
+          </div>
+          <div id="journeySummary" class="journey-summary hidden" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <section id="focusView" class="view" role="tabpanel" aria-labelledby="focusTab">
+        <div class="panel focus-panel">
+          <div class="focus-heading">
+            <div>
+              <span class="eyebrow">Session blocker</span>
+              <h2>Focus mode</h2>
+            </div>
+            <span id="focusStateBadge" class="focus-state-badge">Off</span>
+          </div>
+          <div class="focus-clock">
+            <strong id="focusCountdown">25:00</strong>
+            <span id="focusCountdownLabel">Ready for a focus session</span>
+          </div>
+          <label for="focusDuration">Session length</label>
+          <select id="focusDuration">
+            <option value="15">15 minutes</option>
+            <option value="25" selected>25 minutes</option>
+            <option value="50">50 minutes</option>
+            <option value="90">90 minutes</option>
+            <option value="custom">Custom minutes</option>
+          </select>
+          <div id="focusCustomDurationWrap" class="focus-custom-duration hidden">
+            <label for="focusCustomDuration">Custom session length</label>
+            <input id="focusCustomDuration" type="number" min="1" max="720" step="1" value="30" inputmode="numeric">
+          </div>
+          <label for="focusSitesInput">Distracting sites or paths</label>
+          <textarea id="focusSitesInput" rows="6" placeholder="instagram.com&#10;tiktok.com&#10;youtube.com/shorts">instagram.com&#10;tiktok.com&#10;reddit.com&#10;x.com&#10;facebook.com</textarea>
+          <p class="hint">One rule per line. A domain blocks the whole site; a path such as youtube.com/shorts blocks only that section. This build applies custom rules during one focus session; it does not yet provide daily allowances or weekday schedules.</p>
+          <div class="focus-actions">
+            <button id="startFocusButton" class="primary" type="button">Start focus</button>
+            <button id="focusBreakButton" class="secondary hidden" type="button">Take 5-minute break</button>
+            <button id="stopFocusButton" class="text-button hidden" type="button">End focus</button>
+          </div>
+          <div id="focusHistory" class="focus-history"></div>
+        </div>
+      </section>
+
+      <section id="libraryView" class="view" role="tabpanel" aria-labelledby="libraryTab">
+        <div class="panel">
+          <div class="library-header">
+            <strong>Saved Sessions</strong>
+            <button id="clearLibraryButton" class="text-button" type="button">Clear</button>
+          </div>
+          <div id="libraryList" class="library-list"></div>
+        </div>
+      </section>
+
+      <section id="resultView" class="result-view hidden" role="region" aria-labelledby="sessionTitle" aria-hidden="true">
+        <div class="session-header">
+          <div>
+            <h2 id="sessionTitle"></h2>
+            <p id="sessionMeta"></p>
+          </div>
+          <div class="session-actions">
+            <button id="closeSessionButton" class="text-button" title="Return to the study tools" type="button">Back to tools</button>
+          </div>
+        </div>
+
+        <div id="artifactSourceBanner" class="artifact-source-banner"></div>
+
+        <div class="summary-block interactive-note-shell">
+          <div class="interactive-note-heading">
+            <div>
+              <span class="eyebrow">Generated from your source</span>
+              <h3>Interactive visual note</h3>
+            </div>
+            <span class="feature-badge feature-badge-live"><span aria-hidden="true"></span> Explore · Connect · Verify</span>
+          </div>
+          <section class="key-points-visible" aria-labelledby="keyPointsHeading">
+            <div class="key-points-heading">
+              <span class="eyebrow">Start here</span>
+              <h3 id="keyPointsHeading">Key points</h3>
+            </div>
+            <ul id="summaryList"></ul>
+          </section>
+          <section id="cheatSheetBlock" class="cheat-sheet-block hidden" aria-labelledby="cheatSheetHeading">
+            <div class="cheat-sheet-heading">
+              <div>
+                <span class="eyebrow">Exam-ready reference</span>
+                <h3 id="cheatSheetHeading">Cheat sheet</h3>
+              </div>
+              <span class="feature-badge">Source grounded</span>
+            </div>
+            <p id="cheatSheetIntro" class="cheat-sheet-intro"></p>
+            <div id="cheatSheetTableHost" class="cheat-sheet-table-host"></div>
+          </section>
+          <div id="noteVisual" class="note-visual hidden"></div>
+        </div>
+
+        <div class="artifact-action-bar" role="toolbar" aria-label="Study note actions">
+          <button id="generateQuizButton" class="primary" type="button">Generate quiz</button>
+          <button id="saveArtifactButton" class="secondary" type="button">Save note</button>
+          <button id="exportButton" class="secondary" type="button">Export</button>
+        </div>
+
+        <div class="quiz-block hidden">
+          <div class="quiz-header">
+            <h3>Quiz</h3>
+            <span id="quizProgress"></span>
+          </div>
+          <div id="quizContainer"></div>
+          <button id="submitQuizButton" class="primary" type="button">Submit Quiz</button>
+        </div>
+
+        <div id="scoreBlock" class="score-block hidden">
+          <h3 id="scoreTitle"></h3>
+          <p id="weakTopicText"></p>
+          <div id="wrongAnswerList"></div>
+          <div class="goals">
+            <h3>Next Goals</h3>
+            <ul id="goalList"></ul>
+          </div>
+          <button id="saveSessionButton" class="secondary" type="button">Save Session</button>
+        </div>
+      </section>
+
+      <dialog id="quizSettingsDialog">
+        <form method="dialog" class="settings quiz-settings">
+          <span class="eyebrow">Generate from this note</span>
+          <h2>Quiz settings</h2>
+          <p id="quizSourceLabel" class="hint">The quiz will stay bound to this note’s original source.</p>
+          <label for="pageDifficulty">Difficulty</label>
+          <select id="pageDifficulty">
+            <option value="easy">Easy</option>
+            <option value="normal" selected>Normal</option>
+            <option value="hard">Hard</option>
+          </select>
+          <label for="pageQuestionCount">Questions</label>
+          <select id="pageQuestionCount">
+            <option value="5" selected>5</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+          </select>
+          <label for="pageQuizStyle">Quiz style</label>
+          <select id="pageQuizStyle">
+            <option value="mixed" selected>Mixed exam practice</option>
+            <option value="application">Application focused</option>
+            <option value="weakness">Weak-spot diagnostic</option>
+            <option value="definition">Core definitions</option>
+          </select>
+          <menu>
+            <button value="cancel" class="text-button">Cancel</button>
+            <button id="confirmGenerateQuizButton" value="default" class="primary">Generate quiz</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="newChapterDialog" aria-labelledby="newChapterDialogTitle">
+        <form id="newChapterForm" method="dialog" class="settings new-chapter-dialog">
+          <span class="eyebrow">Grow another tree</span>
+          <h2 id="newChapterDialogTitle">Create a new chapter</h2>
+          <p class="hint">Give this topic its own tree. Notes and saved sources will stay linked to this chapter by its unique ID.</p>
+          <label for="newChapterNameInput">Chapter name</label>
+          <input id="newChapterNameInput" maxlength="140" autocomplete="off" placeholder="e.g. Java or Cooking" required>
+          <p id="newChapterDialogStatus" class="dialog-status hidden" role="alert" aria-live="polite"></p>
+          <menu>
+            <button id="cancelNewChapterButton" value="cancel" class="text-button" type="button">Cancel</button>
+            <button id="confirmNewChapterButton" class="primary" type="submit">Create chapter</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="settingsDialog">
+        <form method="dialog" class="settings">
+          <h2>Settings</h2>
+          <label for="apiEndpointInput">AI backend endpoint</label>
+          <input id="apiEndpointInput" type="url" placeholder="https://your-api.com/study-session">
+          <label for="backendTokenInput">Backend access token <span class="muted">(custom or remote backend only)</span></label>
+          <input id="backendTokenInput" type="password" autocomplete="off" placeholder="Optional for the bundled local backend">
+          <p id="backendSecurityHint" class="hint">A remote backend receives the source text or tab audio you choose to study. Access tokens are bound to one backend origin and cleared when that origin changes. Chrome local storage is not a password vault; never enter an AI provider key here.</p>
+          <menu>
+            <button value="cancel" class="text-button">Cancel</button>
+            <button id="saveSettingsButton" value="default" class="primary">Save</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="videoCaptureDialog">
+        <form method="dialog" class="settings video-capture-consent">
+          <h2>Auto-transcribe this video?</h2>
+          <p>Exam-Cram will capture only this tab's audio while the current video plays, for up to 15 minutes. It never uses your microphone and does not save raw audio.</p>
+          <p class="hint">Audio chunks are sent to your configured Gemini backend. Timestamps from automatic transcription are labelled AI-estimated.</p>
+          <div class="capture-authorization-note" role="note">
+            <span aria-hidden="true">1</span>
+            <p><strong>Confirm here.</strong> Exam-Cram checks the video and backend without starting capture.</p>
+            <span aria-hidden="true">2</span>
+            <p><strong>Invoke Exam-Cram once.</strong> Click its toolbar icon or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd>; Chrome authorizes this exact tab and recording starts automatically.</p>
+          </div>
+          <p id="videoCaptureDialogStatus" class="hint hidden" role="status" aria-live="polite"></p>
+          <menu>
+            <button id="cancelVideoCaptureButton" value="cancel" class="text-button">Cancel</button>
+            <button id="reloadExtensionButton" class="secondary hidden" type="button">Reload Exam-Cram</button>
+            <button id="confirmVideoCaptureButton" value="default" class="primary">Start tab audio</button>
+          </menu>
+        </form>
+      </dialog>
+    </main>
+    <script src="export-utils.js"></script>
+    <script src="focus-utils.js"></script>
+    <script src="journey-utils.js"></script>
+    <script src="journey-worker-utils.js"></script>
+    <script src="video-utils.js"></script>
+    <script src="document-reader-utils.js"></script>
+    <script src="cheat-sheet-utils.js"></script>
+    <script src="document-reader-vendor.bundle.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
