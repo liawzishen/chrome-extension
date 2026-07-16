@@ -10,6 +10,7 @@ export const particleVertexShader = /* glsl */ `
   uniform float uPointSizeGain;
   uniform float uEdgeDissolveStrength;
   uniform float uEdgeFlowScale;
+  uniform float uMotionStrength;
   uniform float uRepelRadius;
   uniform float uRepelDepth;
   uniform float uRepelStrength;
@@ -190,6 +191,7 @@ export const particleVertexShader = /* glsl */ `
       vEdgeFlow = flowEmphasis;
     }
 
+    windOffset *= uMotionStrength;
     vec3 windPosition = originalPosition + windOffset;
     vec4 worldPosition = modelMatrix * vec4(windPosition, 1.0);
 
@@ -250,13 +252,13 @@ export const particleVertexShader = /* glsl */ `
     gl_Position = projectionMatrix * viewPosition;
 
     float perspective = uPointScale / max(1.0, -viewPosition.z);
-    float decodedSize = mix(0.5, 1.12, aSize) * mix(0.86, 1.08, aSurface);
+    float decodedSize = mix(0.56, 1.18, aSize) * mix(0.9, 1.1, aSurface);
     // Preserve visible grains during the close camera flight instead of
     // clamping every zoomed particle to the old 1.55 px ceiling.
-    float closeUpCeiling = mix(1.72, 2.18, aSize);
+    float closeUpCeiling = mix(1.82, 2.28, aSize);
     gl_PointSize = clamp(
       decodedSize * perspective * uPointSizeGain * edgePointGain,
-      0.44 * uPointSizeGain,
+      0.68 * uPointSizeGain,
       closeUpCeiling * uPointSizeGain * edgePointGain
     );
     vBrightness = aBrightness;
@@ -284,8 +286,11 @@ export const particleFragmentShader = /* glsl */ `
     float radius = length(centered);
     if (radius > 0.5) discard;
 
-    float edge = 1.0 - smoothstep(0.31, 0.5, radius);
-    float pin = 1.0 - smoothstep(0.0, 0.13, radius);
+    // A compact opaque core and a narrow one-pixel falloff keep each grain
+    // distinct. The previous broad falloff blended distant foliage into haze.
+    float edge = 1.0 - smoothstep(0.4, 0.5, radius);
+    float core = 1.0 - smoothstep(0.08, 0.34, radius);
+    float pin = 1.0 - smoothstep(0.0, 0.12, radius);
     float shell = pow(clamp(vSurface, 0.0, 1.0), 0.72);
     float depthShimmer = 0.88 + vDepthFlow * 0.12;
 
@@ -296,10 +301,10 @@ export const particleFragmentShader = /* glsl */ `
     float microVariation = 0.94 + 0.08 * fract(vPhase * 17.13 + 0.37);
     stardustColor *= microVariation;
 
-    // Higher per-grain clarity replaces the previous faint silver fog. The
-    // smaller point ceiling prevents overlap from becoming cotton-like bloom.
-    float opacityWeight = mix(0.62, 1.0, shell);
-    float alpha = (0.105 + pin * 0.22)
+    // Denser geometry now carries the silhouette. A restrained core lift makes
+    // grains legible without restoring the old cotton-like additive bloom.
+    float opacityWeight = mix(0.7, 1.0, shell);
+    float alpha = (0.13 + core * 0.2 + pin * 0.15)
       * edge
       * vBrightness
       * opacityWeight

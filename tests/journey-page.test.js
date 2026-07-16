@@ -57,6 +57,12 @@ test("shows up to eight meaningful Visual Tutor Note branches and creates only r
 test("places each chapter title beneath its planting root without decorative hit-area blockers", () => {
   assert.match(forest, /className = 'forest-ribbon__plot-title'/);
   assert.match(forest, /function getRibbonRoot\(entry\)[\s\S]*?bounds\.min\.y - 0\.08/);
+  assert.match(forest, /LIVE_TREE_LABEL_CLEARANCE = 18/);
+  assert.match(forest, /const labelOffset = !compact && item\.hasLiveTree[\s\S]*?Math\.max\(rowOffset, LIVE_TREE_LABEL_CLEARANCE\)/);
+  assert.match(forest, /item\.minimumScreenY = !compact && item\.hasLiveTree[\s\S]*?rootAlignedScreenY \+ LIVE_TREE_LABEL_CLEARANCE/);
+  assert.match(forest, /candidateY >= item\.minimumScreenY && candidateY <= safeBottom/);
+  assert.match(forest, /const horizontalCandidates = \[[\s\S]*?collision\.screenX - minimumHorizontalGap,[\s\S]*?collision\.screenX \+ minimumHorizontalGap/);
+  assert.match(forest, /hasLiveTree: entry\.record\.growthStage !== 'plot'/);
   assert.match(forest, /entry\.plot\.style\.transform = `translate3d\(\$\{screenX\}px, \$\{screenY\}px, 0\) translate\(-50%, -50%\)`/);
   assert.match(styles, /\.forest-ribbon \{[\s\S]*?pointer-events:\s*none/);
   assert.match(styles, /\.forest-ribbon__plot \{[\s\S]*?pointer-events:\s*auto/);
@@ -65,7 +71,7 @@ test("places each chapter title beneath its planting root without decorative hit
 
 test("keeps every non-empty growth stage visible in overview and preserves it when focused", () => {
   assert.match(forest, /function buildPreviewSystems\([\s\S]*?ribbonEntries\.(?:forEach|map)\([\s\S]*?createParticleTree\([\s\S]*?growthStage:\s*record\.growthStage[\s\S]*?overviewSystems\.push/);
-  assert.match(forest, /function buildOverview\([\s\S]*?buildPreviewSystems\(\)/);
+  assert.match(forest, /function buildOverview\([\s\S]*?buildPreviewSystems\(\{ highlightedTreeId: activeRecord\.id \}\)/);
   assert.match(forest, /button\.dataset\.growth\s*=\s*record\.growthStage/);
   for (const stage of ["plot", "seedling", "growing", "mature"]) {
     assert.match(styles, new RegExp(`forest-ribbon__plot\\[data-growth="${stage}"\\]`));
@@ -82,7 +88,7 @@ test("keeps focused and background plants inside one hardware-tier particle budg
   assert.match(forest, /const backgroundReserve = Math\.min\([\s\S]*?backgroundTreeCount \* FOCUS_BACKGROUND_MIN_TREE_BUDGET/);
   assert.match(forest, /const focusedBudget = record\.growthStage === 'plot'[\s\S]*?totalParticleBudget - backgroundReserve/);
   assert.match(forest, /poolLimit: Math\.max\(0, totalParticleBudget - focusedBudget\)/);
-  assert.match(particles, /MAX_PARTICLE_BUDGET = 180_000/);
+  assert.match(particles, /MAX_PARTICLE_BUDGET = 320_000/);
   assert.match(particles, /Math\.min\(MAX_PARTICLE_BUDGET, Math\.max\(2_000, Math\.round\(requestedBudget\)\)\)/);
   assert.match(forest, /const pool = Math\.min\(totalBudget,/);
 });
@@ -108,13 +114,46 @@ test("retains exact note focus across one-tree refreshes and responsive reframin
 });
 
 test("uses a bounded serpentine ribbon and a scrollable exact-count chapter index", () => {
-  assert.match(forest, /function buildLayout\(count, aspect = 1\)/);
+  assert.match(forest, /function buildLayout\(records, aspect = 1\)/);
+  assert.match(forest, /LAYOUT_STAGE_RADII = Object\.freeze\([\s\S]*?seedling:[\s\S]*?growing:[\s\S]*?mature:/);
+  assert.match(forest, /RIBBON_HORIZONTAL_GAP = 2\.2/);
+  assert.match(forest, /RIBBON_Z_SPACING = 9/);
+  assert.match(forest, /RIBBON_ROW_STAGGER = 5\.2/);
+  assert.match(forest, /const rowStagger = row === 0[\s\S]*?RIBBON_ROW_STAGGER/);
+  assert.match(forest, /ribbonLayout = buildLayout\(trees, camera\.aspect \|\| 1\)/);
   assert.match(forest, /ribbonEntries = trees\.map\(\(record, index\)/);
   assert.match(forest, /function buildSmoothPath\(points\)/);
   assert.match(styles, /\.forest-ribbon__index \{[\s\S]*?overflow-x:\s*auto/);
   assert.match(styles, /\.forest-ribbon__index-button \{[\s\S]*?min-width:\s*104px/);
   assert.match(styles, /@media \(max-width: 560px\)/);
   assert.match(styles, /@media \(max-width: 360px\)/);
+});
+
+test("keeps chapter trees and projected chapter controls from blocking one another", () => {
+  assert.match(forest, /function fitCameraToOverview\(\)[\s\S]*?systemsByTreeId[\s\S]*?bounds\.union\([\s\S]*?applyMatrix4\(overviewEntry\.system\.points\.matrixWorld\)/);
+  assert.match(forest, /bounds\.expandByVector\(new THREE\.Vector3\(1\.7, 2\.2, 1\.7\)\)/);
+  assert.match(forest, /function separateChapterPlotPositions\(items, width, safeTop, safeBottom, compact = false\)/);
+  assert.match(forest, /CHAPTER_PLOT_ROW_OFFSET = 44/);
+  assert.match(forest, /minimumHorizontalGap = plotWidth \+ CHAPTER_PLOT_COLLISION_GAP/);
+  assert.match(forest, /Math\.abs\(item\.screenX - candidate\.screenX\) < minimumHorizontalGap/);
+  assert.match(forest, /Math\.abs\(item\.screenY - candidate\.screenY\) < minimumVerticalGap/);
+  assert.match(forest, /const freeLanes = \[\]/);
+  assert.match(forest, /separateChapterPlotPositions\(projectedPlots, width, safeTop, safeBottom, compact\)/);
+});
+
+test("uses the reference hierarchy without misrepresenting chapter growth", () => {
+  assert.match(forest, /OVERVIEW_SELECTED_TREE_SCALE = 0\.62/);
+  assert.match(forest, /OVERVIEW_CONTEXT_TREE_SCALE = 0\.38/);
+  assert.match(forest, /OVERVIEW_SELECTED_OPACITY = 0\.98/);
+  assert.match(forest, /OVERVIEW_CONTEXT_OPACITY = 0\.58/);
+  assert.match(forest, /const isHighlighted = !dimmed && record\.id === highlightedTreeId/);
+  assert.match(forest, /growthStage:\s*record\.growthStage/);
+  assert.match(forest, /buildPreviewSystems\(\{ highlightedTreeId: activeRecord\.id \}\)/);
+  assert.match(forest, /COMPACT_RIBBON_CHAPTER_COUNT = 9/);
+  assert.match(forest, /ribbonElement\.dataset\.density = compact \? 'compact' : 'comfortable'/);
+  assert.match(styles, /\.forest-ribbon\[data-density="compact"\] \.forest-ribbon__plot-number/);
+  assert.match(html, /id="forestRibbonBed"/);
+  assert.match(styles, /\.forest-ribbon__track-bed \{[\s\S]*?stroke-width:\s*34/);
 });
 
 test("links plot and index feedback, pulses completed chapters, and preserves staged growth in focus", () => {
@@ -126,7 +165,8 @@ test("links plot and index feedback, pulses completed chapters, and preserves st
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.forest-ribbon__completion-pulse/);
   assert.match(particles, /GROWTH_PROFILES = Object\.freeze\([\s\S]*?seedling:[\s\S]*?growing:[\s\S]*?mature:/);
   assert.match(particles, /const growthStage = options\.growthStage/);
-  assert.match(particles, /const skeleton = generateSkeleton\(random, growthProfile\)/);
+  assert.match(particles, /growthProfile\.botanicalModel === 'dicot-seedling'[\s\S]*?generateSeedlingStructure\(random\)/);
+  assert.match(particles, /seedlingStructure\?\.skeleton \|\| generateSkeleton\(random, growthProfile\)/);
   assert.doesNotMatch(forest, /controls\.enabled = nextMode === 'focus'/);
   assert.match(forest, /controls\.enabled\s*=\s*(?:nextMode\s*!==\s*'empty'|nextMode === 'overview' \|\| nextMode === 'focus')/);
   assert.match(forest, /entry\.system\.points\.position\.lerp\(entry\.targetPosition/);
@@ -173,17 +213,35 @@ test("keeps moving subheaders clickable above decorative layers", () => {
   assert.match(styles, /\.forest-label \{[\s\S]*?min-height: 40px;[\s\S]*?touch-action: manipulation/);
 });
 
-test("raises pointer response without expanding the particle interaction area", () => {
-  assert.match(forest, /POINTER_REPEL_STRENGTH = 1\.45/);
-  assert.match(forest, /POINTER_REPEL_RESPONSE = 16/);
-  assert.match(forest, /\? 0\s*:\s*POINTER_REPEL_STRENGTH/);
-  assert.match(forest, /repelTarget,\s*POINTER_REPEL_RESPONSE/);
+test("raises pointer response while requiring contact with an actual overview particle", () => {
+  assert.match(forest, /POINTER_REPEL_STRENGTH = 2\.15/);
+  assert.match(forest, /POINTER_REPEL_RESPONSE = 28/);
+  assert.match(forest, /POINTER_PARTICLE_HIT_THRESHOLD = 0\.085/);
   assert.match(particles, /uRepelRadius:\s*\{ value: 0\.52 \}/);
+  assert.match(forest, /function rayTouchesOverviewParticle\(entry\)[\s\S]*?positions\.count[\s\S]*?distanceSqToPoint\(particleHitPoint\) <= localThresholdSquared/);
+  assert.match(forest, /function findOverviewParticleEntryAtPointer\(\)[\s\S]*?raycaster\.intersectObjects\(treeTargets, false\)[\s\S]*?rayTouchesOverviewParticle\(entry\)/);
+  assert.match(forest, /const entryRepelTarget = mode === 'overview'[\s\S]*?isActiveOverviewEntry \? repelTarget : 0/);
+  assert.match(forest, /renderer\.domElement\.addEventListener\('pointercancel', onPointerCancel\)/);
+  assert.match(forest, /renderer\.domElement\.removeEventListener\('pointercancel', onPointerCancel\)/);
+});
+
+test("keeps overview particles paused until their own tree is touched", () => {
+  assert.match(forest, /activeOverviewTreeId = ''/);
+  assert.match(forest, /function setActiveOverviewTree\(treeId = ''\)[\s\S]*?activeEntry\.targetMotionStrength = 1[\s\S]*?uEdgeDissolveStrength\.value = 1/);
+  assert.match(forest, /edgeDissolveStrength: mode === 'overview' \? 0 : \(motionHasStarted \? 1 : 0\)/);
+  assert.match(forest, /motionStrength: mode === 'overview' \? 0 : 1/);
+  assert.match(forest, /targetMotionStrength: mode === 'overview' \? 0 : 1/);
+  assert.match(forest, /if \(!motionPaused && !settleImmediately && mode !== 'overview'\) motionElapsed \+= delta/);
+  assert.match(forest, /if \(isActiveOverviewEntry && !settleImmediately\) entry\.motionElapsed \+= delta/);
+  assert.match(forest, /root\.dataset\.motion = motionPaused[\s\S]*?activeOverviewTreeId \? 'active' : 'waiting'/);
+  assert.match(particles, /uMotionStrength:[\s\S]*?options\.motionStrength/);
+  assert.match(shaders, /uniform float uMotionStrength/);
+  assert.match(shaders, /windOffset \*= uMotionStrength/);
 });
 
 test("keeps orbit dragging stable by suspending pointer disturbance and camera flights", () => {
   assert.match(forest, /function onControlsStart\(\) \{[\s\S]*?cameraIsFlying = false;[\s\S]*?isOrbitDragging = true;[\s\S]*?repelTarget = 0;/);
-  assert.match(forest, /function onControlsEnd\(\) \{[\s\S]*?isOrbitDragging = false;[\s\S]*?pointerInside \? POINTER_REPEL_STRENGTH : 0/);
+  assert.match(forest, /function onControlsEnd\(\) \{[\s\S]*?isOrbitDragging = false;[\s\S]*?mode === 'overview'[\s\S]*?updateOverviewPointerActivation\(\)[\s\S]*?pointerInside \? POINTER_REPEL_STRENGTH : 0/);
   assert.match(forest, /repelTarget = isOrbitDragging \|\| event\.buttons !== 0/);
   assert.match(forest, /controls\.addEventListener\('start', onControlsStart\)/);
   assert.match(forest, /controls\.addEventListener\('end', onControlsEnd\)/);
@@ -192,14 +250,27 @@ test("keeps orbit dragging stable by suspending pointer disturbance and camera f
   assert.ok(forest.indexOf('if (cameraIsFlying)') < forest.indexOf('controls.update();'));
 });
 
-test("enlarges and spaces the same particles while trunk, root, branch, and leaf contours visibly dissolve", () => {
-  assert.match(particles, /PARTICLE_POINT_SIZE_GAIN = 1\.1/);
+test("builds the seedling from explicit dicot anatomy instead of a miniature tree", () => {
+  assert.match(particles, /botanicalModel: 'dicot-seedling'/);
+  assert.match(particles, /function generateSeedlingStructure\(random\)/);
+  assert.match(particles, /botanicalPart = 'hypocotyl'/);
+  assert.match(particles, /botanicalPart = 'epicotyl'/);
+  assert.match(particles, /botanicalPart = 'radicle'/);
+  assert.match(particles, /botanicalPart = 'lateral-root'/);
+  assert.equal((particles.match(/role: 'cotyledon'/g) || []).length, 2);
+  assert.equal((particles.match(/role: 'true-leaf'/g) || []).length, 2);
+  assert.match(particles, /sideSign = index % 2 === 0 \? -1 : 1/);
+});
+
+test("renders denser, sharper grains while trunk, root, branch, and leaf contours visibly dissolve", () => {
+  assert.match(particles, /PARTICLE_POINT_SIZE_GAIN = 1\.18/);
+  assert.match(particles, /SEEDLING_POINT_SIZE_GAIN = 1\.24/);
   assert.match(particles, /PARTICLE_SPATIAL_SCALE = 1\.04/);
   assert.match(particles, /points\.scale\.setScalar\(PARTICLE_SPATIAL_SCALE\)/);
   assert.match(particles, /spatialScale: PARTICLE_SPATIAL_SCALE/);
   assert.match(shaders, /uPointSizeGain/);
   assert.match(shaders, /decodedSize \* perspective \* uPointSizeGain/);
-  assert.match(shaders, /0\.44 \* uPointSizeGain/);
+  assert.match(shaders, /0\.68 \* uPointSizeGain/);
   assert.match(shaders, /closeUpCeiling \* uPointSizeGain/);
   assert.match(shaders, /float contourSurfaceMask = smoothstep\(0\.68, 0\.93, aSurface\)/);
   assert.match(shaders, /float trunkContourMask = 1\.0 - smoothstep\(0\.03, 0\.08, aWindMask\)/);
@@ -225,8 +296,10 @@ test("enlarges and spaces the same particles while trunk, root, branch, and leaf
   assert.match(shaders, /edgePointGain = 1\.0 \+ flowEmphasis \* 0\.58/);
   assert.match(shaders, /vEdgeFlow = flowEmphasis/);
   assert.match(shaders, /alpha \*= 1\.0 \+ vEdgeFlow \* 0\.78/);
-  assert.match(forest, /edgeDissolveStrength: motionHasStarted \? 1 : 0/g);
-  assert.match(forest, /const visualScale = OVERVIEW_TREE_SCALE \* system\.spatialScale/);
+  assert.match(forest, /edgeDissolveStrength: mode === 'overview' \? 0 : \(motionHasStarted \? 1 : 0\)/);
+  assert.match(forest, /edgeDissolveStrength: motionHasStarted \? 1 : 0/);
+  assert.match(forest, /antialias:\s*true/);
+  assert.match(forest, /Math\.min\(window\.devicePixelRatio, 1\.75\)/);
   assert.match(forest, /hitTarget\.position\.copy\(leaf\.center\)/);
   assert.match(forest, /system\.points\.add\(hitTarget\)/);
   assert.match(particles, /new Float32Array\(count \* 3\)/);
@@ -312,7 +385,7 @@ test("uses progressive disclosure, responsive regions, and a user-controlled mot
   assert.match(script, /function rememberDrawerReturnFocus\(preferred\)/);
   assert.match(script, /returnTarget\.focus\(\{ preventScroll: true \}\)/);
   assert.match(forest, /function setMotionPaused\(nextPaused\)/);
-  assert.match(forest, /if \(!motionPaused && !settleImmediately\) motionElapsed \+= delta/);
+  assert.match(forest, /if \(!motionPaused && !settleImmediately && mode !== 'overview'\) motionElapsed \+= delta/);
   assert.match(styles, /\.forest-topbar__meta \{/);
   assert.match(styles, /\.forest-control--motion\[aria-pressed="true"\]/);
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.forest-drawer \{[\s\S]*?bottom: 0;[\s\S]*?width: 100%/);

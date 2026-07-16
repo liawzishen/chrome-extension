@@ -304,12 +304,20 @@ p { margin: 0; }
 
 .forest-ribbon__track path {
   fill: none;
-  stroke: rgba(212, 164, 92, 0.34);
-  stroke-width: 1.15;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
   transition: opacity 220ms ease;
+}
+
+.forest-ribbon__track-bed {
+  stroke: rgba(212, 164, 92, 0.075);
+  stroke-width: 34;
+}
+
+#forestRibbonPath {
+  stroke: rgba(212, 164, 92, 0.42);
+  stroke-width: 1.15;
 }
 
 .forest-ribbon__plots { z-index: 1; pointer-events: none; }
@@ -456,6 +464,39 @@ p { margin: 0; }
 .forest-ribbon__plot[data-live="true"] .forest-ribbon__plot-number { display: none; }
 .forest-ribbon__plot[data-live="true"] .forest-ribbon__plot-title { top: 40px; }
 .forest-ribbon__plot[data-live="true"] .forest-ribbon__plot-meta { top: 56px; }
+
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot {
+  width: 46px;
+  height: 44px;
+}
+
+.forest-ribbon[data-density="compact"] .forest-ribbon__plant,
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot-title,
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot-meta {
+  display: none;
+}
+
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot-number,
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot[data-live="true"] .forest-ribbon__plot-number {
+  top: 8px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(219, 157, 67, 0.24);
+  border-radius: 50%;
+  padding: 0;
+  background: rgba(5, 5, 4, 0.72);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.forest-ribbon[data-density="compact"] .forest-ribbon__plot.is-selected .forest-ribbon__plot-number {
+  border-color: rgba(245, 176, 76, 0.9);
+  background: rgba(89, 49, 17, 0.82);
+  box-shadow: 0 0 16px rgba(229, 153, 53, 0.38);
+  color: #ffe0a8;
+}
 
 .forest-ribbon__completion-pulse {
   display: none;

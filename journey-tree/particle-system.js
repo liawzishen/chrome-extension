@@ -22,16 +22,10 @@ export const TREE_CONFIG = Object.freeze({
 
 export const GROWTH_PROFILES = Object.freeze({
   seedling: Object.freeze({
-    trunkSegments: 2,
-    trunkSegmentLength: 0.72,
-    sideBranchDepth: 0,
-    crownBranchDepth: 0,
-    sideBranches: false,
-    crownCount: 2,
-    rootCount: 3,
-    rootDepth: 0,
+    botanicalModel: 'dicot-seedling',
   }),
   growing: Object.freeze({
+    botanicalModel: 'branching-tree',
     trunkSegments: 4,
     trunkSegmentLength: 0.9,
     sideBranchDepth: 3,
@@ -42,6 +36,7 @@ export const GROWTH_PROFILES = Object.freeze({
     rootDepth: 2,
   }),
   mature: Object.freeze({
+    botanicalModel: 'branching-tree',
     trunkSegments: TREE_CONFIG.trunkSegments,
     trunkSegmentLength: TREE_CONFIG.trunkSegmentLength,
     sideBranchDepth: TREE_CONFIG.sideBranchDepth,
@@ -59,18 +54,20 @@ function getGrowthProfile(stage) {
 
 // Warm botanical palette. The video reference is used only for motion; color
 // remains a root-to-leaf golden-brown gradient as requested.
-const ROOT_EARTH = new THREE.Color('#351407');
-const TRUNK_BRONZE = new THREE.Color('#82401a');
-const BRANCH_GOLD = new THREE.Color('#b47428');
-const LEAF_AMBER = new THREE.Color('#b76518');
-const LEAF_LIGHT = new THREE.Color('#e1a33c');
-const AMBIENT_DUST = new THREE.Color('#744224');
+const ROOT_EARTH = new THREE.Color('#4a1f0b');
+const TRUNK_BRONZE = new THREE.Color('#9b4e1c');
+const BRANCH_GOLD = new THREE.Color('#d08a2f');
+const LEAF_AMBER = new THREE.Color('#d77a1e');
+const COTYLEDON_GOLD = new THREE.Color('#e6a13a');
+const LEAF_LIGHT = new THREE.Color('#ffd36b');
+const AMBIENT_DUST = new THREE.Color('#8a4d26');
 const DRIFT_STORAGE_MAX = 2.5;
 const SIZE_STORAGE_MIN = 0.42;
 const SIZE_STORAGE_RANGE = 0.82;
-const PARTICLE_POINT_SIZE_GAIN = 1.1;
+const PARTICLE_POINT_SIZE_GAIN = 1.18;
+const SEEDLING_POINT_SIZE_GAIN = 1.24;
 const PARTICLE_SPATIAL_SCALE = 1.04;
-export const MAX_PARTICLE_BUDGET = 180_000;
+export const MAX_PARTICLE_BUDGET = 320_000;
 
 function seededRandom(seed = TREE_CONFIG.seed) {
   let state = seed >>> 0;
@@ -229,6 +226,184 @@ function growRoot(skeleton, start, direction, length, radius, depth, maxDepth, r
       random,
     );
   }
+}
+
+/**
+ * Add one explicit seedling leaf. A young dicot cannot be made recognizable by
+ * merely shrinking the mature-tree grammar: it needs paired seed leaves and
+ * true leaves emerging from the centre of a slender shoot.
+ */
+function createSeedlingLeaf(skeleton, options, random) {
+  const forward = options.direction.clone().normalize();
+  const normal = (options.normal || new THREE.Vector3(0, 0, 1)).clone();
+  normal.addScaledVector(forward, -normal.dot(forward));
+  if (normal.lengthSq() < 0.001) normal.copy(makeBasis(forward).normal);
+  normal.normalize();
+  const side = new THREE.Vector3().crossVectors(normal, forward).normalize();
+  const petiole = createCurvedSegment(
+    options.attachment,
+    forward,
+    options.petioleLength,
+    options.role === 'cotyledon' ? 0.018 : 0.013,
+    0.004,
+    0,
+    'branch',
+    random,
+  );
+  petiole.botanicalPart = 'petiole';
+  skeleton.segments.push(petiole);
+  const leafBase = petiole.curve.getPoint(1);
+  const center = leafBase.clone().addScaledVector(forward, options.length * 0.48);
+
+  return {
+    index: options.index,
+    terminalIndex: options.index,
+    chapter: null,
+    isChapterCanopy: false,
+    botanicalRole: options.role,
+    center,
+    forward,
+    side,
+    normal,
+    length: options.length,
+    width: options.width,
+    widthPeak: options.role === 'cotyledon' ? 0.5 : 0.41,
+    baseExponent: options.role === 'cotyledon' ? 0.62 : 0.88,
+    tipExponent: options.role === 'cotyledon' ? 0.72 : 1.5,
+    sideAsymmetry: options.role === 'cotyledon' ? 1 : randomBetween(random, 0.97, 1.03),
+    toothCount: options.role === 'cotyledon' ? 0 : 9,
+    serrationAmplitude: options.role === 'cotyledon' ? 0 : 0.012,
+    phase: 0,
+    labelAnchor: center.clone()
+      .addScaledVector(forward, options.length * 0.3)
+      .addScaledVector(side, options.width * 0.68),
+  };
+}
+
+/**
+ * Build a botanically legible young dicot: one dominant radicle with lateral
+ * roots, a short hypocotyl, two broad cotyledons, and paired first true leaves.
+ */
+function generateSeedlingStructure(random) {
+  const skeleton = { segments: [], terminals: [] };
+  const soilCrown = new THREE.Vector3(0, -0.26, 0);
+
+  const hypocotyl = createCurvedSegment(
+    soilCrown,
+    new THREE.Vector3(0.025, 1, 0.012),
+    0.72,
+    0.11,
+    0.072,
+    0,
+    'trunk',
+    random,
+  );
+  hypocotyl.botanicalPart = 'hypocotyl';
+  skeleton.segments.push(hypocotyl);
+  const cotyledonNode = hypocotyl.curve.getPoint(1);
+
+  const epicotyl = createCurvedSegment(
+    cotyledonNode,
+    new THREE.Vector3(-0.018, 1, 0.01),
+    0.44,
+    0.07,
+    0.038,
+    1,
+    'trunk',
+    random,
+  );
+  epicotyl.botanicalPart = 'epicotyl';
+  skeleton.segments.push(epicotyl);
+  const trueLeafNode = epicotyl.curve.getPoint(1);
+
+  const radicle = createCurvedSegment(
+    soilCrown,
+    new THREE.Vector3(0.018, -1, -0.012),
+    1.34,
+    0.105,
+    0.025,
+    0,
+    'root',
+    random,
+  );
+  radicle.botanicalPart = 'radicle';
+  skeleton.segments.push(radicle);
+
+  // Lateral roots alternate down the radicle instead of forming the radial
+  // star used by mature trees. This preserves the familiar taproot silhouette.
+  for (let index = 0; index < 6; index += 1) {
+    const progress = 0.2 + index * 0.115;
+    const start = radicle.curve.getPointAt(progress);
+    const sideSign = index % 2 === 0 ? -1 : 1;
+    const azimuth = index * 1.73;
+    const direction = new THREE.Vector3(
+      sideSign * randomBetween(random, 0.72, 0.94),
+      randomBetween(random, -0.44, -0.22),
+      Math.sin(azimuth) * 0.34,
+    ).normalize();
+    const lateralRoot = createCurvedSegment(
+      start,
+      direction,
+      randomBetween(random, 0.38, 0.62) * (1 - index * 0.045),
+      randomBetween(random, 0.026, 0.038),
+      0.008,
+      1,
+      'root',
+      random,
+    );
+    lateralRoot.botanicalPart = 'lateral-root';
+    skeleton.segments.push(lateralRoot);
+  }
+
+  const leaves = [
+    createSeedlingLeaf(skeleton, {
+      index: 0,
+      attachment: cotyledonNode,
+      direction: new THREE.Vector3(-1, 0.2, 0.055),
+      normal: new THREE.Vector3(0.02, 0.04, 1),
+      petioleLength: 0.15,
+      length: 0.76,
+      width: 0.235,
+      role: 'cotyledon',
+    }, random),
+    createSeedlingLeaf(skeleton, {
+      index: 1,
+      attachment: cotyledonNode,
+      direction: new THREE.Vector3(1, 0.2, -0.055),
+      normal: new THREE.Vector3(-0.02, 0.04, 1),
+      petioleLength: 0.15,
+      length: 0.76,
+      width: 0.235,
+      role: 'cotyledon',
+    }, random),
+    createSeedlingLeaf(skeleton, {
+      index: 2,
+      attachment: trueLeafNode,
+      direction: new THREE.Vector3(-0.42, 0.91, 0.11),
+      normal: new THREE.Vector3(0.08, 0.03, 1),
+      petioleLength: 0.09,
+      length: 0.64,
+      width: 0.17,
+      role: 'true-leaf',
+    }, random),
+    createSeedlingLeaf(skeleton, {
+      index: 3,
+      attachment: trueLeafNode,
+      direction: new THREE.Vector3(0.42, 0.91, -0.11),
+      normal: new THREE.Vector3(-0.08, 0.03, 1),
+      petioleLength: 0.09,
+      length: 0.64,
+      width: 0.17,
+      role: 'true-leaf',
+    }, random),
+  ];
+  skeleton.terminals = leaves.map((leaf) => ({
+    position: leaf.center.clone().addScaledVector(leaf.forward, leaf.length * 0.5),
+    direction: leaf.forward.clone(),
+    depth: 0,
+  }));
+
+  return { skeleton, leaves };
 }
 
 /** Generate trunk, recursively forked crown/side branches, and radial roots. */
@@ -503,10 +678,10 @@ function generateLeaves(skeleton, chapters, random) {
           .addScaledVector(worldUp, 0.08 + randomBetween(random, -0.08, 0.08))
           .normalize();
 
-        const length = randomBetween(random, 0.24, 0.38)
+        const length = randomBetween(random, 0.27, 0.42)
           * THREE.MathUtils.lerp(0.9, 1.08, t)
           * (bladeChapter ? 1.03 : 1);
-        const width = length * randomBetween(random, 0.17, 0.22);
+        const width = length * randomBetween(random, 0.23, 0.29);
         const height01 = THREE.MathUtils.clamp(
           (attachment.y - minTerminalY) * inverseTerminalHeight,
           0,
@@ -562,6 +737,7 @@ function generateLeaves(skeleton, chapters, random) {
           tipExponent: randomBetween(random, 1.18, 1.45),
           sideAsymmetry: randomBetween(random, 0.95, 1.05),
           toothCount: 10 + Math.floor(random() * 7),
+          serrationAmplitude: 0.015,
           phase: random() * Math.PI * 2,
           labelAnchor: center.clone()
             .addScaledVector(forward, length * 0.34)
@@ -583,8 +759,8 @@ export function getParticleBudget() {
   // 1.75M-4.25M range could monopolize the GPU even on powerful laptops. Keep
   // every hardware tier beneath one hard ceiling so an explicit caller budget
   // cannot accidentally restore that cost.
-  if (prefersReducedMotion || memory <= 4 || cores <= 4) return 90_000;
-  if (memory <= 8 || cores <= 8) return 135_000;
+  if (prefersReducedMotion || memory <= 4 || cores <= 4) return 120_000;
+  if (memory <= 8 || cores <= 8) return 220_000;
   return MAX_PARTICLE_BUDGET;
 }
 
@@ -718,9 +894,12 @@ function sampleLeafPlate(leaf, random, output) {
   const profile = s <= leaf.widthPeak
     ? Math.pow(s / leaf.widthPeak, leaf.baseExponent)
     : Math.pow((1 - s) / (1 - leaf.widthPeak), leaf.tipExponent);
-  const serration = 0.985 + Math.sin(
+  const serrationAmplitude = Number.isFinite(leaf.serrationAmplitude)
+    ? leaf.serrationAmplitude
+    : 0.015;
+  const serration = 1 + Math.sin(
     s * Math.PI * 2 * leaf.toothCount + leaf.phase,
-  ) * 0.015;
+  ) * serrationAmplitude;
   const baseHalfWidth = leaf.width * profile * serration;
   const positiveHalfWidth = baseHalfWidth * leaf.sideAsymmetry;
   const negativeHalfWidth = baseHalfWidth * (2 - leaf.sideAsymmetry);
@@ -755,12 +934,13 @@ function sampleLeafPlate(leaf, random, output) {
   return structureType;
 }
 
-function buildAttributes(skeleton, leaves, particleBudget, random) {
+function buildAttributes(skeleton, leaves, particleBudget, random, growthStage) {
   const attributes = createAttributeStorage(particleBudget);
-  // Almost every grain belongs to the tree. Only a very small near-geometry
-  // halo remains, so zooming never trades useful branch/leaf density for fog.
-  const branchTarget = Math.floor(particleBudget * 0.38);
-  const leafTarget = Math.floor(particleBudget * 0.995);
+  // Almost every grain belongs to the plant. A seedling reserves more of its
+  // small silhouette for the radicle and stem; mature foliage receives the
+  // larger leaf share. Only 0.3% remains as near-geometry atmosphere.
+  const branchTarget = Math.floor(particleBudget * (growthStage === 'seedling' ? 0.4 : 0.42));
+  const leafTarget = Math.floor(particleBudget * 0.997);
   const point = new THREE.Vector3();
   const particleColor = new THREE.Color();
   const branchScratch = createBranchSampleScratch();
@@ -771,23 +951,39 @@ function buildAttributes(skeleton, leaves, particleBudget, random) {
   const bounds = new THREE.Box3();
   for (const segment of skeleton.segments) {
     bounds.expandByPoint(segment.curve.getPoint(0));
+    bounds.expandByPoint(segment.curve.getPoint(0.5));
     bounds.expandByPoint(segment.curve.getPoint(1));
   }
-  for (const leaf of leaves) bounds.expandByPoint(leaf.center);
-  bounds.expandByScalar(0.72);
+  for (const leaf of leaves) {
+    for (const axialSign of [-1, 1]) {
+      for (const lateralSign of [-1, 1]) {
+        bounds.expandByPoint(
+          leaf.center.clone()
+            .addScaledVector(leaf.forward, leaf.length * 0.54 * axialSign)
+            .addScaledVector(leaf.side, leaf.width * 1.08 * lateralSign),
+        );
+      }
+    }
+  }
+  // Bounds now include actual leaf plates, so a narrow halo is sufficient and
+  // the camera no longer shrinks the plant around a large box of empty space.
+  bounds.expandByScalar(growthStage === 'seedling' ? 0.2 : 0.28);
   const inverseTreeHeight = 1 / Math.max(0.001, bounds.max.y - bounds.min.y);
 
-  const branchWeights = skeleton.segments.map((segment) => (
-    segment.curve.getLength()
-    * (segment.radiusStart + segment.radiusEnd)
-    * (segment.kind === 'trunk' ? 1.3 : 1)
-  ));
+  const branchWeights = skeleton.segments.map((segment) => {
+    const structureWeight = segment.botanicalPart === 'radicle'
+      ? 1.75
+      : (segment.kind === 'trunk' ? 1.5 : (segment.kind === 'root' ? 1.15 : 1));
+    return segment.curve.getLength()
+      * (segment.radiusStart + segment.radiusEnd)
+      * structureWeight;
+  });
   const branchWeightTotal = branchWeights.reduce((sum, value) => sum + value, 0);
 
   skeleton.segments.forEach((segment, index) => {
     const target = index === skeleton.segments.length - 1
       ? branchTarget
-      : cursor + Math.max(18, Math.floor(branchTarget * branchWeights[index] / branchWeightTotal));
+      : cursor + Math.max(42, Math.floor(branchTarget * branchWeights[index] / branchWeightTotal));
     while (cursor < Math.min(target, branchTarget)) {
       const radialFraction = sampleBranchVolume(segment, random, point, branchScratch);
       const height = THREE.MathUtils.clamp((point.y - bounds.min.y) * inverseTreeHeight, 0, 1);
@@ -797,13 +993,13 @@ function buildAttributes(skeleton, leaves, particleBudget, random) {
         particleColor.lerpColors(TRUNK_BRONZE, BRANCH_GOLD, Math.pow(height, 0.82));
       }
       writeParticle(attributes, cursor, point, random, {
-        drift: segment.kind === 'root' ? 0.22 : 0.32,
-        sizeMin: 0.64,
-        sizeMax: segment.kind === 'trunk' ? 1.18 : 1.02,
-        brightnessMin: segment.kind === 'root' ? 0.18 : 0.22,
+        drift: segment.kind === 'root' ? 0.18 : 0.26,
+        sizeMin: segment.botanicalPart === 'radicle' ? 0.74 : 0.68,
+        sizeMax: segment.kind === 'trunk' ? 1.22 : 1.08,
+        brightnessMin: segment.kind === 'root' ? 0.28 : 0.32,
         brightnessMax: segment.kind === 'root'
-          ? 0.46
-          : (segment.kind === 'trunk' ? 0.62 : 0.68),
+          ? 0.64
+          : (segment.kind === 'trunk' ? 0.8 : 0.82),
         color: particleColor,
         // Shell grains receive the pale contour treatment in the fragment
         // shader; interior grains remain a deep translucent silhouette.
@@ -856,18 +1052,22 @@ function buildAttributes(skeleton, leaves, particleBudget, random) {
       const structureType = sampleLeafPlate(leaf, random, point);
       const isStructuralGrain = structureType > 0;
       const shimmer = THREE.MathUtils.clamp(random() * 0.74, 0, 0.84);
-      particleColor.lerpColors(LEAF_AMBER, LEAF_LIGHT, shimmer);
+      particleColor.lerpColors(
+        leaf.botanicalRole === 'cotyledon' ? COTYLEDON_GOLD : LEAF_AMBER,
+        LEAF_LIGHT,
+        shimmer,
+      );
       writeParticle(attributes, cursor, point, random, {
-        drift: 0.5,
-        sizeMin: isStructuralGrain ? 0.5 : 0.44,
-        sizeMax: isStructuralGrain ? 0.86 : 0.78,
+        drift: growthStage === 'seedling' ? 0.28 : 0.42,
+        sizeMin: isStructuralGrain ? 0.62 : 0.54,
+        sizeMax: isStructuralGrain ? 1.0 : 0.9,
         // Densityâ€”not bloomâ€”builds the leaf silhouette.
         brightnessMin: leaf.isChapterCanopy
-          ? (isStructuralGrain ? 0.12 : 0.08)
-          : (isStructuralGrain ? 0.42 : 0.34),
+          ? (isStructuralGrain ? 0.2 : 0.16)
+          : (isStructuralGrain ? 0.56 : 0.48),
         brightnessMax: leaf.isChapterCanopy
-          ? (isStructuralGrain ? 0.28 : 0.2)
-          : (isStructuralGrain ? 0.7 : 0.58),
+          ? (isStructuralGrain ? 0.42 : 0.34)
+          : (isStructuralGrain ? 0.92 : 0.8),
         color: particleColor,
         surface: structureType === 2
           ? 1
@@ -878,7 +1078,7 @@ function buildAttributes(skeleton, leaves, particleBudget, random) {
     }
   });
 
-  // The final 0.5% stays close to the geometry. It supports living-dust motion
+  // The final 0.3% stays close to the geometry. It supports living-dust motion
   // without softening the botanical silhouettes.
   while (cursor < particleBudget) {
     if (random() < 0.68) {
@@ -888,17 +1088,17 @@ function buildAttributes(skeleton, leaves, particleBudget, random) {
       const sourceSegment = skeleton.segments[Math.floor(random() * skeleton.segments.length)];
       sampleBranchVolume(sourceSegment, random, point, branchScratch);
     }
-    const longTail = random() < 0.035 ? 1.8 : 1;
-    const haloSpread = randomBetween(random, 0.025, 0.16) * longTail;
+    const longTail = random() < 0.02 ? 1.45 : 1;
+    const haloSpread = randomBetween(random, 0.015, 0.085) * longTail;
     point.x += randomNormal(random) * haloSpread;
     point.y += randomNormal(random) * haloSpread * 0.72;
     point.z += randomNormal(random) * haloSpread;
     writeParticle(attributes, cursor, point, random, {
-      drift: 1.7,
+      drift: 1.25,
       sizeMin: 0.42,
-      sizeMax: 0.72,
-      brightnessMin: 0.1,
-      brightnessMax: 0.28,
+      sizeMax: 0.66,
+      brightnessMin: 0.08,
+      brightnessMax: 0.2,
       color: AMBIENT_DUST,
       surface: 0.08,
       windMask: 1,
@@ -917,16 +1117,25 @@ export function createParticleTree(chapters, renderer, options = {}) {
     ? options.growthStage
     : 'mature';
   const growthProfile = getGrowthProfile(growthStage);
-  const skeleton = generateSkeleton(random, growthProfile);
+  const seedlingStructure = growthProfile.botanicalModel === 'dicot-seedling'
+    ? generateSeedlingStructure(random)
+    : null;
+  const skeleton = seedlingStructure?.skeleton || generateSkeleton(random, growthProfile);
   // Note labels are metadata anchors, not a reason to alter the generated
   // plant shape. This lets every Visual Note remain selectable with no cap.
-  const leaves = generateLeaves(skeleton, [], random);
+  const leaves = seedlingStructure?.leaves || generateLeaves(skeleton, [], random);
   const chapterLeaves = createChapterAnchors(leaves, chapters);
   const requestedBudget = Number(options.particleBudget);
   const particleBudget = Number.isFinite(requestedBudget)
     ? Math.min(MAX_PARTICLE_BUDGET, Math.max(2_000, Math.round(requestedBudget)))
     : getParticleBudget();
-  const { attributes, bounds } = buildAttributes(skeleton, leaves, particleBudget, random);
+  const { attributes, bounds } = buildAttributes(
+    skeleton,
+    leaves,
+    particleBudget,
+    random,
+    growthStage,
+  );
 
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(attributes.positions, 3));
@@ -950,7 +1159,11 @@ export function createParticleTree(chapters, renderer, options = {}) {
   const uniforms = {
     u_time: { value: 0 },
     uPointScale: { value: 17 * renderer.getPixelRatio() },
-    uPointSizeGain: { value: PARTICLE_POINT_SIZE_GAIN },
+    uPointSizeGain: {
+      value: growthStage === 'seedling'
+        ? SEEDLING_POINT_SIZE_GAIN
+        : PARTICLE_POINT_SIZE_GAIN,
+    },
     uEdgeDissolveStrength: {
       value: Number.isFinite(Number(options.edgeDissolveStrength))
         ? THREE.MathUtils.clamp(Number(options.edgeDissolveStrength), 0, 1)
@@ -959,6 +1172,11 @@ export function createParticleTree(chapters, renderer, options = {}) {
     uEdgeFlowScale: {
       value: growthStage === 'seedling' ? 0.48 : (growthStage === 'growing' ? 0.74 : 1),
     },
+    uMotionStrength: {
+      value: Number.isFinite(Number(options.motionStrength))
+        ? THREE.MathUtils.clamp(Number(options.motionStrength), 0, 1)
+        : 1,
+    },
     uRepelRadius: { value: 0.52 },
     uRepelDepth: { value: 1.25 },
     uRepelStrength: { value: 0 },
@@ -966,10 +1184,12 @@ export function createParticleTree(chapters, renderer, options = {}) {
     uMouseRayOrigin: { value: new THREE.Vector3(1000, 1000, 1000) },
     uMouseRayDirection: { value: new THREE.Vector3(0, 0, -1) },
     uOpacity: { value: Number.isFinite(Number(options.opacity)) ? Number(options.opacity) : 0 },
-    // Restore perceived density after adaptive vertex reduction. Increasing one
-    // scalar is dramatically cheaper than drawing the removed 3M particles.
+    // Balance alpha across hardware tiers while the denser high-tier geometry
+    // carries the silhouette instead of relying on an oversized glow.
     uDensityGain: {
-      value: THREE.MathUtils.clamp(Math.sqrt(4_250_000 / particleBudget), 1, 2.05),
+      value: growthStage === 'seedling'
+        ? 1.35
+        : THREE.MathUtils.clamp(Math.sqrt(1_250_000 / particleBudget), 1.35, 2),
     },
 
     // Public wind tuning surface. The bounds-derived gradient remains correct
