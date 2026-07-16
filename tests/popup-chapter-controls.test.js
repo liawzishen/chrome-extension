@@ -31,7 +31,7 @@ test("uses one accessible chapter-name dialog rather than duplicating modal stat
 });
 
 test("makes the collect-source action explain that it saves evidence without generating a note", () => {
-  assert.match(html, /id="addCurrentSourceButton"[^>]*>\s*Save source to chapter\s*</i);
+  assert.match(html, /id="addCurrentSourceButton"[^>]*>[\s\S]{0,500}>Save Source Only</i);
   assert.match(html, /without generating (?:a )?note/i);
   assert.match(html, /combine|combined chapter note/i);
 });
@@ -47,26 +47,37 @@ test("creates and selects a new stable-ID chapter through the Journey worker", (
 });
 
 test("renders chapter options with IDs as values while preserving user-entered titles as labels", () => {
+  const renderOptions = functionSource("renderChapterOptions");
   const updateOptions = functionSource("updateJourneyChapterOptions");
+  assert.ok(renderOptions, "renderChapterOptions must exist");
   assert.ok(updateOptions, "updateJourneyChapterOptions must exist");
-  assert.match(updateOptions, /option\.value\s*=\s*chapter\.id/);
-  assert.match(updateOptions, /option\.dataset\.chapterTitle\s*=\s*chapter\.title/);
-  assert.match(updateOptions, /option\.textContent\s*=/);
-  assert.match(updateOptions, /pageChapterInput/);
-  assert.match(updateOptions, /notesChapterInput/);
+  assert.match(renderOptions, /option\.value\s*=\s*chapter\.id/);
+  assert.match(renderOptions, /option\.dataset\.chapterTitle\s*=\s*chapter\.title/);
+  assert.match(renderOptions, /option\.textContent\s*=/);
+  assert.match(updateOptions, /renderChapterOptions\(elements\.pageChapterInput, chapters, selectedId\)/);
+  assert.match(updateOptions, /renderChapterOptions\(elements\.notesChapterInput, chapters, selectedId\)/);
 });
 
-test("persists stable selector IDs alongside legacy chapter titles", () => {
+test("persists one shared selection and migrates legacy Page before Notes", () => {
   const saveState = functionSource("savePanelState");
   const loadState = functionSource("loadPanelState");
-  assert.match(saveState, /pageChapterId/);
-  assert.match(saveState, /notesChapterId/);
-  assert.match(saveState, /pageChapter:/);
-  assert.match(saveState, /notesChapter:/);
+  assert.match(saveState, /selectedChapterId:\s*selectedChapter\.chapterId/);
+  assert.match(saveState, /selectedChapter:\s*selectedChapter\.chapterTitle/);
+  assert.doesNotMatch(saveState, /pageChapterId:|notesChapterId:/);
+  assert.match(loadState, /sharedChapterId/);
   assert.match(loadState, /pageChapterId/);
   assert.match(loadState, /notesChapterId/);
-  assert.match(loadState, /pageChapter/);
-  assert.match(loadState, /notesChapter/);
+  assert.match(loadState, /legacyPageChapterId \|\| legacyNotesChapterId/);
+  assert.match(script, /chapterRestoreFallback:[\s\S]*?legacyNotesChapterId/);
+});
+
+test("a change in either chapter select mirrors the shared ID and title", () => {
+  const changeFlow = functionSource("handleChapterSelectionChange");
+  const mirrorFlow = functionSource("selectChapterAcrossControls");
+  assert.match(changeFlow, /selectChapterAcrossControls\(chapterId\)/);
+  assert.match(mirrorFlow, /\[elements\.pageChapterInput, elements\.notesChapterInput\]/);
+  assert.match(mirrorFlow, /select\.value = option \? safeId : ""/);
+  assert.match(mirrorFlow, /state\.selectedChapter = \{ id: matchedChapterId, title: selectedTitle \}/);
 });
 
 test("passes both the selected chapter ID and title through every note creation path", () => {

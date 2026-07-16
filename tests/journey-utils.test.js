@@ -124,6 +124,36 @@ test("collects sources across websites and rejects exact duplicates", () => {
   assert.match(Journey.buildCollectionText(duplicate.journey.chapters[0]), /two\.example/);
 });
 
+test("deduplicates identical local documents by fingerprint inside a chapter", () => {
+  const first = Journey.addSource(
+    Journey.createJourney("Local documents", "2026-07-16T00:00:00Z"),
+    "Imports",
+    {
+      id: "local-a",
+      type: "webpage",
+      title: "Course notes",
+      url: "",
+      documentType: "pdf",
+      text: "A bounded local document snapshot.",
+      fingerprint: "local-document-fingerprint"
+    },
+    "2026-07-16T00:10:00Z"
+  );
+  const duplicate = Journey.addSource(first.journey, "Imports", {
+    id: "local-b",
+    type: "webpage",
+    title: "Course notes re-uploaded",
+    url: "",
+    documentType: "pdf",
+    text: "A bounded local document snapshot.",
+    fingerprint: "local-document-fingerprint"
+  }, "2026-07-16T00:20:00Z");
+
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.journey.chapters[0].sources.length, 1);
+  assert.equal(duplicate.sourceId, "local-a");
+});
+
 test("reduces quiz evidence into chapter status and a journey summary", () => {
   let journey = Journey.createJourney("Physics", "2026-07-11T00:00:00Z");
   journey = Journey.recordSession(journey, "Forces", {
@@ -766,6 +796,502 @@ test("normalizes source-grounded question attempts into the schema-v3 shape", ()
   assert.equal(Journey.normalizeQuestionAttempt({ questionId: "missing-required-fields" }), null);
 });
 
+test("migrates legacy concept memory with strength, interval, and review defaults", () => {
+  const expectedStrengths = {
+    "stable-concept": 80,
+    "recovering-concept": 60,
+    "weak-concept": 35
+  };
+  const concepts = [
+    ["stable-concept", "stable"],
+    ["recovering-concept", "recovering"],
+    ["weak-concept", "weak"]
+  ].map(([conceptId, state]) => ({
+    noteId: "legacy-note",
+    conceptId,
+    conceptLabel: conceptId,
+    timesTested: 3,
+    timesWrong: state === "stable" ? 0 : 1,
+    state,
+    lastAttemptAt: "2026-07-10T10:00:00.000Z"
+  }));
+
+  const memory = Journey.normalizeLearningMemory({ concepts });
+
+  memory.concepts.forEach((concept) => {
+    assert.equal(concept.strength, expectedStrengths[concept.conceptId]);
+    assert.equal(concept.intervalDays, 1);
+    assert.equal(concept.nextReviewAt, "2026-07-11T10:00:00.000Z");
+  });
+});
+
+test("raises strength and doubles the interval after a fully correct batch", () => {
+  const answeredAt = "2026-07-15T10:00:00.000Z";
+  const recorded = Journey.recordQuestionAttempts(
+    Journey.createJourney("Strength", "2026-07-15T00:00:00.000Z"),
+    [questionAttempt(101, { answeredAt })],
+    { score: 100, submittedAt: answeredAt }
+  );
+  const concept = recorded.journey.learningMemory.concepts[0];
+
+  assert.equal(concept.strength, 70);
+  assert.equal(concept.intervalDays, 2);
+  assert.equal(concept.nextReviewAt, "2026-07-17T10:00:00.000Z");
+});
+
+test("adds the due-date strength bonus only on or after the review time", () => {
+  const makeJourney = (nextReviewAt) => Journey.normalizeJourney({
+    ...Journey.createJourney("Due bonus", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-memory",
+        conceptId: "concept-alpha",
+        conceptLabel: "Concept Alpha",
+        timesTested: 1,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-14T10:00:00.000Z",
+        strength: 50,
+        intervalDays: 1,
+        nextReviewAt
+      }]
+    }
+  });
+  const answeredAt = "2026-07-15T10:00:00.000Z";
+  const beforeDue = Journey.recordQuestionAttempts(
+    makeJourney("2026-07-15T10:00:01.000Z"),
+    [questionAttempt(102, { answeredAt })],
+    { score: 100, submittedAt: answeredAt }
+  ).journey.learningMemory.concepts[0];
+  const whenDue = Journey.recordQuestionAttempts(
+    makeJourney(answeredAt),
+    [questionAttempt(103, { answeredAt })],
+    { score: 100, submittedAt: answeredAt }
+  ).journey.learningMemory.concepts[0];
+
+  assert.equal(beforeDue.strength, 70);
+  assert.equal(whenDue.strength, 75);
+});
+
+test("reduces strength and resets the interval when a batch contains a wrong answer", () => {
+  const answeredAt = "2026-07-15T10:00:00.000Z";
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Wrong answer", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-memory",
+        conceptId: "concept-alpha",
+        conceptLabel: "Concept Alpha",
+        timesTested: 2,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-10T10:00:00.000Z",
+        strength: 80,
+        intervalDays: 8,
+        nextReviewAt: "2026-07-18T10:00:00.000Z"
+      }]
+    }
+  });
+  const recorded = Journey.recordQuestionAttempts(journey, [
+    questionAttempt(104, { answeredAt }),
+    questionAttempt(105, { answeredAt, result: "incorrect", studentAnswer: "Wrong" })
+  ], { score: 50, submittedAt: answeredAt });
+  const concept = recorded.journey.learningMemory.concepts[0];
+
+  assert.equal(concept.strength, 50);
+  assert.equal(concept.intervalDays, 1);
+  assert.equal(concept.nextReviewAt, "2026-07-16T10:00:00.000Z");
+});
+
+test("decays effective strength once a concept is overdue", () => {
+  const strength = Journey.effectiveStrength({
+    state: "stable",
+    strength: 80,
+    intervalDays: 2,
+    lastAttemptAt: "2026-07-10T10:00:00.000Z"
+  }, "2026-07-16T10:00:00.000Z");
+
+  assert.equal(strength, 20);
+});
+
+test("orders weak due concepts first and applies limit and note filters", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Due concepts", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-a",
+        conceptId: "stable-low",
+        conceptLabel: "A stable low concept",
+        timesTested: 2,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 20,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-25T10:00:00.000Z"
+      }, {
+        noteId: "note-a",
+        conceptId: "weak-high",
+        conceptLabel: "Z weak concept",
+        timesTested: 2,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 90,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-25T10:00:00.000Z"
+      }, {
+        noteId: "note-b",
+        conceptId: "other-note",
+        conceptLabel: "Other note concept",
+        timesTested: 1,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 40,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-16T10:00:00.000Z"
+      }]
+    }
+  });
+  const now = "2026-07-16T10:00:00.000Z";
+
+  assert.deepEqual(
+    Journey.getDueConcepts(journey, { now, noteId: "note-a" }).map((concept) => concept.conceptId),
+    ["weak-high", "stable-low"]
+  );
+  assert.deepEqual(
+    Journey.getDueConcepts(journey, { now, limit: 1 }).map((concept) => concept.conceptId),
+    ["other-note"]
+  );
+});
+
+test("builds a zero habit profile from an empty or invalid journey", () => {
+  const expected = {
+    currentStreakDays: 0,
+    bestStreakDays: 0,
+    typicalSessionMinutes: 0,
+    sessionsLast7Days: 0,
+    sessionsPerWeekOverall: 0,
+    preferredStudyHour: null,
+    lastStudiedAt: null
+  };
+
+  assert.deepEqual(Journey.buildHabitProfile({}, [], "2026-07-16T10:00:00.000Z"), expected);
+  assert.deepEqual(Journey.buildHabitProfile(null, null, "2026-07-16T10:00:00.000Z"), expected);
+});
+
+test("keeps a current streak through three consecutive days ending yesterday", () => {
+  const profile = Journey.buildHabitProfile({
+    events: ["2026-07-13", "2026-07-14", "2026-07-15"].map((localDay, index) => ({
+      type: "generated",
+      localDay,
+      occurredAt: `2026-07-${String(13 + index).padStart(2, "0")}T10:00:00.000Z`
+    }))
+  }, [], "2026-07-16T10:00:00.000Z");
+
+  assert.equal(profile.currentStreakDays, 3);
+  assert.equal(profile.bestStreakDays, 3);
+});
+
+test("breaks the current habit streak after a full missed day", () => {
+  const profile = Journey.buildHabitProfile({
+    events: ["2026-07-10", "2026-07-11", "2026-07-13"].map((localDay, index) => ({
+      type: "generated",
+      localDay,
+      occurredAt: [
+        "2026-07-10T10:00:00.000Z",
+        "2026-07-11T10:00:00.000Z",
+        "2026-07-13T10:00:00.000Z"
+      ][index]
+    }))
+  }, [], "2026-07-15T10:00:00.000Z");
+
+  assert.equal(profile.currentStreakDays, 0);
+  assert.equal(profile.bestStreakDays, 2);
+});
+
+test("uses the rounded median focus duration for odd and even histories", () => {
+  const now = "2026-07-16T10:00:00.000Z";
+  const odd = Journey.buildHabitProfile({}, [
+    { elapsedMinutes: 10 },
+    { elapsedMinutes: 20 },
+    { elapsedMs: 30 * 60000 }
+  ], now);
+  const even = Journey.buildHabitProfile({}, [
+    { elapsedMinutes: 10 },
+    { elapsedMinutes: 20 },
+    { elapsedMs: 30 * 60000 },
+    { elapsedMinutes: 40 }
+  ], now);
+
+  assert.equal(odd.typicalSessionMinutes, 20);
+  assert.equal(even.typicalSessionMinutes, 25);
+});
+
+test("finds the preferred local study hour only with at least three events", () => {
+  const makeEvent = (occurredAt, localDay) => ({ type: "generated", occurredAt, localDay });
+  const events = [
+    makeEvent("2026-07-10T21:05:00", "2026-07-10"),
+    makeEvent("2026-07-11T21:20:00", "2026-07-11"),
+    makeEvent("2026-07-12T21:45:00", "2026-07-12"),
+    makeEvent("2026-07-13T09:15:00", "2026-07-13")
+  ];
+  const now = "2026-07-16T10:00:00.000Z";
+
+  assert.equal(Journey.buildHabitProfile({ events }, [], now).preferredStudyHour, 21);
+  assert.equal(Journey.buildHabitProfile({ events: events.slice(0, 2) }, [], now).preferredStudyHour, null);
+});
+
+test("returns the single onboarding step when a study plan has no chapters", () => {
+  const plan = Journey.buildStudyPlan(Journey.createJourney(), [], {
+    now: "2026-07-16T10:00:00.000Z"
+  });
+
+  assert.equal(plan.generatedAt, "2026-07-16T10:00:00.000Z");
+  assert.deepEqual(plan.steps, [{
+    id: "onboard-1",
+    kind: "advance",
+    title: "Create your first visual note",
+    reason: "Save a page, note, or video to plant your first tree.",
+    noteId: "",
+    conceptId: "",
+    chapterId: "",
+    estimatedMinutes: 5
+  }]);
+});
+
+test("starts a study plan with an evidence-based weak-concept recovery", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Recovery plan", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-recovery",
+      title: "Photosynthesis",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:00:00.000Z",
+      sources: [],
+      sessions: [{
+        id: "note-recovery",
+        itemKind: "note",
+        title: "Photosynthesis note",
+        generatedAt: "2026-07-15T09:00:00.000Z"
+      }]
+    }],
+    learningMemory: {
+      concepts: [{
+        noteId: "note-recovery",
+        conceptId: "calvin-cycle",
+        conceptLabel: "Calvin cycle",
+        timesTested: 3,
+        timesWrong: 2,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 35,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-17T10:00:00.000Z"
+      }]
+    }
+  });
+  const plan = Journey.buildStudyPlan(journey, [], { now: "2026-07-16T10:00:00.000Z" });
+
+  assert.equal(plan.steps[0].kind, "recovery");
+  assert.equal(plan.steps[0].reason, "You missed this 2 of 3 times.");
+  assert.equal(plan.steps[0].chapterId, "chapter-recovery");
+});
+
+test("sizes a study plan to the learner's typical focus session", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Sized plan", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-sized",
+      title: "Cell biology",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:00:00.000Z",
+      sources: [],
+      sessions: [{ id: "note-sized", itemKind: "note", generatedAt: "2026-07-15T09:00:00.000Z" }]
+    }],
+    learningMemory: {
+      concepts: [{
+        noteId: "note-sized",
+        conceptId: "weak-sized",
+        conceptLabel: "Cell membrane",
+        timesTested: 2,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 35,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-17T10:00:00.000Z"
+      }, {
+        noteId: "note-sized",
+        conceptId: "stable-sized",
+        conceptLabel: "Nucleus",
+        timesTested: 2,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 75,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-25T10:00:00.000Z"
+      }]
+    }
+  });
+  const now = "2026-07-16T10:00:00.000Z";
+  const shortPlan = Journey.buildStudyPlan(journey, [{ elapsedMinutes: 15 }], { now });
+  const standardPlan = Journey.buildStudyPlan(journey, [{ elapsedMinutes: 30 }], { now });
+
+  assert.equal(shortPlan.steps.length, 2);
+  assert.equal(standardPlan.steps.length, 3);
+});
+
+test("uses chapter status to phrase review and first-quiz advance steps", () => {
+  const baseChapter = {
+    id: "chapter-status",
+    title: "Forces",
+    createdAt: "2026-07-10T00:00:00.000Z",
+    updatedAt: "2026-07-15T09:00:00.000Z",
+    sources: [{
+      id: "source-forces",
+      title: "Forces source",
+      text: "Force changes motion.",
+      capturedAt: "2026-07-15T08:00:00.000Z"
+    }]
+  };
+  const reviewJourney = Journey.normalizeJourney({
+    ...Journey.createJourney("Review wording", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      ...baseChapter,
+      sessions: [{
+        id: "quiz-forces",
+        itemKind: "quiz",
+        score: 58,
+        generatedAt: "2026-07-15T09:00:00.000Z",
+        submittedAt: "2026-07-15T09:30:00.000Z"
+      }]
+    }]
+  });
+  const firstQuizJourney = Journey.normalizeJourney({
+    ...Journey.createJourney("First quiz wording", "2026-07-10T00:00:00.000Z"),
+    chapters: [{ ...baseChapter, sessions: [] }]
+  });
+  const now = "2026-07-16T10:00:00.000Z";
+  const reviewStep = Journey.buildStudyPlan(reviewJourney, [], { now }).steps[0];
+  const firstQuizStep = Journey.buildStudyPlan(firstQuizJourney, [], { now }).steps[0];
+
+  assert.equal(reviewStep.title, "Review Forces and retake its quiz");
+  assert.equal(reviewStep.reason, "Your last score there was below 65%.");
+  assert.equal(firstQuizStep.title, "Take your first quiz in Forces");
+  assert.equal(firstQuizStep.reason, "Activity only becomes mastery evidence after a submitted quiz.");
+});
+
+test("uses the clarified advance wording for an empty planned chapter", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Planned chapter", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-planned",
+      title: "Organic chemistry",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:00:00.000Z",
+      sources: [],
+      sessions: []
+    }]
+  });
+  const advance = Journey.buildStudyPlan(journey, [], {
+    now: "2026-07-16T10:00:00.000Z"
+  }).steps[0];
+
+  assert.equal(advance.kind, "advance");
+  assert.equal(advance.title, "Add your first source to Organic chemistry");
+  assert.equal(advance.reason, "This chapter is planned but has no saved material yet.");
+  assert.equal(advance.chapterId, "chapter-planned");
+});
+
+test("adds the weakest unused stable concept as a stretch step when there is room", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Stretch plan", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-stretch",
+      title: "Genetics",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:00:00.000Z",
+      sources: [],
+      sessions: [{ id: "note-stretch", itemKind: "note", generatedAt: "2026-07-15T09:00:00.000Z" }]
+    }],
+    learningMemory: {
+      concepts: [{
+        noteId: "note-stretch",
+        conceptId: "repair-concept",
+        conceptLabel: "Punnett squares",
+        timesTested: 3,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 35,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-17T10:00:00.000Z"
+      }, {
+        noteId: "note-stretch",
+        conceptId: "stable-low",
+        conceptLabel: "Dominant alleles",
+        timesTested: 3,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 65,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-25T10:00:00.000Z"
+      }, {
+        noteId: "note-stretch",
+        conceptId: "stable-high",
+        conceptLabel: "Recessive alleles",
+        timesTested: 3,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 85,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-25T10:00:00.000Z"
+      }]
+    }
+  });
+  const plan = Journey.buildStudyPlan(journey, [{ elapsedMinutes: 30 }], {
+    now: "2026-07-16T10:00:00.000Z"
+  });
+  const stretch = plan.steps.find((step) => step.kind === "stretch");
+  const repairIds = new Set(plan.steps.filter((step) => step.kind === "recovery").map((step) => step.conceptId));
+
+  assert.equal(stretch.conceptId, "stable-low");
+  assert.equal(stretch.chapterId, "chapter-stretch");
+  assert.equal(repairIds.has(stretch.conceptId), false);
+});
+
+test("shows a streak note only for a habit streak of at least two days", () => {
+  const makeJourney = (days) => Journey.normalizeJourney({
+    ...Journey.createJourney("Streak plan", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-streak",
+      title: "Ecology",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:00:00.000Z",
+      sources: [],
+      sessions: []
+    }],
+    events: days.map((localDay) => ({
+      type: "generated",
+      localDay,
+      occurredAt: `${localDay}T10:00:00.000Z`
+    }))
+  });
+  const now = "2026-07-16T10:00:00.000Z";
+
+  assert.equal(
+    Journey.buildStudyPlan(makeJourney(["2026-07-13", "2026-07-14", "2026-07-15"]), [], { now }).streakNote,
+    "Day 3 streak — one quiz today keeps it alive."
+  );
+  assert.equal(Journey.buildStudyPlan(makeJourney(["2026-07-16"]), [], { now }).streakNote, "");
+  assert.equal(Journey.buildStudyPlan(makeJourney([]), [], { now }).streakNote, "");
+});
+
 test("keeps mixed recent attempts bounded to 20 without losing lifetime counts or idempotence", () => {
   const attempts = Array.from({ length: 25 }, (_, offset) => {
     const index = offset + 1;
@@ -1025,4 +1551,171 @@ test("clears only learning memory and leaves chapters, sources, sessions, events
   assert.equal(clearedAgain.journey.revision, cleared.journey.revision);
   assert.equal(clearedAgain.clearedAttemptCount, 0);
   assert.equal(clearedAgain.clearedConceptCount, 0);
+});
+
+test("normalizes proposed chapter titles while preserving exact existing names", () => {
+  assert.equal(Journey.normalizeChapterTitleProposal(" java ", ["Java"]), "Java");
+  assert.equal(Journey.normalizeChapterTitleProposal("machine   learning", []), "Machine Learning");
+  const longTitle = Journey.normalizeChapterTitleProposal("a".repeat(80), []);
+  assert.equal(longTitle.length, 60);
+  assert.equal(longTitle[0], "A");
+});
+
+test("plans multiple files into two new chapters in stable assignment order", () => {
+  const assignments = [
+    ...Array.from({ length: 3 }, (_, index) => ({
+      fileId: `java-${index + 1}`,
+      chapterTitle: "java",
+      confidence: 0.8
+    })),
+    ...Array.from({ length: 5 }, (_, index) => ({
+      fileId: `cooking-${index + 1}`,
+      chapterTitle: "cooking",
+      confidence: 0.7
+    }))
+  ];
+  const plan = Journey.planBulkFiling(
+    assignments,
+    Journey.createJourney("Smart import", "2026-07-16T00:00:00Z")
+  );
+
+  assert.equal(plan.rows.length, 8);
+  assert.deepEqual(plan.rows.map((row) => row.finalChapterTitle), [
+    "Java", "Java", "Java",
+    "Cooking", "Cooking", "Cooking", "Cooking", "Cooking"
+  ]);
+  assert.deepEqual(plan.newChapterTitles, ["Java", "Cooking"]);
+  assert.equal(plan.blockedCount, 0);
+  assert.equal(plan.valid, true);
+});
+
+test("fills an existing chapter before creating a numbered spillover chapter", () => {
+  const journey = Journey.createJourney("Overflow", "2026-07-16T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-cooking",
+    title: "Cooking",
+    createdAt: "2026-07-16T00:00:00Z",
+    updatedAt: "2026-07-16T00:00:00Z",
+    sources: Array.from({ length: 7 }, (_, index) => ({
+      id: `source-${index + 1}`,
+      title: `Recipe ${index + 1}`,
+      text: `Recipe instructions ${index + 1}`,
+      fingerprint: `recipe-${index + 1}`
+    })),
+    sessions: []
+  }];
+  const plan = Journey.planBulkFiling(
+    Array.from({ length: 3 }, (_, index) => ({
+      fileId: `recipe-${index + 1}`,
+      chapterTitle: "cooking",
+      confidence: 0.9
+    })),
+    journey
+  );
+
+  assert.deepEqual(plan.rows.map((row) => row.finalChapterTitle), ["Cooking", "Cooking 2", "Cooking 2"]);
+  assert.deepEqual(plan.rows.map((row) => row.spillover), [false, true, true]);
+  assert.deepEqual(plan.newChapterTitles, ["Cooking 2"]);
+});
+
+test("blocks new chapters at the cap while retaining existing chapter capacity", () => {
+  const journey = Journey.createJourney("Full", "2026-07-16T00:00:00Z");
+  journey.chapters = Array.from({ length: Journey.MAX_CHAPTERS }, (_, index) => ({
+    id: `chapter-${index + 1}`,
+    title: `Chapter ${index + 1}`,
+    createdAt: "2026-07-16T00:00:00Z",
+    updatedAt: "2026-07-16T00:00:00Z",
+    sources: [],
+    sessions: []
+  }));
+  const plan = Journey.planBulkFiling([
+    { fileId: "new-file", chapterTitle: "Brand New Topic", confidence: 0.6 },
+    { fileId: "existing-file", chapterTitle: "chapter 1", confidence: 0.6 }
+  ], journey);
+
+  assert.equal(plan.rows[0].blocked, true);
+  assert.equal(plan.rows[0].finalChapterTitle, "");
+  assert.equal(plan.rows[1].blocked, false);
+  assert.equal(plan.rows[1].finalChapterTitle, "Chapter 1");
+  assert.equal(plan.blockedCount, 1);
+  assert.equal(plan.valid, false);
+});
+
+test("keeps unreadable files in a filing plan without assigning or blocking them", () => {
+  const plan = Journey.planBulkFiling([
+    { fileId: "unreadable", chapterTitle: "Ignored", confidence: 4, skipped: true }
+  ], Journey.createJourney("Skipped", "2026-07-16T00:00:00Z"));
+
+  assert.deepEqual(plan.rows[0], {
+    fileId: "unreadable",
+    finalChapterTitle: "",
+    willCreateChapter: false,
+    spillover: false,
+    blocked: false,
+    skipped: true,
+    confidence: 1
+  });
+  assert.deepEqual(plan.newChapterTitles, []);
+  assert.equal(plan.valid, true);
+});
+
+test("locally classifies shared Java terms into the first matching chapter", () => {
+  const journey = Journey.createJourney("Local classifier", "2026-07-16T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-java",
+    title: "Java",
+    createdAt: "2026-07-16T00:00:00Z",
+    updatedAt: "2026-07-16T00:00:00Z",
+    sources: [{
+      id: "source-java",
+      title: "Java Streams Tutorial",
+      text: "Streams transform collections.",
+      fingerprint: "java-streams"
+    }],
+    sessions: []
+  }];
+  const [assignment] = Journey.classifySourcesLocally([{
+    fileId: "java-file",
+    title: "Collections lesson.pdf",
+    excerpt: "Java streams map and filter collection values."
+  }], journey);
+
+  assert.deepEqual(assignment, {
+    fileId: "java-file",
+    chapterTitle: "Java",
+    isNewChapter: false,
+    confidence: 0.4,
+    reason: "Local match: shared terms with Java"
+  });
+});
+
+test("locally names a new chapter from the first three cleaned filename words", () => {
+  const [assignment] = Journey.classifySourcesLocally([{
+    fileId: "pasta-file",
+    title: "italian_pasta_recipes_2024.pdf",
+    excerpt: "Boil water and prepare a tomato sauce."
+  }], Journey.createJourney("Recipes", "2026-07-16T00:00:00Z"));
+
+  assert.equal(assignment.chapterTitle, "Italian Pasta Recipes");
+  assert.equal(assignment.isNewChapter, true);
+  assert.equal(assignment.confidence, 0.3);
+  assert.equal(assignment.reason, "No close match — named from the file title");
+});
+
+test("smart import pure helpers tolerate garbage inputs", () => {
+  assert.deepEqual(Journey.planBulkFiling(null, null), {
+    rows: [],
+    newChapterTitles: [],
+    blockedCount: 0,
+    valid: true
+  });
+  assert.deepEqual(Journey.planBulkFiling([], null), {
+    rows: [],
+    newChapterTitles: [],
+    blockedCount: 0,
+    valid: true
+  });
+  assert.deepEqual(Journey.classifySourcesLocally(null, null), []);
+  assert.equal(Journey.normalizeChapterTitleProposal(null, null), "New Chapter");
+  assert.doesNotThrow(() => Journey.classifySourcesLocally([null], null));
 });

@@ -9,6 +9,7 @@ const baseStyles = fs.readFileSync(path.join(root, "popup.css"), "utf8");
 const styles = fs.readFileSync(path.join(root, "popup-design-system.css"), "utf8");
 const script = fs.readFileSync(path.join(root, "popup.js"), "utf8");
 const previewServer = fs.readFileSync(path.join(root, "preview-server.js"), "utf8");
+const extensionFiles = fs.readFileSync(path.join(root, "scripts", "extension-files.mjs"), "utf8");
 
 function readHexToken(name) {
   const match = styles.match(new RegExp(`--${name}:\\s*(#[0-9a-f]{6})`, "i"));
@@ -28,6 +29,17 @@ function contrastRatio(first, second) {
   const a = relativeLuminance(first);
   const b = relativeLuminance(second);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function viewSource(id, nextId) {
+  const start = html.indexOf(`id="${id}"`);
+  const end = nextId ? html.indexOf(`id="${nextId}"`, start) : html.length;
+  return html.slice(start, end);
+}
+
+function visiblePrimaryButtons(source) {
+  return [...source.matchAll(/<button\b[^>]*class="([^"]*)"[^>]*>/g)]
+    .filter((match) => /(?:^|\s)primary(?:\s|$)/.test(match[1]) && !/(?:^|\s)hidden(?:\s|$)/.test(match[1]));
 }
 
 test("the semantic design system is the final popup stylesheet", () => {
@@ -108,6 +120,65 @@ test("primary controls and navigation affordances keep at least 44px hit regions
   assert.match(styles, /\.source-card-actions button\s*\{[\s\S]*min-height:\s*44px/);
   assert.match(styles, /\.compact-button\s*\{[\s\S]*min-height:\s*44px/);
   assert.match(styles, /\.vin-map-focus-button\s*\{[\s\S]*min-height:\s*44px/);
+});
+
+test("Page actions use one grouped-card hierarchy and both creation panels keep one primary", () => {
+  const pageView = viewSource("pageView", "notesView");
+  const notesView = viewSource("notesView", "journeyView");
+  const groupStart = pageView.indexOf('<div class="action-group page-action-grid"');
+  const groupEnd = pageView.indexOf('<input id="bulkImportInput"', groupStart);
+  const actionGroup = pageView.slice(groupStart, groupEnd);
+  assert.ok(groupStart >= 0 && groupEnd > groupStart);
+  assert.equal((actionGroup.match(/class="[^"]*\bprimary\b[^"]*"/g) || []).length, 1);
+  assert.equal(visiblePrimaryButtons(pageView).length, 1);
+  assert.equal(visiblePrimaryButtons(notesView).length, 1);
+  assert.doesNotMatch(pageView, /feature-badge/);
+  assert.doesNotMatch(notesView, /feature-badge/);
+  assert.match(baseStyles, /\.action-group\s*\{[\s\S]*?border:\s*1px solid var\(--ui-separator\);[\s\S]*?border-radius:\s*var\(--ui-radius-card\);[\s\S]*?padding:\s*var\(--ui-space-4\);[\s\S]*?background:\s*var\(--ui-surface\);/);
+  assert.match(baseStyles, /\.action-group__item \+ \.action-group__item\s*\{[\s\S]*?border-top:\s*1px solid var\(--ui-separator\);/);
+  assert.match(baseStyles, /\.action-group \.action-group__tertiary\s*\{[\s\S]*?color:\s*var\(--ui-label-secondary\);/);
+});
+
+test("Page source composer matches the selected visual reference with four responsive illustrated actions", () => {
+  const pageView = viewSource("pageView", "notesView");
+  assert.match(pageView, /class="panel page-composer"/);
+  assert.match(pageView, /class="action-group page-action-grid"/);
+  assert.equal((pageView.match(/<button\b[^>]*class="[^"]*\bpage-action-card\b[^"]*"/g) || []).length, 4);
+  assert.match(pageView, /id="studyPageButtonTitle"[^>]*>From Current Page</);
+  assert.match(pageView, />From Video</);
+  assert.match(pageView, />Import Files</);
+  assert.match(pageView, />Save Source Only</);
+  assert.match(pageView, /<summary>Timestamped transcript<\/summary>/);
+
+  const assetPaths = ["from-page.png", "from-video.png", "import-files.png", "save-source.png"];
+  for (const asset of assetPaths) {
+    const relativePath = `assets/page-actions/${asset}`;
+    assert.match(pageView, new RegExp(`src="${relativePath.replaceAll("/", "\\/")}"`));
+    assert.match(previewServer, new RegExp(relativePath.replaceAll("/", "\\/")));
+    assert.match(extensionFiles, new RegExp(relativePath.replaceAll("/", "\\/")));
+    assert.ok(fs.statSync(path.join(root, ...relativePath.split("/"))).size > 0);
+  }
+
+  assert.match(styles, /#pageView \.page-action-grid\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /#pageView \.page-action-grid \.page-action-card\s*\{[\s\S]*min-height:\s*132px;[\s\S]*border:\s*1px solid var\(--ui-separator-strong\)/);
+  assert.match(styles, /@media \(max-width: 560px\)[\s\S]*#pageView \.page-action-grid\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\)/);
+  assert.match(script, /function setStudyPageActionCopy\([\s\S]*From Current Page[\s\S]*studyPageButtonTitle\.textContent = title/);
+});
+
+test("quiz difficulty is an accessible keyboard-operated segmented control", () => {
+  assert.match(html, /id="difficultySegmentedControl"[^>]*role="radiogroup"[^>]*aria-labelledby="pageDifficultyLabel"/);
+  assert.equal((html.match(/class="segmented-control__option"[^>]*role="radio"/g) || []).length, 3);
+  assert.match(html, /id="pageDifficulty"[^>]*hidden[^>]*aria-hidden="true"/);
+  assert.match(script, /function setQuizDifficulty\(value, options = \{\}\)/);
+  assert.match(script, /option\.setAttribute\("aria-checked", String\(checked\)\)/);
+  assert.match(script, /\["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"\]/);
+  assert.match(script, /setQuizDifficulty\(difficultyOptions\[nextIndex\]\.dataset\.value, \{ focus: true \}\)/);
+  assert.match(script, /difficultySegmentedControl\?\.querySelector\('\[aria-checked="true"\]'\)\?\.focus\(\)/);
+  assert.match(script, /difficulty:\s*elements\.pageDifficulty\.value/);
+  assert.match(baseStyles, /\.quiz-settings\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/);
+  assert.match(baseStyles, /\.segmented-control\s*\{[\s\S]*?background:\s*var\(--ui-surface-secondary\);/);
+  assert.match(baseStyles, /\.segmented-control__option\s*\{[\s\S]*?min-height:\s*44px;/);
+  assert.match(baseStyles, /\.segmented-control__option\[aria-checked="true"\]\s*\{[\s\S]*?background:\s*var\(--ui-accent-tint\);/);
 });
 
 test("narrow panels cannot create a second tab row or an overlaying action dock", () => {

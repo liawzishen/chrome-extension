@@ -10,6 +10,10 @@ const FILES = new Map([
   ["/popup.css", "popup.css"],
   ["/popup-design-system.css", "popup-design-system.css"],
   ["/popup.js", "popup.js"],
+  ["/assets/page-actions/from-page.png", "assets/page-actions/from-page.png"],
+  ["/assets/page-actions/from-video.png", "assets/page-actions/from-video.png"],
+  ["/assets/page-actions/import-files.png", "assets/page-actions/import-files.png"],
+  ["/assets/page-actions/save-source.png", "assets/page-actions/save-source.png"],
   ["/focus-utils.js", "focus-utils.js"],
   ["/journey-utils.js", "journey-utils.js"],
   ["/journey-worker-utils.js", "journey-worker-utils.js"],
@@ -37,7 +41,8 @@ const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8"
+  ".mjs": "text/javascript; charset=utf-8",
+  ".png": "image/png"
 };
 
 const server = http.createServer((request, response) => {

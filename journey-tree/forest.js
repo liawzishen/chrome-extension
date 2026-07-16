@@ -503,6 +503,7 @@ export function mountLearningForest(root, options = {}) {
   let pointerGestureMoved = false;
   let lastPointerType = 'mouse';
   let activeOverviewTreeId = '';
+  const ribbonMotionTreeIds = new Set();
   let repelTarget = 0;
   let pressedAt = { x: 0, y: 0, time: 0 };
   let animationFrameId = 0;
@@ -590,6 +591,8 @@ export function mountLearningForest(root, options = {}) {
     ribbonEntries = [];
     ribbonLayout = [];
     linkedTreeId = '';
+    ribbonMotionTreeIds.clear();
+    delete root.dataset.ribbonMotionTrees;
     ribbonPlots.replaceChildren();
     ribbonIndex.replaceChildren();
     ribbonBed.setAttribute('d', '');
@@ -600,6 +603,7 @@ export function mountLearningForest(root, options = {}) {
   function clearOverview() {
     activeOverviewTreeId = '';
     delete root.dataset.activeParticleTree;
+    delete root.dataset.activeMotionTrees;
     root.dataset.particleMotion = 'idle';
     overviewSystems.forEach((entry) => disposeSystem(scene, entry.system));
     overviewSystems = [];
@@ -625,20 +629,52 @@ export function mountLearningForest(root, options = {}) {
     root.dataset.mode = nextMode;
     selectedTreeId = treeId;
     activeOverviewTreeId = '';
+    ribbonMotionTreeIds.clear();
     repelTarget = 0;
     delete root.dataset.activeParticleTree;
+    delete root.dataset.ribbonMotionTrees;
     syncMotionDataset();
     controls.enabled = nextMode === 'overview' || nextMode === 'focus';
     options.onModeChange?.({ mode, treeId });
   }
 
+  function getActiveOverviewMotionTreeIds() {
+    const activeTreeIds = new Set();
+    if (mode !== 'overview' || motionPaused || reducedMotion) return activeTreeIds;
+    if (selectedTreeId) activeTreeIds.add(selectedTreeId);
+    ribbonMotionTreeIds.forEach((treeId) => activeTreeIds.add(treeId));
+    if (activeOverviewTreeId) activeTreeIds.add(activeOverviewTreeId);
+    return activeTreeIds;
+  }
+
+  function activateOverviewEntry(entry) {
+    if (!entry || entry.hasInteracted) return;
+    entry.hasInteracted = true;
+    entry.targetMotionStrength = 1;
+    entry.system.uniforms.uEdgeDissolveStrength.value = 1;
+  }
+
   function syncMotionDataset() {
+    const activeMotionTreeIds = getActiveOverviewMotionTreeIds();
+    overviewSystems.forEach((entry) => {
+      if (activeMotionTreeIds.has(entry.record.id)) activateOverviewEntry(entry);
+    });
     root.dataset.motion = motionPaused
       ? 'paused'
       : mode === 'overview'
-      ? activeOverviewTreeId ? 'active' : 'waiting'
+      ? activeMotionTreeIds.size ? 'active' : 'waiting'
       : 'playing';
-    root.dataset.particleMotion = activeOverviewTreeId ? 'active' : 'idle';
+    root.dataset.particleMotion = activeMotionTreeIds.size ? 'active' : 'idle';
+    if (activeMotionTreeIds.size) {
+      root.dataset.activeMotionTrees = [...activeMotionTreeIds].join(' ');
+    } else {
+      delete root.dataset.activeMotionTrees;
+    }
+    if (ribbonMotionTreeIds.size) {
+      root.dataset.ribbonMotionTrees = [...ribbonMotionTreeIds].join(' ');
+    } else {
+      delete root.dataset.ribbonMotionTrees;
+    }
   }
 
   function setMotionPaused(nextPaused) {
@@ -728,14 +764,61 @@ export function mountLearningForest(root, options = {}) {
     requestForestRender();
   }
 
-  function bindRibbonFeedback(element, treeId) {
-    element.addEventListener('pointerenter', () => setLinkedTree(treeId));
-    element.addEventListener('pointerleave', () => {
-      if (linkedTreeId === treeId) setLinkedTree('');
+  function setRibbonMotionTreeActive(treeId, isActive) {
+    const normalizedTreeId = String(treeId || '');
+    if (!normalizedTreeId) return;
+    if (isActive && mode === 'overview') ribbonMotionTreeIds.add(normalizedTreeId);
+    else ribbonMotionTreeIds.delete(normalizedTreeId);
+    syncMotionDataset();
+    requestForestRender();
+  }
+
+  function bindRibbonFeedback(element, treeId, { motionPreview = false } = {}) {
+    let pointerOver = false;
+    let pointerPressed = false;
+    let focused = false;
+    let motionPreviewActive = false;
+    const syncMotionPreview = () => {
+      const nextActive = pointerOver || pointerPressed || focused;
+      if (!motionPreview || nextActive === motionPreviewActive) return;
+      motionPreviewActive = nextActive;
+      setRibbonMotionTreeActive(treeId, nextActive);
+    };
+    element.addEventListener('pointerenter', () => {
+      pointerOver = true;
+      setLinkedTree(treeId);
+      syncMotionPreview();
     });
-    element.addEventListener('focus', () => setLinkedTree(treeId));
-    element.addEventListener('blur', () => {
+    element.addEventListener('pointerleave', () => {
+      pointerOver = false;
       if (linkedTreeId === treeId) setLinkedTree('');
+      syncMotionPreview();
+    });
+    element.addEventListener('pointerdown', (event) => {
+      pointerPressed = true;
+      if (event.pointerType === 'touch') pointerOver = false;
+      setLinkedTree(treeId);
+      syncMotionPreview();
+    });
+    element.addEventListener('pointerup', (event) => {
+      pointerPressed = false;
+      if (event.pointerType === 'touch') pointerOver = false;
+      syncMotionPreview();
+    });
+    element.addEventListener('pointercancel', () => {
+      pointerOver = false;
+      pointerPressed = false;
+      syncMotionPreview();
+    });
+    element.addEventListener('focus', () => {
+      focused = true;
+      setLinkedTree(treeId);
+      syncMotionPreview();
+    });
+    element.addEventListener('blur', () => {
+      focused = false;
+      if (linkedTreeId === treeId) setLinkedTree('');
+      syncMotionPreview();
     });
   }
 
@@ -804,7 +887,7 @@ export function mountLearningForest(root, options = {}) {
     button.append(number, title);
     button.addEventListener('click', () => focusTree(record.id));
     button.addEventListener('keydown', (event) => moveIndexFocus(event, index));
-    bindRibbonFeedback(button, record.id);
+    bindRibbonFeedback(button, record.id, { motionPreview: true });
     return button;
   }
 
@@ -1268,11 +1351,7 @@ export function mountLearningForest(root, options = {}) {
     activeOverviewTreeId = nextTreeId;
     if (activeOverviewTreeId) {
       const activeEntry = overviewSystems.find((entry) => entry.record.id === activeOverviewTreeId);
-      if (activeEntry) {
-        activeEntry.hasInteracted = true;
-        activeEntry.targetMotionStrength = 1;
-        activeEntry.system.uniforms.uEdgeDissolveStrength.value = 1;
-      }
+      activateOverviewEntry(activeEntry);
       root.dataset.activeParticleTree = activeOverviewTreeId;
     } else {
       delete root.dataset.activeParticleTree;
@@ -1632,11 +1711,15 @@ export function mountLearningForest(root, options = {}) {
     controls.update();
     if (!motionPaused && !settleImmediately && mode !== 'overview') motionElapsed += delta;
     const elapsed = motionElapsed;
+    const activeOverviewMotionTreeIds = getActiveOverviewMotionTreeIds();
     getActiveSystems().forEach((entry) => {
       const uniforms = entry.system.uniforms;
       const isActiveOverviewEntry = mode === 'overview'
+        && activeOverviewMotionTreeIds.has(entry.record.id);
+      const isParticleContactEntry = mode === 'overview'
         && !motionPaused
         && entry.record.id === activeOverviewTreeId;
+      if (isActiveOverviewEntry) activateOverviewEntry(entry);
       if (entry.targetPosition) {
         if (settleImmediately) entry.system.points.position.copy(entry.targetPosition);
         else entry.system.points.position.lerp(entry.targetPosition, 1 - Math.exp(-4.8 * delta));
@@ -1664,7 +1747,7 @@ export function mountLearningForest(root, options = {}) {
           );
       }
       const entryRepelTarget = mode === 'overview'
-        ? isActiveOverviewEntry ? repelTarget : 0
+        ? isParticleContactEntry ? repelTarget : 0
         : repelTarget;
       uniforms.uRepelStrength.value = settleImmediately
         ? 0

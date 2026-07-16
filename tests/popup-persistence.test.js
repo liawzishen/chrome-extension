@@ -25,8 +25,9 @@ test("restores the pinned artifact before detecting a permission-dependent page"
   assert.ok(initialization.indexOf("await loadJourney()") < initialization.indexOf("await detectActiveSource()"));
   assert.match(source, /void initializePersistentPanel\(\)/);
   assert.doesNotMatch(source, /loadPanelState\(\)\.then\(\(\) => detectActiveSource\(\)\)/);
-  assert.match(source, /dataset\.restoreChapterId/);
-  assert.match(source, /dataset\.restoreChapterTitle/);
+  assert.match(source, /state\.selectedChapter = \{[\s\S]*?id: selectedChapterId[\s\S]*?title: selectedChapterTitle/);
+  assert.match(source, /legacyPageChapterId \|\| legacyNotesChapterId/);
+  assert.match(source, /selectChapterAcrossControls\(preferredChapter\?\.id \|\| ""\);\s*await savePanelState\(\)/);
 });
 
 test("Refresh page changes only browser context and cannot render the pinned artifact", () => {

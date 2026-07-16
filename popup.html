@@ -80,13 +80,12 @@
       </nav>
 
       <section id="pageView" class="view active" role="tabpanel" aria-labelledby="pageTab">
-        <div class="panel">
+        <div class="panel page-composer">
           <div class="input-heading">
             <div>
               <span class="eyebrow">Source-grounded learning</span>
               <h2>Create a visual note</h2>
             </div>
-            <span class="feature-badge">Note first</span>
           </div>
           <p class="hint note-first-hint">Start with the ideas and relationships. A quiz is generated only after you request one from the finished note.</p>
           <div class="chapter-field">
@@ -102,15 +101,47 @@
             </div>
             <p id="pageChapterHint" class="hint chapter-field__hint">Create a separate chapter whenever you want a new tree in your Learning Forest.</p>
           </div>
-          <div class="source-study-actions">
-            <button id="studyPageButton" class="primary" type="button">Create note from page</button>
-            <button id="studyVideoButton" class="secondary" type="button">Create note from video</button>
+          <div class="action-group page-action-grid" aria-label="Choose a source for your visual note">
+            <div class="action-group__item">
+              <button id="studyPageButton" class="primary action-group__row page-action-card" type="button">
+                <img class="page-action-card__image" src="assets/page-actions/from-page.png" alt="" aria-hidden="true">
+                <span class="page-action-card__copy">
+                  <strong id="studyPageButtonTitle" class="page-action-card__title">From Current Page</strong>
+                  <span id="studyPageButtonDescription" class="page-action-card__description">Instantly generate from the active browser tab.</span>
+                </span>
+              </button>
+            </div>
+            <div class="action-group__item">
+              <button id="studyVideoButton" class="secondary action-group__row page-action-card" type="button">
+                <img class="page-action-card__image" src="assets/page-actions/from-video.png" alt="" aria-hidden="true">
+                <span class="page-action-card__copy">
+                  <strong class="page-action-card__title">From Video</strong>
+                  <span class="page-action-card__description">Turn video content into visual study maps.</span>
+                </span>
+              </button>
+            </div>
+            <div id="documentImportControls" class="smart-import-launch action-group__item">
+              <button id="bulkImportButton" class="secondary document-open-button action-group__row page-action-card" type="button">
+                <img class="page-action-card__image" src="assets/page-actions/import-files.png" alt="" aria-hidden="true">
+                <span class="page-action-card__copy">
+                  <strong class="page-action-card__title">Import Files</strong>
+                  <span class="page-action-card__description">Upload PDFs or documents to auto-sort into chapters.</span>
+                </span>
+              </button>
+            </div>
+            <div class="action-group__item">
+              <button id="addCurrentSourceButton" class="text-button source-add-button action-group__row action-group__tertiary page-action-card" type="button">
+                <img class="page-action-card__image" src="assets/page-actions/save-source.png" alt="" aria-hidden="true">
+                <span class="page-action-card__copy">
+                  <strong class="page-action-card__title">Save Source Only</strong>
+                  <span class="page-action-card__description">Save page or transcript without generating a note yet.</span>
+                </span>
+              </button>
+            </div>
           </div>
-          <button id="openDocumentButton" class="text-button document-open-button" type="button">Open HTML or PDF file</button>
-          <input id="documentFileInput" type="file" accept=".html,.htm,.pdf,text/html,application/xhtml+xml,application/pdf" hidden aria-hidden="true" tabindex="-1">
-          <button id="addCurrentSourceButton" class="secondary source-add-button" type="button">Save source to chapter</button>
+          <input id="bulkImportInput" type="file" multiple accept=".html,.htm,.pdf,text/html,application/xhtml+xml,application/pdf" hidden aria-hidden="true" tabindex="-1">
           <details id="videoTranscriptFallback" class="video-transcript-fallback">
-            <summary>No captions? Paste a timestamped transcript</summary>
+            <summary>Timestamped transcript</summary>
             <label for="videoTranscriptInput">Timestamped transcript</label>
             <textarea id="videoTranscriptInput" rows="5" placeholder="[00:12] First idea&#10;[01:05] Next explanation"></textarea>
             <p id="videoTranscriptBinding" class="transcript-binding hidden"></p>
@@ -138,7 +169,6 @@
               <span class="eyebrow">Turn reading into an experience</span>
               <h2>Build an interactive note</h2>
             </div>
-            <span class="feature-badge">Visual AI</span>
           </div>
           <label for="notesInput">Paste your study material</label>
           <textarea id="notesInput" rows="9" placeholder="Paste lecture notes, a textbook section, or any concept you want to explore visually."></textarea>
@@ -316,8 +346,13 @@
           <span class="eyebrow">Generate from this note</span>
           <h2>Quiz settings</h2>
           <p id="quizSourceLabel" class="hint">The quiz will stay bound to this note’s original source.</p>
-          <label for="pageDifficulty">Difficulty</label>
-          <select id="pageDifficulty">
+          <span id="pageDifficultyLabel" class="segmented-control__label">Difficulty</span>
+          <div id="difficultySegmentedControl" class="segmented-control" role="radiogroup" aria-labelledby="pageDifficultyLabel">
+            <button class="segmented-control__option" type="button" role="radio" data-value="easy" aria-checked="false" tabindex="-1">Easy</button>
+            <button class="segmented-control__option" type="button" role="radio" data-value="normal" aria-checked="true" tabindex="0">Normal</button>
+            <button class="segmented-control__option" type="button" role="radio" data-value="hard" aria-checked="false" tabindex="-1">Hard</button>
+          </div>
+          <select id="pageDifficulty" hidden aria-hidden="true" tabindex="-1">
             <option value="easy">Easy</option>
             <option value="normal" selected>Normal</option>
             <option value="hard">Hard</option>

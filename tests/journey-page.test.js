@@ -157,7 +157,8 @@ test("uses the reference hierarchy without misrepresenting chapter growth", () =
 });
 
 test("links plot and index feedback, pulses completed chapters, and preserves staged growth in focus", () => {
-  assert.match(forest, /function bindRibbonFeedback\(element, treeId\)[\s\S]*?pointerenter[\s\S]*?focus/);
+  assert.match(forest, /function bindRibbonFeedback\(element, treeId, \{ motionPreview = false \} = \{\}\)[\s\S]*?pointerenter[\s\S]*?focus/);
+  assert.match(forest, /bindRibbonFeedback\(button, record\.id, \{ motionPreview: true \}\)/);
   assert.match(forest, /entry\.plot\.classList\.toggle\('is-linked', isLinked\)/);
   assert.match(forest, /entry\.indexButton\.classList\.toggle\('is-linked', isLinked\)/);
   assert.match(forest, /button\.dataset\.status = record\.status/);
@@ -220,20 +221,24 @@ test("raises pointer response while requiring contact with an actual overview pa
   assert.match(particles, /uRepelRadius:\s*\{ value: 0\.52 \}/);
   assert.match(forest, /function rayTouchesOverviewParticle\(entry\)[\s\S]*?positions\.count[\s\S]*?distanceSqToPoint\(particleHitPoint\) <= localThresholdSquared/);
   assert.match(forest, /function findOverviewParticleEntryAtPointer\(\)[\s\S]*?raycaster\.intersectObjects\(treeTargets, false\)[\s\S]*?rayTouchesOverviewParticle\(entry\)/);
-  assert.match(forest, /const entryRepelTarget = mode === 'overview'[\s\S]*?isActiveOverviewEntry \? repelTarget : 0/);
+  assert.match(forest, /const entryRepelTarget = mode === 'overview'[\s\S]*?isParticleContactEntry \? repelTarget : 0/);
   assert.match(forest, /renderer\.domElement\.addEventListener\('pointercancel', onPointerCancel\)/);
   assert.match(forest, /renderer\.domElement\.removeEventListener\('pointercancel', onPointerCancel\)/);
 });
 
-test("keeps overview particles paused until their own tree is touched", () => {
+test("moves selected and bottom-index preview trees while leaving other overview trees paused", () => {
   assert.match(forest, /activeOverviewTreeId = ''/);
-  assert.match(forest, /function setActiveOverviewTree\(treeId = ''\)[\s\S]*?activeEntry\.targetMotionStrength = 1[\s\S]*?uEdgeDissolveStrength\.value = 1/);
+  assert.match(forest, /const ribbonMotionTreeIds = new Set\(\)/);
+  assert.match(forest, /function getActiveOverviewMotionTreeIds\(\)[\s\S]*?activeTreeIds\.add\(selectedTreeId\)[\s\S]*?ribbonMotionTreeIds\.forEach[\s\S]*?activeTreeIds\.add\(activeOverviewTreeId\)/);
+  assert.match(forest, /function activateOverviewEntry\(entry\)[\s\S]*?entry\.targetMotionStrength = 1[\s\S]*?uEdgeDissolveStrength\.value = 1/);
+  assert.match(forest, /function setRibbonMotionTreeActive\(treeId, isActive\)[\s\S]*?ribbonMotionTreeIds\.add\(normalizedTreeId\)[\s\S]*?syncMotionDataset\(\)/);
+  assert.match(forest, /bindRibbonFeedback\(button, record\.id, \{ motionPreview: true \}\)/);
   assert.match(forest, /edgeDissolveStrength: mode === 'overview' \? 0 : \(motionHasStarted \? 1 : 0\)/);
   assert.match(forest, /motionStrength: mode === 'overview' \? 0 : 1/);
   assert.match(forest, /targetMotionStrength: mode === 'overview' \? 0 : 1/);
   assert.match(forest, /if \(!motionPaused && !settleImmediately && mode !== 'overview'\) motionElapsed \+= delta/);
   assert.match(forest, /if \(isActiveOverviewEntry && !settleImmediately\) entry\.motionElapsed \+= delta/);
-  assert.match(forest, /root\.dataset\.motion = motionPaused[\s\S]*?activeOverviewTreeId \? 'active' : 'waiting'/);
+  assert.match(forest, /root\.dataset\.motion = motionPaused[\s\S]*?activeMotionTreeIds\.size \? 'active' : 'waiting'/);
   assert.match(particles, /uMotionStrength:[\s\S]*?options\.motionStrength/);
   assert.match(shaders, /uniform float uMotionStrength/);
   assert.match(shaders, /windOffset \*= uMotionStrength/);

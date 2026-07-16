@@ -11,6 +11,7 @@
   const MAX_EVENTS = 500;
   const MAX_APPLIED_OPERATIONS = 120;
   const MAX_LEARNING_ATTEMPTS = 20;
+  const DAY_MS = 86400000;
 
   function clone(value) {
     if (value == null) return value;
@@ -269,6 +270,23 @@
     return `${noteId}\u0000${conceptId}`;
   }
 
+  function defaultConceptStrength(state) {
+    if (state === "stable") return 80;
+    if (state === "recovering") return 60;
+    return 35;
+  }
+
+  function normalizeConceptStrength(value, state) {
+    const numeric = Number(value);
+    const fallback = defaultConceptStrength(state);
+    return Math.max(0, Math.min(100, Math.round(Number.isFinite(numeric) ? numeric : fallback)));
+  }
+
+  function normalizeIntervalDays(value) {
+    const numeric = Number(value);
+    return Math.max(1, Math.min(60, Number.isFinite(numeric) ? numeric : 1));
+  }
+
   function normalizeConceptMemory(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const noteId = cleanText(value.noteId, 100);
@@ -277,6 +295,11 @@
     const timesTested = Math.max(0, Math.min(1000000, Math.round(Number(value.timesTested) || 0)));
     const timesWrong = Math.max(0, Math.min(timesTested, Math.round(Number(value.timesWrong) || 0)));
     const state = ["weak", "recovering", "stable"].includes(value.state) ? value.state : timesWrong ? "weak" : "stable";
+    const strength = normalizeConceptStrength(value.strength, state);
+    const intervalDays = normalizeIntervalDays(value.intervalDays);
+    const lastAttemptAt = normalizeOptionalIsoDate(value.lastAttemptAt);
+    const nextReviewAt = normalizeOptionalIsoDate(value.nextReviewAt)
+      || (lastAttemptAt ? new Date(dateTimestamp(lastAttemptAt) + intervalDays * DAY_MS).toISOString() : null);
     return {
       noteId,
       sourceFingerprint: cleanText(value.sourceFingerprint, 120),
@@ -285,7 +308,10 @@
       timesTested,
       timesWrong,
       state,
-      lastAttemptAt: normalizeOptionalIsoDate(value.lastAttemptAt)
+      lastAttemptAt,
+      strength,
+      intervalDays,
+      nextReviewAt
     };
   }
 
@@ -488,6 +514,186 @@
       learningMemory: normalizeLearningMemory(base.learningMemory),
       appliedOperations: normalizeAppliedOperations(base.appliedOperations)
     };
+  }
+
+  function normalizeChapterTitleProposal(title, existingTitles = []) {
+    const safeTitle = cleanText(title, 60) || "New Chapter";
+    const existing = (Array.isArray(existingTitles) ? existingTitles : [])
+      .map((item) => cleanText(item, 140))
+      .find((item) => item.toLowerCase() === safeTitle.toLowerCase());
+    if (existing) return existing;
+    return safeTitle.replace(/\S+/g, (word) => word.charAt(0).toUpperCase() + word.slice(1));
+  }
+
+  function planBulkFiling(assignments, value) {
+    const emptyPlan = {
+      rows: [],
+      newChapterTitles: [],
+      blockedCount: 0,
+      valid: true
+    };
+    if (!Array.isArray(assignments)
+      || !value
+      || typeof value !== "object"
+      || Array.isArray(value)) return emptyPlan;
+
+    const journey = normalizeJourney(value);
+    const capacities = new Map();
+    const titlesByKey = new Map();
+    const existingKeys = new Set();
+    journey.chapters.forEach((chapter) => {
+      const key = chapter.title.toLowerCase();
+      if (titlesByKey.has(key)) return;
+      titlesByKey.set(key, chapter.title);
+      existingKeys.add(key);
+      capacities.set(key, Math.max(0, MAX_SOURCES_PER_CHAPTER - chapter.sources.length));
+    });
+    const newChapterTitles = [];
+    const canCreateChapter = () => journey.chapters.length + newChapterTitles.length < MAX_CHAPTERS;
+    const reserveTitle = (title) => {
+      const key = title.toLowerCase();
+      if (capacities.has(key)) {
+        if (capacities.get(key) <= 0) return null;
+        capacities.set(key, capacities.get(key) - 1);
+        return {
+          title: titlesByKey.get(key),
+          willCreateChapter: !existingKeys.has(key)
+        };
+      }
+      if (!canCreateChapter()) return null;
+      titlesByKey.set(key, title);
+      capacities.set(key, MAX_SOURCES_PER_CHAPTER - 1);
+      newChapterTitles.push(title);
+      return { title, willCreateChapter: true };
+    };
+    const reserveSpillover = (baseTitle) => {
+      if (!canCreateChapter()) {
+        const prefix = `${baseTitle.toLowerCase()} `;
+        const candidate = [...titlesByKey.entries()]
+          .map(([key, title]) => {
+            if (!key.startsWith(prefix)) return null;
+            const suffix = key.slice(prefix.length);
+            if (!/^\d+$/.test(suffix) || Number(suffix) < 2 || capacities.get(key) <= 0) return null;
+            return { suffix: Number(suffix), title };
+          })
+          .filter(Boolean)
+          .sort((first, second) => first.suffix - second.suffix)[0];
+        return candidate ? reserveTitle(candidate.title) : null;
+      }
+      let suffix = 2;
+      while (true) {
+        const title = normalizeChapterTitleProposal(
+          `${baseTitle} ${suffix}`,
+          [...titlesByKey.values()]
+        );
+        const key = title.toLowerCase();
+        if (!capacities.has(key) || capacities.get(key) > 0) return reserveTitle(title);
+        suffix += 1;
+      }
+    };
+
+    const rows = assignments.map((assignment) => {
+      const fileId = cleanText(assignment?.fileId, 100);
+      const numericConfidence = Number(assignment?.confidence);
+      const confidence = Math.max(0, Math.min(1, Number.isFinite(numericConfidence) ? numericConfidence : 0));
+      if (assignment?.skipped) {
+        return {
+          fileId,
+          finalChapterTitle: "",
+          willCreateChapter: false,
+          spillover: false,
+          blocked: false,
+          skipped: true,
+          confidence
+        };
+      }
+
+      const requestedTitle = normalizeChapterTitleProposal(
+        assignment?.chapterTitle,
+        [...titlesByKey.values()]
+      );
+      let reserved = reserveTitle(requestedTitle);
+      let spillover = false;
+      if (!reserved) {
+        reserved = reserveSpillover(requestedTitle);
+        spillover = Boolean(reserved);
+      }
+      return {
+        fileId,
+        finalChapterTitle: reserved?.title || "",
+        willCreateChapter: Boolean(reserved?.willCreateChapter),
+        spillover,
+        blocked: !reserved,
+        skipped: false,
+        confidence
+      };
+    });
+    const blockedCount = rows.filter((row) => row.blocked).length;
+    return {
+      rows,
+      newChapterTitles,
+      blockedCount,
+      valid: blockedCount === 0
+    };
+  }
+
+  function classifySourceTokens(value, limit = Infinity) {
+    const tokens = String(value || "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+    return [...new Set(tokens.filter((token) => token.length >= 4))].slice(0, limit);
+  }
+
+  function classifySourcesLocally(files, value) {
+    if (!Array.isArray(files)) return [];
+    const journey = value && typeof value === "object" && !Array.isArray(value)
+      ? normalizeJourney(value)
+      : normalizeJourney({});
+    const existingTitles = journey.chapters.map((chapter) => chapter.title);
+    const chapterMatches = journey.chapters.map((chapter) => ({
+      chapter,
+      tokens: new Set(classifySourceTokens([
+        chapter.title,
+        ...chapter.sources.map((source) => source.title)
+      ].join(" ")))
+    }));
+
+    return files.map((file) => {
+      const fileId = cleanText(file?.fileId, 100);
+      const title = cleanText(file?.title, 180);
+      const excerpt = cleanText(file?.excerpt, 2000);
+      const fileTokens = classifySourceTokens(`${title} ${excerpt}`, 40);
+      let bestMatch = null;
+      chapterMatches.forEach((candidate) => {
+        const score = fileTokens.filter((token) => candidate.tokens.has(token)).length;
+        if (!bestMatch || score > bestMatch.score) bestMatch = { ...candidate, score };
+      });
+      if (bestMatch?.score >= 2) {
+        return {
+          fileId,
+          chapterTitle: bestMatch.chapter.title,
+          isNewChapter: false,
+          confidence: 0.4,
+          reason: `Local match: shared terms with ${bestMatch.chapter.title}`
+        };
+      }
+
+      const titleWords = title
+        .replace(/\.[^.]+$/, "")
+        .replace(/[\d_]+/g, " ")
+        .replace(/[^\p{L}\s]+/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .split(" ")
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(" ");
+      return {
+        fileId,
+        chapterTitle: normalizeChapterTitleProposal(titleWords, existingTitles),
+        isNewChapter: true,
+        confidence: 0.3,
+        reason: "No close match — named from the file title"
+      };
+    });
   }
 
   function uniqueText(value, limit, maxLength) {
@@ -739,8 +945,9 @@
 
   function sourceIdentityMatches(existing, incoming) {
     if (!existing || !incoming || existing.type !== incoming.type) return false;
-    if (incoming.type === "webpage" && incoming.url) {
-      return existing.url === incoming.url && existing.fingerprint === incoming.fingerprint;
+    if (incoming.type === "webpage") {
+      if (incoming.url) return existing.url === incoming.url && existing.fingerprint === incoming.fingerprint;
+      return !existing.url && existing.fingerprint === incoming.fingerprint;
     }
     if (incoming.type === "notes") return existing.fingerprint === incoming.fingerprint;
     if (incoming.type === "video") {
@@ -862,7 +1069,10 @@
         timesTested: 0,
         timesWrong: 0,
         state: "stable",
-        lastAttemptAt: null
+        lastAttemptAt: null,
+        strength: 50,
+        intervalDays: 1,
+        nextReviewAt: null
       };
       record.sourceFingerprint = attempt.sourceFingerprint || record.sourceFingerprint;
       record.conceptLabel = attempt.conceptLabel || record.conceptLabel || record.conceptId;
@@ -932,6 +1142,26 @@
       const conceptSucceeded = conceptAttempts.length > 0
         && conceptAttempts.every((attempt) => attempt.result === "correct");
       if (isSingleQuizBatch && laterThanRecovery && conceptSucceeded && overallScore >= 80) record.state = "stable";
+    });
+
+    batchByConcept.forEach((conceptAttempts, key) => {
+      const record = conceptMap.get(key);
+      if (!record || !conceptAttempts.length) return;
+      const answeredAtMs = Math.max(
+        ...conceptAttempts.map((attempt) => dateTimestamp(attempt.answeredAt) ?? 0)
+      );
+      const allCorrect = conceptAttempts.every((attempt) => attempt.result === "correct");
+      if (allCorrect) {
+        const nextReviewTimestamp = dateTimestamp(record.nextReviewAt);
+        const wasDue = nextReviewTimestamp !== null && answeredAtMs >= nextReviewTimestamp;
+        record.strength = Math.min(100, Math.round(record.strength + 20 + (wasDue ? 5 : 0)));
+        record.intervalDays = Math.min(60, record.intervalDays * 2);
+        record.nextReviewAt = new Date(answeredAtMs + record.intervalDays * DAY_MS).toISOString();
+      } else {
+        record.strength = Math.max(0, Math.round(record.strength - 30));
+        record.intervalDays = 1;
+        record.nextReviewAt = new Date(answeredAtMs + DAY_MS).toISOString();
+      }
     });
 
     journey.learningMemory = normalizeLearningMemory({
@@ -1027,6 +1257,51 @@
     return ranked.slice(0, limit);
   }
 
+  function effectiveStrength(concept, now = Date.now()) {
+    const state = ["weak", "recovering", "stable"].includes(concept?.state) ? concept.state : "stable";
+    const strength = normalizeConceptStrength(concept?.strength, state);
+    const lastAttemptAt = dateTimestamp(concept?.lastAttemptAt);
+    if (lastAttemptAt === null) return strength;
+    const nowTimestamp = dateTimestamp(now) ?? lastAttemptAt;
+    const intervalDays = normalizeIntervalDays(concept?.intervalDays);
+    const daysSince = (nowTimestamp - lastAttemptAt) / DAY_MS;
+    const overdueDays = Math.max(0, daysSince - intervalDays);
+    const factor = Math.pow(0.5, overdueDays / Math.max(1, intervalDays));
+    return Math.max(0, Math.min(strength, Math.round(strength * factor)));
+  }
+
+  function getDueConcepts(value, options = {}) {
+    const journey = normalizeJourney(value);
+    const memory = normalizeLearningMemory(journey.learningMemory);
+    options = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const now = options.now ?? Date.now();
+    const nowTimestamp = dateTimestamp(now) ?? 0;
+    const noteId = cleanText(options.noteId, 100);
+    const rawLimit = Number(options.limit);
+    const limit = Math.max(1, Math.min(50, Math.round(Number.isFinite(rawLimit) ? rawLimit : 5)));
+    return memory.concepts
+      .filter((concept) => !noteId || concept.noteId === noteId)
+      .map((concept) => {
+        const strength = effectiveStrength(concept, now);
+        const nextReviewTimestamp = dateTimestamp(concept.nextReviewAt);
+        const overdueDays = nextReviewTimestamp === null
+          ? 0
+          : Math.max(0, (nowTimestamp - nextReviewTimestamp) / DAY_MS);
+        return { concept, strength, nextReviewTimestamp, overdueDays };
+      })
+      .filter(({ concept, strength, nextReviewTimestamp }) => (
+        (nextReviewTimestamp !== null && nowTimestamp >= nextReviewTimestamp)
+        || strength < 60
+        || concept.state === "weak"
+      ))
+      .sort((first, second) => Number(second.concept.state === "weak") - Number(first.concept.state === "weak")
+        || first.strength - second.strength
+        || second.overdueDays - first.overdueDays
+        || first.concept.conceptLabel.localeCompare(second.concept.conceptLabel))
+      .slice(0, limit)
+      .map(({ concept, strength }) => ({ ...concept, effectiveStrength: strength }));
+  }
+
   function clearLearningMemory(value, now = Date.now()) {
     const journey = normalizeJourney(value);
     const memory = normalizeLearningMemory(journey.learningMemory);
@@ -1081,6 +1356,256 @@
       progressPercent: journey.chapters.length ? Math.round((completed / journey.chapters.length) * 100) : 0,
       studyDays,
       focusMinutes: Math.round(focusMinutes)
+    };
+  }
+
+  function buildHabitProfile(value, focusHistory = [], now = Date.now()) {
+    const journey = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const events = Array.isArray(journey.events) ? journey.events : [];
+    const nowTimestamp = dateTimestamp(now) ?? 0;
+    const today = localDayKey(new Date(nowTimestamp));
+    const todayTimestamp = Date.parse(`${today}T00:00:00.000Z`);
+    const dayTimestamps = [...new Set(events.map((event) => {
+      const suppliedDay = cleanText(event?.localDay, 10);
+      const suppliedTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(suppliedDay)
+        ? Date.parse(`${suppliedDay}T00:00:00.000Z`)
+        : NaN;
+      if (Number.isFinite(suppliedTimestamp)
+        && new Date(suppliedTimestamp).toISOString().slice(0, 10) === suppliedDay) {
+        return suppliedTimestamp;
+      }
+      const occurredAt = dateTimestamp(event?.occurredAt);
+      if (occurredAt === null) return null;
+      return Date.parse(`${localDayKey(new Date(occurredAt))}T00:00:00.000Z`);
+    }).filter(Number.isFinite))].sort((first, second) => first - second);
+
+    let bestStreakDays = 0;
+    let runningStreakDays = 0;
+    dayTimestamps.forEach((timestamp, index) => {
+      runningStreakDays = index > 0 && timestamp - dayTimestamps[index - 1] === DAY_MS
+        ? runningStreakDays + 1
+        : 1;
+      bestStreakDays = Math.max(bestStreakDays, runningStreakDays);
+    });
+
+    const pastDayTimestamps = dayTimestamps.filter((timestamp) => timestamp <= todayTimestamp);
+    const latestDayTimestamp = pastDayTimestamps.at(-1);
+    let currentStreakDays = 0;
+    if (latestDayTimestamp === todayTimestamp || latestDayTimestamp === todayTimestamp - DAY_MS) {
+      currentStreakDays = 1;
+      for (let index = pastDayTimestamps.length - 2; index >= 0; index -= 1) {
+        if (pastDayTimestamps[index + 1] - pastDayTimestamps[index] !== DAY_MS) break;
+        currentStreakDays += 1;
+      }
+    }
+
+    const focusMinutes = (Array.isArray(focusHistory) ? focusHistory : [])
+      .map((item) => Math.max(0,
+        Number(item?.elapsedMinutes) || (Number(item?.elapsedMs) || 0) / 60000
+      ))
+      .sort((first, second) => first - second);
+    const midpoint = Math.floor(focusMinutes.length / 2);
+    const typicalSessionMinutes = focusMinutes.length
+      ? Math.round(focusMinutes.length % 2
+        ? focusMinutes[midpoint]
+        : (focusMinutes[midpoint - 1] + focusMinutes[midpoint]) / 2)
+      : 0;
+
+    const timedEvents = events.map((event) => {
+      const timestamp = dateTimestamp(event?.occurredAt);
+      if (timestamp === null) return null;
+      return {
+        type: cleanText(event?.type, 40),
+        timestamp,
+        occurredAt: new Date(timestamp).toISOString()
+      };
+    }).filter(Boolean);
+    const quizEvents = timedEvents.filter((event) => event.type === "quiz_submitted");
+    const sessionsLast7Days = quizEvents.filter((event) => (
+      event.timestamp >= nowTimestamp - 7 * DAY_MS && event.timestamp <= nowTimestamp
+    )).length;
+    const firstEventTimestamp = timedEvents.length
+      ? Math.min(...timedEvents.map((event) => event.timestamp))
+      : null;
+    const weeksSinceFirstEvent = firstEventTimestamp === null
+      ? 1
+      : Math.max(1, (nowTimestamp - firstEventTimestamp) / (7 * DAY_MS));
+    const sessionsPerWeekOverall = quizEvents.length
+      ? Math.round((quizEvents.length / weeksSinceFirstEvent) * 10) / 10
+      : 0;
+
+    let preferredStudyHour = null;
+    if (timedEvents.length >= 3) {
+      const hourCounts = Array.from({ length: 24 }, () => 0);
+      timedEvents.forEach((event) => {
+        hourCounts[new Date(event.timestamp).getHours()] += 1;
+      });
+      preferredStudyHour = hourCounts.reduce((bestHour, count, hour) => (
+        count > hourCounts[bestHour] ? hour : bestHour
+      ), 0);
+    }
+    const lastStudiedAt = timedEvents.length
+      ? timedEvents.reduce((latest, event) => event.timestamp > latest.timestamp ? event : latest).occurredAt
+      : null;
+
+    return {
+      currentStreakDays,
+      bestStreakDays,
+      typicalSessionMinutes,
+      sessionsLast7Days,
+      sessionsPerWeekOverall,
+      preferredStudyHour,
+      lastStudiedAt
+    };
+  }
+
+  function buildStudyPlan(value, focusHistory = [], options = {}) {
+    const journey = normalizeJourney(value);
+    options = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const now = options.now ?? Date.now();
+    const nowTimestamp = dateTimestamp(now) ?? 0;
+    const generatedAt = normalizeIsoDate(now, 0);
+    const habit = buildHabitProfile(journey, focusHistory, now);
+    const streakNote = habit.currentStreakDays >= 2
+      ? `Day ${habit.currentStreakDays} streak — one quiz today keeps it alive.`
+      : "";
+
+    if (!journey.chapters.length) {
+      return {
+        generatedAt,
+        habit,
+        streakNote,
+        steps: [{
+          id: "onboard-1",
+          kind: "advance",
+          title: "Create your first visual note",
+          reason: "Save a page, note, or video to plant your first tree.",
+          noteId: "",
+          conceptId: "",
+          chapterId: "",
+          estimatedMinutes: 5
+        }]
+      };
+    }
+
+    const due = getDueConcepts(journey, { now, limit: 3 });
+    const maxSteps = habit.typicalSessionMinutes > 0 && habit.typicalSessionMinutes < 20 ? 2 : 3;
+    const steps = [];
+    const usedRepairConceptIds = new Set();
+    const chapterIdForNote = (noteId) => journey.chapters.find((chapter) => (
+      chapter.sessions.some((session) => cleanText(session?.noteId || session?.id, 100) === noteId)
+    ))?.id || "";
+
+    due.slice(0, 2).forEach((concept) => {
+      const nextReviewTimestamp = dateTimestamp(concept.nextReviewAt);
+      const lastAttemptTimestamp = dateTimestamp(concept.lastAttemptAt);
+      const daysSinceAttempt = lastAttemptTimestamp === null
+        ? 0
+        : Math.floor(Math.max(0, (nowTimestamp - lastAttemptTimestamp) / DAY_MS));
+      let reason = `Strength has faded to ${concept.effectiveStrength}%.`;
+      if (concept.state === "weak") {
+        reason = `You missed this ${concept.timesWrong} of ${concept.timesTested} times.`;
+      } else if (nextReviewTimestamp !== null && nowTimestamp >= nextReviewTimestamp) {
+        reason = `Due for review — last practiced ${daysSinceAttempt} days ago.`;
+      }
+      steps.push({
+        id: `repair-${concept.conceptId}`,
+        kind: "recovery",
+        title: `5-minute recovery quiz: ${concept.conceptLabel}`,
+        reason,
+        noteId: concept.noteId,
+        conceptId: concept.conceptId,
+        chapterId: chapterIdForNote(concept.noteId),
+        estimatedMinutes: 5
+      });
+      usedRepairConceptIds.add(concept.conceptId);
+    });
+
+    let advanceChapter = journey.chapters.reduce((latest, chapter) => (
+      (dateTimestamp(chapter.updatedAt) ?? 0) > (dateTimestamp(latest.updatedAt) ?? 0) ? chapter : latest
+    ));
+    if (getChapterStatus(advanceChapter) === "completed") {
+      const startIndex = journey.chapters.indexOf(advanceChapter);
+      advanceChapter = null;
+      for (let offset = 1; offset <= journey.chapters.length; offset += 1) {
+        const candidate = journey.chapters[(startIndex + offset) % journey.chapters.length];
+        if (getChapterStatus(candidate) === "completed") continue;
+        advanceChapter = candidate;
+        break;
+      }
+    }
+
+    if (!advanceChapter) {
+      steps.push({
+        id: "advance-new-chapter",
+        kind: "advance",
+        title: "Start a new chapter",
+        reason: "Every chapter has reached the completed threshold.",
+        noteId: "",
+        conceptId: "",
+        chapterId: "",
+        estimatedMinutes: 10
+      });
+    } else {
+      const status = getChapterStatus(advanceChapter);
+      const scoredSessions = advanceChapter.sessions.filter((session) => (
+        session?.itemKind !== "note"
+        && Number.isFinite(session?.score)
+        && dateTimestamp(session?.submittedAt) !== null
+      ));
+      let title = `Continue ${advanceChapter.title} with a new source or note`;
+      let reason = "You are mid-chapter with no urgent repairs.";
+      if (status === "review") {
+        title = `Review ${advanceChapter.title} and retake its quiz`;
+        reason = "Your last score there was below 65%.";
+      } else if (status === "planned") {
+        title = `Add your first source to ${advanceChapter.title}`;
+        reason = "This chapter is planned but has no saved material yet.";
+      } else if (status === "current" && !scoredSessions.length) {
+        title = `Take your first quiz in ${advanceChapter.title}`;
+        reason = "Activity only becomes mastery evidence after a submitted quiz.";
+      }
+      steps.push({
+        id: `advance-${advanceChapter.id}`,
+        kind: "advance",
+        title,
+        reason,
+        noteId: "",
+        conceptId: "",
+        chapterId: advanceChapter.id,
+        estimatedMinutes: 10
+      });
+    }
+
+    if (steps.length < maxSteps) {
+      const stretch = journey.learningMemory.concepts
+        .filter((concept) => concept.state === "stable" && !usedRepairConceptIds.has(concept.conceptId))
+        .map((concept) => ({ concept, strength: effectiveStrength(concept, now) }))
+        .sort((first, second) => first.strength - second.strength
+          || first.concept.conceptLabel.localeCompare(second.concept.conceptLabel))[0];
+      if (stretch) {
+        const lastAttemptTimestamp = dateTimestamp(stretch.concept.lastAttemptAt);
+        const daysSinceAttempt = lastAttemptTimestamp === null
+          ? 0
+          : Math.floor(Math.max(0, (nowTimestamp - lastAttemptTimestamp) / DAY_MS));
+        steps.push({
+          id: `stretch-${stretch.concept.conceptId}`,
+          kind: "stretch",
+          title: `Quick self-test: ${stretch.concept.conceptLabel}`,
+          reason: `Mastered ${daysSinceAttempt} days ago — a quick test keeps it strong.`,
+          noteId: stretch.concept.noteId,
+          conceptId: stretch.concept.conceptId,
+          chapterId: chapterIdForNote(stretch.concept.noteId),
+          estimatedMinutes: 5
+        });
+      }
+    }
+
+    return {
+      generatedAt,
+      habit,
+      streakNote,
+      steps: steps.slice(0, maxSteps)
     };
   }
 
@@ -1629,13 +2154,20 @@
     findChapter,
     createChapter,
     addSource,
+    normalizeChapterTitleProposal,
+    planBulkFiling,
+    classifySourcesLocally,
     removeSource,
     recordSession,
     recordQuestionAttempts,
     rankWeakConcepts,
+    effectiveStrength,
+    getDueConcepts,
     clearLearningMemory,
     getChapterStatus,
     getMetrics,
+    buildHabitProfile,
+    buildStudyPlan,
     getChapterVisualNoteArtifacts,
     buildChapterCollectionPayload,
     buildCollectionPayload,
