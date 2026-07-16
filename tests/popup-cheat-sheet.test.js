@@ -30,6 +30,18 @@ test("cheat sheet uses an accessible semantic table with grounded evidence actio
   assert.match(script, /sourceLink\.rel = "noopener noreferrer"/);
 });
 
+test("saved cheat sheets use resilient normalization and cannot abort note or quiz rendering", () => {
+  const start = script.indexOf("function renderCheatSheet(artifact = {})");
+  const end = script.indexOf("function renderCheatSheetEvidence", start);
+  assert.ok(start >= 0 && end > start);
+  const renderBlock = script.slice(start, end);
+  assert.match(script, /sourceContext\.forRender[\s\S]*normalizeCheatSheetForRender/);
+  assert.match(renderBlock, /try \{[\s\S]*forRender: true[\s\S]*\} catch \{/);
+  assert.match(renderBlock, /cheatSheetBlock\.classList\.add\("hidden"\)/);
+  assert.doesNotMatch(renderBlock, /artifact\.cheatSheet\s*=/);
+  assert.match(script, /if \(evidence\.unavailable\)[\s\S]*no source action is available/);
+});
+
 test("cheat sheet reflows into labelled row cards without horizontal scrolling", () => {
   assert.match(styles, /\.cheat-sheet-table\s*\{[\s\S]*table-layout:\s*fixed/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*\.cheat-sheet-table tbody\s*\{[\s\S]*display:\s*grid/);

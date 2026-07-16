@@ -9,6 +9,15 @@
   const MAX_ROWS = 8;
   const MIN_GENERATED_ROWS = 3;
   const MAX_CONTEXT_TEXT = 100000;
+  const ROW_SCALE_STEP_CHARS = 4000;
+  const MAX_SUPPLIED_ROWS_TO_INSPECT = 32;
+  const GROUNDING_STOP_WORDS = new Set([
+    "about", "after", "also", "and", "are", "because", "before", "being", "between", "can",
+    "could", "does", "each", "example", "for", "from", "have", "into", "its", "main", "more",
+    "most", "note", "only", "other", "over", "source", "such", "than", "that", "the", "their",
+    "there", "these", "they", "this", "through", "under", "using", "was", "were", "what", "when",
+    "where", "which", "while", "with", "would"
+  ]);
   const FIELD_LIMITS = Object.freeze({
     title: 140,
     caption: 220,
@@ -88,6 +97,46 @@
     return matches / Math.max(1, Math.min(firstTokens.size, secondTokens.size));
   }
 
+  function getCheatSheetTargetRowCount(rawTextValue) {
+    const sourceLength = String(rawTextValue || "").trim().slice(0, MAX_CONTEXT_TEXT).length;
+    if (!sourceLength) return MIN_GENERATED_ROWS;
+    return Math.max(
+      MIN_GENERATED_ROWS,
+      Math.min(MAX_ROWS, MIN_GENERATED_ROWS + Math.floor(sourceLength / ROW_SCALE_STEP_CHARS))
+    );
+  }
+
+  function getCheatSheetRowLimits(rawTextValue) {
+    const hasSourceText = Boolean(String(rawTextValue || "").trim());
+    const targetRows = getCheatSheetTargetRowCount(rawTextValue);
+    return {
+      targetRows,
+      // Saved artifacts rendered without their private raw snapshot must retain their existing bounded rows.
+      maxRows: hasSourceText ? targetRows : MAX_ROWS
+    };
+  }
+
+  function groundingTerms(value) {
+    return [...new Set(cleanText(value, 4000)
+      .toLocaleLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((token) => token.length > 2 && !GROUNDING_STOP_WORDS.has(token)))];
+  }
+
+  function hasGroundedClaim(evidenceValue, claimValue) {
+    const evidence = cleanText(evidenceValue, MAX_CONTEXT_TEXT).toLocaleLowerCase();
+    const claim = cleanText(claimValue, 1000).toLocaleLowerCase();
+    if (!evidence || !claim) return false;
+    if (claim.length >= 8 && evidence.includes(claim)) return true;
+
+    const evidenceTerms = new Set(groundingTerms(evidence));
+    const claimTerms = groundingTerms(claim);
+    if (!claimTerms.length) return false;
+    const matches = claimTerms.filter((term) => evidenceTerms.has(term)).length;
+    const requiredMatches = claimTerms.length >= 4 ? 2 : 1;
+    return matches >= requiredMatches && matches / claimTerms.length >= 0.25;
+  }
+
   function getVisualNodes(context = {}) {
     const nodes = context.visualModel?.nodes
       || context.visualLesson?.visualModel?.nodes
@@ -103,10 +152,12 @@
     if (requestedSegmentId) {
       const exact = nodes.find((node) => cleanText(node.sourceSegmentId || node.sourceRef?.segmentId, FIELD_LIMITS.segmentId) === requestedSegmentId);
       if (exact) return exact;
+      return null;
     }
     if (requestedSourceId) {
       const exact = nodes.find((node) => cleanText(node.sourceId || node.sourceRef?.sourceId, FIELD_LIMITS.sourceId) === requestedSourceId);
       if (exact) return exact;
+      return null;
     }
     const rowText = [
       row?.topic,
@@ -128,7 +179,7 @@
         bestScore = score;
       }
     }
-    return best || nodes[index % nodes.length];
+    return bestScore > 0 ? best : null;
   }
 
   function positiveInteger(value) {
@@ -172,9 +223,133 @@
     return sources.find((source) => cleanText(source?.id, FIELD_LIMITS.sourceId) === sourceId) || null;
   }
 
+  function getCollectionSourceBlock(rawTextValue, sourceId, sourcesValue = []) {
+    const rawText = String(rawTextValue || "").slice(0, MAX_CONTEXT_TEXT);
+    const safeId = cleanText(sourceId, FIELD_LIMITS.sourceId);
+    if (!rawText || !safeId) return "";
+    const marker = `SOURCE ${safeId}\n`;
+    const start = rawText.indexOf(marker);
+    if (start < 0) return "";
+
+    const contentMarker = "\nCONTENT_BEGIN\n";
+    const contentStart = rawText.indexOf(contentMarker, start + marker.length);
+    const structuredEnd = rawText.indexOf("\nCONTENT_END\n<<<END_SOURCE_BLOCK>>>", start + marker.length);
+    if (structuredEnd >= 0) {
+      return rawText.slice(
+        contentStart >= 0 && contentStart < structuredEnd ? contentStart + contentMarker.length : start + marker.length,
+        structuredEnd
+      ).trim();
+    }
+
+    const sources = Array.isArray(sourcesValue) ? sourcesValue : [];
+    const nextStarts = sources
+      .map((source) => cleanText(source?.id, FIELD_LIMITS.sourceId))
+      .filter((candidateId) => candidateId && candidateId !== safeId)
+      .map((candidateId) => rawText.indexOf(`\n\nSOURCE ${candidateId}\n`, start + marker.length))
+      .filter((position) => position > start);
+    const next = nextStarts.length ? Math.min(...nextStarts) : rawText.length;
+    return rawText.slice(start + marker.length, next).trim();
+  }
+
+  function getSuppliedSegmentId(row) {
+    return cleanText(row?.sourceSegmentId || row?.evidence?.segmentId, FIELD_LIMITS.segmentId);
+  }
+
+  function getSuppliedSourceId(row) {
+    return cleanText(row?.sourceId || row?.evidence?.sourceId, FIELD_LIMITS.sourceId);
+  }
+
+  function resolveRowGroundingText(row, node, context, sourceType) {
+    if (sourceType === "video") {
+      const segmentId = getSuppliedSegmentId(row)
+        || cleanText(node?.sourceSegmentId || node?.sourceRef?.segmentId, FIELD_LIMITS.segmentId);
+      if (!segmentId) {
+        if (Array.isArray(context.videoSegments) && context.videoSegments.length) {
+          throw new Error("Cheat-sheet row omitted the transcript segment required by the saved source.");
+        }
+        return "";
+      }
+      const segment = findVideoSegment(context, segmentId);
+      if (!segment) throw new Error(`Cheat-sheet row cited unknown transcript segment ${segmentId}.`);
+      return cleanText(segment.text, MAX_CONTEXT_TEXT);
+    }
+
+    if (sourceType === "collection") {
+      const sourceId = getSuppliedSourceId(row)
+        || cleanText(node?.sourceId || node?.sourceRef?.sourceId, FIELD_LIMITS.sourceId);
+      const sources = Array.isArray(context.collectionSources)
+        ? context.collectionSources
+        : (Array.isArray(context.sources) ? context.sources : []);
+      if (!sourceId) {
+        if (sources.length || String(context.rawText || "").trim()) {
+          throw new Error("Cheat-sheet row omitted the saved source ID required by the collection.");
+        }
+        return "";
+      }
+      const source = findCollectionSource(context, sourceId);
+      if (!source) throw new Error(`Cheat-sheet row cited unknown saved source ${sourceId}.`);
+      const sourceBlock = getCollectionSourceBlock(context.rawText, sourceId, sources)
+        || cleanText(source.text || source.rawText || source.content, MAX_CONTEXT_TEXT);
+      if (String(context.rawText || "").trim() && !sourceBlock) {
+        throw new Error(`Cheat-sheet citation for saved source ${sourceId} is missing from the collection snapshot.`);
+      }
+      return sourceBlock;
+    }
+
+    return cleanText(context.rawText, MAX_CONTEXT_TEXT);
+  }
+
+  function getSuppliedClaim(row, field) {
+    if (field === "mainIdea") return row?.mainIdea || row?.idea || row?.summary || row?.detail || "";
+    if (field === "keyFacts") {
+      const value = row?.keyFacts || row?.keyFact || row?.rule || row?.fact || "";
+      return Array.isArray(value) ? value.join("; ") : value;
+    }
+    return row?.example || row?.application || "";
+  }
+
+  function getSuppliedAnchor(row) {
+    const evidence = row?.evidence && typeof row.evidence === "object" ? row.evidence : {};
+    return row?.sourceAnchor || evidence.anchor || evidence.quote || "";
+  }
+
+  function assertSuppliedRowGrounded(row, normalizedRow, node, context, sourceType, index) {
+    const groundingText = resolveRowGroundingText(row, node, context, sourceType);
+    if (!groundingText) return false;
+
+    const claims = [
+      ["main idea", getSuppliedClaim(row, "mainIdea")],
+      ["key facts", getSuppliedClaim(row, "keyFacts")],
+      ["example", getSuppliedClaim(row, "example")]
+    ];
+    for (const [label, claim] of claims) {
+      if (cleanText(claim, 1000) && !hasGroundedClaim(groundingText, claim)) {
+        throw new Error(`Cheat-sheet row ${index + 1} ${label} is not supported by the saved source.`);
+      }
+    }
+
+    const anchor = getSuppliedAnchor(row) || normalizedRow?.evidence?.anchor;
+    if (!anchor || !hasGroundedClaim(groundingText, anchor)) {
+      throw new Error(`Cheat-sheet row ${index + 1} citation is not supported by the saved source.`);
+    }
+    return true;
+  }
+
+  function createUnavailableEvidence(sourceType) {
+    return {
+      label: "Evidence unavailable",
+      anchor: "",
+      sourceType,
+      unavailable: true
+    };
+  }
+
   function normalizeEvidence(row, node, context, sourceType) {
     const supplied = row?.evidence && typeof row.evidence === "object" ? row.evidence : {};
-    const sourceRef = node?.sourceRef && typeof node.sourceRef === "object" ? node.sourceRef : {};
+    const rowSourceRef = row?.sourceRef && typeof row.sourceRef === "object" ? row.sourceRef : {};
+    const sourceRef = node?.sourceRef && typeof node.sourceRef === "object"
+      ? { ...rowSourceRef, ...node.sourceRef }
+      : rowSourceRef;
     const segmentId = cleanText(
       node?.sourceSegmentId || sourceRef.segmentId || row?.sourceSegmentId || supplied.segmentId,
       FIELD_LIMITS.segmentId
@@ -183,8 +358,15 @@
       node?.sourceId || sourceRef.sourceId || row?.sourceId || supplied.sourceId,
       FIELD_LIMITS.sourceId
     );
-    const segment = sourceType === "video" ? findVideoSegment(context, segmentId) : null;
     const collectionSource = sourceType === "collection" ? findCollectionSource(context, sourceId) : null;
+    const evidenceSourceType = sourceType === "collection"
+      ? cleanText(collectionSource?.type || sourceRef.sourceType || sourceRef.type, 40) || "collection"
+      : sourceType;
+    const segment = evidenceSourceType === "video"
+      ? findVideoSegment(collectionSource
+        ? { videoSegments: collectionSource.segments || collectionSource.videoSegments || [] }
+        : context, segmentId)
+      : null;
     const startMsValue = segment?.startMs ?? sourceRef.startMs ?? supplied.startMs;
     const endMsValue = segment?.endMs ?? sourceRef.endMs ?? supplied.endMs;
     const startMs = Number.isFinite(Number(startMsValue)) ? Math.max(0, Math.round(Number(startMsValue))) : null;
@@ -195,19 +377,43 @@
       node?.sourceAnchor || sourceRef.quote || row?.sourceAnchor || supplied.anchor || supplied.quote,
       FIELD_LIMITS.anchor
     );
-    const explicitPage = positiveInteger(supplied.pageNumber ?? supplied.page ?? row?.sourcePage ?? node?.sourcePage ?? sourceRef.pageNumber);
-    const pageNumber = sourceType === "pdf"
-      ? explicitPage || inferPdfPage(anchor, context.rawText)
+    const isPdf = sourceType === "pdf" || collectionSource?.documentType === "pdf" || sourceRef.documentType === "pdf";
+    const pageSourceText = collectionSource
+      ? getCollectionSourceBlock(context.rawText, collectionSource.id, context.collectionSources || context.sources)
+      : context.rawText;
+    const explicitPage = [
+      supplied.sourcePage,
+      supplied.pageNumber,
+      supplied.page,
+      row?.sourcePage,
+      row?.pageNumber,
+      node?.sourcePage,
+      node?.pageNumber,
+      sourceRef.sourcePage,
+      sourceRef.pageNumber
+    ].map(positiveInteger).find(Boolean) || null;
+    const pageNumber = isPdf
+      ? explicitPage || inferPdfPage(anchor, pageSourceText)
       : null;
     const title = cleanText(
       collectionSource?.title || sourceRef.title || supplied.title || context.sourceTitle || context.title || context.sourceBinding?.title,
       FIELD_LIMITS.sourceTitle
     );
     const url = cleanUrl(collectionSource?.url || sourceRef.url || supplied.url || context.sourceUrl || context.sourceBinding?.url);
+    const sourceFingerprint = cleanText(
+      collectionSource?.fingerprint
+      || sourceRef.sourceFingerprint
+      || sourceRef.fingerprint
+      || supplied.sourceFingerprint
+      || supplied.fingerprint
+      || context.sourceFingerprint
+      || context.sourceBinding?.fingerprint,
+      FIELD_LIMITS.fingerprint
+    );
     let label = "Source passage";
-    if (sourceType === "video" && startMs != null) label = `${formatTimestamp(startMs / 1000)} · Video transcript`;
-    else if (sourceType === "pdf" && pageNumber) label = `Page ${pageNumber} · PDF`;
-    else if (sourceType === "pdf") label = "PDF passage";
+    if (evidenceSourceType === "video" && startMs != null) label = `${formatTimestamp(startMs / 1000)} · Video transcript`;
+    else if (isPdf && pageNumber) label = `Page ${pageNumber} · PDF`;
+    else if (isPdf) label = "PDF passage";
     else if (sourceType === "collection" && title) label = title;
     else if (sourceType === "notes") label = "Saved note";
     else if (title) label = title;
@@ -215,13 +421,16 @@
     return {
       label: cleanText(label, FIELD_LIMITS.sourceTitle),
       anchor,
-      sourceType,
+      sourceType: isPdf ? "webpage" : evidenceSourceType,
+      documentType: isPdf ? "pdf" : "",
       sourceId,
+      sourceFingerprint,
       segmentId,
       startMs,
       endMs,
       timestampSeconds: startMs == null ? null : Math.round(startMs / 1000),
       pageNumber,
+      sourcePage: pageNumber || 0,
       title,
       url
     };
@@ -261,23 +470,31 @@
     }, null, context, sourceType, index)).filter(Boolean);
   }
 
-  function normalizeCheatSheet(value, contextValue = {}) {
+  function normalizeCheatSheetValue(value, contextValue = {}, resilient = false) {
     const context = contextValue && typeof contextValue === "object" ? contextValue : {};
     const sourceType = normalizeSourceType(context);
     const nodes = getVisualNodes(context);
-    const suppliedRows = normalizeRowsInput(value).slice(0, MAX_ROWS);
-    const normalized = suppliedRows.map((row, index) => createRow(
-      row,
-      chooseGroundedNode(row, nodes, index),
-      context,
-      sourceType,
-      index
-    )).filter(Boolean);
+    const suppliedRows = normalizeRowsInput(value).slice(0, MAX_SUPPLIED_ROWS_TO_INSPECT);
+    const { targetRows, maxRows } = getCheatSheetRowLimits(context.rawText);
+    const normalized = [];
+    suppliedRows.forEach((row, rowIndex) => {
+      const node = chooseGroundedNode(row, nodes, normalized.length);
+      const normalizedRow = createRow(row, node, context, sourceType, normalized.length);
+      if (!normalizedRow) return;
+      try {
+        const grounded = assertSuppliedRowGrounded(row, normalizedRow, node, context, sourceType, rowIndex);
+        if (resilient && !grounded) normalizedRow.evidence = createUnavailableEvidence(sourceType);
+      } catch (error) {
+        if (!resilient) throw error;
+        normalizedRow.evidence = createUnavailableEvidence(sourceType);
+      }
+      if (normalized.length < maxRows) normalized.push(normalizedRow);
+    });
     const fallbacks = buildFallbackRows(context, sourceType);
     const combined = [...normalized];
     const seen = new Set(combined.map((row) => `${row.topic}|${row.mainIdea}`.toLocaleLowerCase()));
     for (const fallback of fallbacks) {
-      if (combined.length >= MAX_ROWS || (suppliedRows.length && combined.length >= MIN_GENERATED_ROWS)) break;
+      if (combined.length >= targetRows) break;
       const key = `${fallback.topic}|${fallback.mainIdea}`.toLocaleLowerCase();
       if (seen.has(key)) continue;
       seen.add(key);
@@ -297,8 +514,29 @@
         FIELD_LIMITS.fingerprint
       ),
       columns: COLUMNS.map((column) => ({ ...column })),
-      rows: combined.slice(0, MAX_ROWS)
+      rows: combined.slice(0, maxRows)
     };
+  }
+
+  function normalizeCheatSheet(value, contextValue = {}) {
+    return normalizeCheatSheetValue(value, contextValue, false);
+  }
+
+  function normalizeCheatSheetForRender(value, contextValue = {}) {
+    const context = contextValue && typeof contextValue === "object" ? contextValue : {};
+    try {
+      return normalizeCheatSheetValue(value, context, true);
+    } catch {
+      const titleBase = cleanText(context.title || context.sourceTitle || context.sourceBinding?.title || "Study note", FIELD_LIMITS.title);
+      return {
+        schemaVersion: SCHEMA_VERSION,
+        title: `${titleBase} cheat sheet`,
+        caption: "Evidence is temporarily unavailable for this saved cheat sheet.",
+        sourceFingerprint: cleanText(context.sourceFingerprint || context.sourceBinding?.fingerprint, FIELD_LIMITS.fingerprint),
+        columns: COLUMNS.map((column) => ({ ...column })),
+        rows: []
+      };
+    }
   }
 
   function hasUsableCheatSheet(value) {
@@ -315,8 +553,12 @@
     COLUMNS,
     cleanText,
     formatTimestamp,
+    getCheatSheetTargetRowCount,
+    getCollectionSourceBlock,
+    hasGroundedClaim,
     inferPdfPage,
     normalizeCheatSheet,
+    normalizeCheatSheetForRender,
     hasUsableCheatSheet
   });
 });

@@ -48,14 +48,14 @@ test("normalizes a bounded five-column cheat sheet without quiz or raw source da
   assert.doesNotMatch(JSON.stringify(result), /private source snapshot/i);
 });
 
-test("uses grounded visual-node timestamps instead of an unverified video citation", () => {
+test("uses the exact cited video segment for grounded row claims and timestamps", () => {
   const result = CheatSheet.normalizeCheatSheet({ rows: [{
     topic: "Diffusion",
     mainIdea: "Diffusion follows a concentration gradient.",
     keyFacts: "No cellular energy is required.",
     example: "Gas exchange",
-    sourceSegmentId: "invented-segment",
-    evidence: { startMs: 999999, anchor: "invented evidence" }
+    sourceSegmentId: "seg-0002",
+    evidence: { startMs: 999999, anchor: "Particles move from high concentration to low concentration." }
   }] }, {
     title: "Membrane transport video",
     sourceType: "video",
@@ -64,7 +64,7 @@ test("uses grounded visual-node timestamps instead of an unverified video citati
       id: "seg-0002",
       startMs: 65000,
       endMs: 71000,
-      text: "Particles move from high concentration to low concentration."
+      text: "Diffusion follows a concentration gradient. Particles move from high concentration to low concentration. No cellular energy is required. Gas exchange is one example."
     }],
     visualModel: { nodes: [makeNode({
       sourceSegmentId: "seg-0002",
@@ -85,7 +85,76 @@ test("uses grounded visual-node timestamps instead of an unverified video citati
   assert.equal(evidence.timestampSeconds, 65);
   assert.equal(evidence.label, "1:05 · Video transcript");
   assert.match(evidence.anchor, /particles move/i);
-  assert.doesNotMatch(JSON.stringify(evidence), /999999|invented evidence/);
+  assert.doesNotMatch(JSON.stringify(evidence), /999999/);
+});
+
+test("rejects ungrounded video claims and zero-overlap citation attachment", () => {
+  const context = {
+    title: "Membrane transport video",
+    sourceType: "video",
+    videoSegments: [{
+      id: "seg-0002",
+      startMs: 65000,
+      endMs: 71000,
+      text: "Diffusion moves particles down a concentration gradient without cellular energy."
+    }],
+    visualModel: { nodes: [makeNode({
+      sourceSegmentId: "seg-0002",
+      sourceRef: { segmentId: "seg-0002", startMs: 65000, endMs: 71000 }
+    })] }
+  };
+
+  assert.throws(() => CheatSheet.normalizeCheatSheet({ rows: [{
+    topic: "Primitive types",
+    mainIdea: "Java int stores a whole integer.",
+    keyFacts: "Primitive types are built into Java.",
+    example: "The value 42 uses int.",
+    sourceSegmentId: "seg-0002",
+    sourceAnchor: "Diffusion moves particles down a concentration gradient."
+  }] }, context), /main idea is not supported by the saved source/);
+
+  assert.throws(() => CheatSheet.normalizeCheatSheet({ rows: [{
+    topic: "Astronomy",
+    mainIdea: "Mars has two moons.",
+    keyFacts: "Phobos and Deimos orbit Mars.",
+    example: "A telescope observes Phobos.",
+    sourceAnchor: "Mars and its moons"
+  }] }, context), /omitted the transcript segment|required by the saved source/);
+});
+
+test("keeps strict grounding for generation while saved-content rendering degrades one citation", () => {
+  const context = {
+    title: "Photosynthesis demo",
+    sourceType: "notes",
+    rawText: "Photosynthesis occurs in chloroplasts and converts light energy into chemical energy.",
+    visualModel: { nodes: [makeNode({
+      label: "Chloroplast",
+      detail: "Chloroplasts capture light energy.",
+      role: "Transformation",
+      sourceAnchor: "Photosynthesis occurs in chloroplasts and converts light energy into chemical energy."
+    })] }
+  };
+  const savedSheet = { rows: [{
+    topic: "Chloroplast",
+    mainIdea: "Chloroplasts capture light energy.",
+    keyFacts: "Transformation",
+    example: "Photosynthesis occurs in chloroplasts.",
+    sourceAnchor: "Photosynthesis occurs in chloroplasts and converts light energy into chemical energy."
+  }] };
+
+  assert.throws(
+    () => CheatSheet.normalizeCheatSheet(savedSheet, context),
+    /key facts is not supported by the saved source/
+  );
+  const rendered = CheatSheet.normalizeCheatSheetForRender(savedSheet, context);
+  assert.equal(rendered.rows.length, 1);
+  assert.equal(rendered.rows[0].topic, "Chloroplast");
+  assert.deepEqual(rendered.rows[0].evidence, {
+    label: "Evidence unavailable",
+    anchor: "",
+    sourceType: "notes",
+    unavailable: true
+  });
 });
 
 test("retains collection source identity and public citation URL", () => {
@@ -98,6 +167,15 @@ test("retains collection source identity and public citation URL", () => {
   }] }, {
     title: "Transport collection",
     sourceType: "collection",
+    rawText: [
+      "<<<SOURCE_BLOCK>>>",
+      "SOURCE source-a",
+      "TITLE Membrane reference",
+      "CONTENT_BEGIN",
+      "The membrane controls which substances cross. Transport depends on membrane properties. Small non-polar molecules cross more readily.",
+      "CONTENT_END",
+      "<<<END_SOURCE_BLOCK>>>"
+    ].join("\n"),
     collectionSources: [{
       id: "source-a",
       title: "Membrane reference",
@@ -106,6 +184,7 @@ test("retains collection source identity and public citation URL", () => {
     visualModel: { nodes: [makeNode({
       label: "Selective permeability",
       sourceId: "source-a",
+      sourceAnchor: "the membrane controls which substances cross",
       sourceRef: {
         sourceId: "source-a",
         title: "Membrane reference",
@@ -120,6 +199,153 @@ test("retains collection source identity and public citation URL", () => {
   assert.equal(result.rows[0].evidence.url, "https://reference.test/membrane");
 });
 
+test("retains cited PDF page aliases and the per-source fingerprint from sourceRef metadata", () => {
+  const sourceText = "Active transport moves particles against a gradient. Cellular energy is required. A sodium-potassium pump uses active transport.";
+  const makeContext = (pageField) => ({
+    title: "Transport collection",
+    sourceType: "collection",
+    sourceFingerprint: "combined-collection-fingerprint",
+    rawText: [
+      "<<<SOURCE_BLOCK>>>",
+      "SOURCE source-pdf",
+      "CONTENT_BEGIN",
+      `Page 7 ${sourceText}`,
+      "CONTENT_END",
+      "<<<END_SOURCE_BLOCK>>>"
+    ].join("\n"),
+    collectionSources: [{
+      id: "source-pdf",
+      type: "webpage",
+      documentType: "pdf",
+      pageCount: 10,
+      title: "Transport handbook",
+      url: "https://reference.test/transport.pdf",
+      fingerprint: "cited-pdf-fingerprint"
+    }],
+    visualModel: { nodes: [makeNode({
+      id: "active-transport",
+      label: "Active transport",
+      detail: "Active transport moves particles against a gradient.",
+      why: "Cellular energy is required.",
+      example: "A sodium-potassium pump uses active transport.",
+      sourceId: "source-pdf",
+      sourcePage: 0,
+      sourceAnchor: "Active transport moves particles against a gradient.",
+      sourceRef: {
+        sourceId: "source-pdf",
+        sourceType: "webpage",
+        documentType: "pdf",
+        sourceFingerprint: "cited-pdf-fingerprint",
+        quote: "Active transport moves particles against a gradient.",
+        [pageField]: 7
+      }
+    })] }
+  });
+  const row = {
+    topic: "Active transport",
+    mainIdea: "Active transport moves particles against a gradient.",
+    keyFacts: "Cellular energy is required.",
+    example: "A sodium-potassium pump uses active transport.",
+    sourceId: "source-pdf"
+  };
+
+  for (const pageField of ["sourcePage", "pageNumber"]) {
+    const result = CheatSheet.normalizeCheatSheet({ rows: [row] }, makeContext(pageField));
+    const evidence = result.rows[0].evidence;
+    assert.equal(evidence.documentType, "pdf");
+    assert.equal(evidence.sourcePage, 7);
+    assert.equal(evidence.pageNumber, 7);
+    assert.equal(evidence.sourceFingerprint, "cited-pdf-fingerprint");
+  }
+});
+
+test("routes collection-video evidence as a timestamped video citation", () => {
+  const sourceText = "Chlorophyll absorbs light energy. The light reactions produce energy carriers. Oxygen is released from water.";
+  const result = CheatSheet.normalizeCheatSheet({ rows: [{
+    topic: "Light reactions",
+    mainIdea: "Chlorophyll absorbs light energy.",
+    keyFacts: "The light reactions produce energy carriers.",
+    example: "Oxygen is released from water.",
+    sourceId: "source-video"
+  }] }, {
+    title: "Photosynthesis collection",
+    sourceType: "collection",
+    rawText: [
+      "<<<SOURCE_BLOCK>>>",
+      "SOURCE source-video",
+      "CONTENT_BEGIN",
+      sourceText,
+      "CONTENT_END",
+      "<<<END_SOURCE_BLOCK>>>"
+    ].join("\n"),
+    collectionSources: [{
+      id: "source-video",
+      type: "video",
+      title: "Light reactions lecture",
+      url: "https://video.test/watch",
+      fingerprint: "video-fingerprint",
+      segments: [{ id: "seg-0001", startMs: 65000, endMs: 72000, text: sourceText }]
+    }],
+    visualModel: { nodes: [makeNode({
+      id: "light-reactions",
+      label: "Light reactions",
+      detail: "Chlorophyll absorbs light energy.",
+      why: "The light reactions produce energy carriers.",
+      example: "Oxygen is released from water.",
+      sourceId: "source-video",
+      sourceSegmentId: "seg-0001",
+      sourceAnchor: "Chlorophyll absorbs light energy.",
+      sourceRef: {
+        sourceId: "source-video",
+        sourceType: "video",
+        segmentId: "seg-0001",
+        sourceFingerprint: "video-fingerprint",
+        quote: "Chlorophyll absorbs light energy."
+      }
+    })] }
+  });
+
+  const evidence = result.rows[0].evidence;
+  assert.equal(evidence.sourceType, "video");
+  assert.equal(evidence.timestampSeconds, 65);
+  assert.equal(evidence.segmentId, "seg-0001");
+  assert.equal(evidence.sourceFingerprint, "video-fingerprint");
+});
+
+test("rejects collection claims that are not supported by their exact cited source block", () => {
+  const sources = [
+    { id: "source-a", title: "Membranes", url: "https://reference.test/a" },
+    { id: "source-b", title: "Diffusion", url: "https://reference.test/b" }
+  ];
+  const rawText = [
+    "<<<SOURCE_BLOCK>>>",
+    "SOURCE source-a",
+    "CONTENT_BEGIN",
+    "Cell membranes are selectively permeable.",
+    "CONTENT_END",
+    "<<<END_SOURCE_BLOCK>>>",
+    "<<<SOURCE_BLOCK>>>",
+    "SOURCE source-b",
+    "CONTENT_BEGIN",
+    "Diffusion moves particles down a concentration gradient.",
+    "CONTENT_END",
+    "<<<END_SOURCE_BLOCK>>>"
+  ].join("\n");
+
+  assert.throws(() => CheatSheet.normalizeCheatSheet({ rows: [{
+    topic: "Selective permeability",
+    mainIdea: "Cell membranes are selectively permeable.",
+    keyFacts: "Cell membranes control which substances cross.",
+    example: "A selectively permeable membrane filters substances.",
+    sourceId: "source-b",
+    sourceAnchor: "Diffusion moves particles down a concentration gradient."
+  }] }, {
+    sourceType: "collection",
+    rawText,
+    collectionSources: sources
+  }), /main idea is not supported by the saved source/);
+});
+
 test("infers a PDF page anchor from the bounded source snapshot", () => {
   const result = CheatSheet.normalizeCheatSheet({ rows: [{
     topic: "Active transport",
@@ -132,7 +358,7 @@ test("infers a PDF page anchor from the bounded source snapshot", () => {
     sourceType: "webpage",
     documentType: "pdf",
     sourceUrl: "https://example.test/chapter.pdf",
-    rawText: "Page 1\nDiffusion moves particles down a gradient.\nPage 2\nActive transport moves particles against a gradient and requires energy.",
+    rawText: "Page 1\nDiffusion moves particles down a gradient.\nPage 2\nActive transport moves particles against a gradient. Cellular energy is required. A sodium-potassium pump is an example.",
     visualModel: { nodes: [makeNode({
       label: "Active transport",
       detail: "Active transport moves particles against a gradient.",
@@ -140,9 +366,53 @@ test("infers a PDF page anchor from the bounded source snapshot", () => {
     })] }
   });
 
-  assert.equal(result.rows[0].evidence.sourceType, "pdf");
+  assert.equal(result.rows[0].evidence.sourceType, "webpage");
+  assert.equal(result.rows[0].evidence.documentType, "pdf");
   assert.equal(result.rows[0].evidence.pageNumber, 2);
+  assert.equal(result.rows[0].evidence.sourcePage, 2);
   assert.equal(result.rows[0].evidence.label, "Page 2 · PDF");
+});
+
+test("scales the bounded row target with source length and scans past unusable supplied rows", () => {
+  assert.equal(CheatSheet.getCheatSheetTargetRowCount("short source"), 3);
+  assert.equal(CheatSheet.getCheatSheetTargetRowCount("x".repeat(4000)), 4);
+  assert.equal(CheatSheet.getCheatSheetTargetRowCount("x".repeat(20000)), 8);
+
+  const groundedSentence = "Photosynthesis stores chemical energy in glucose, and oxygen is released as an output.";
+  const makeRows = (count) => Array.from({ length: count }, (_, index) => ({
+    topic: `Photosynthesis ${index + 1}`,
+    mainIdea: "Photosynthesis stores chemical energy in glucose.",
+    keyFacts: "Oxygen is released as an output.",
+    example: "Glucose stores chemical energy.",
+    sourceAnchor: "Photosynthesis stores chemical energy in glucose"
+  }));
+
+  const short = CheatSheet.normalizeCheatSheet({ rows: makeRows(8) }, {
+    sourceType: "notes",
+    rawText: groundedSentence
+  });
+  assert.equal(short.rows.length, 3);
+
+  assert.throws(() => CheatSheet.normalizeCheatSheet({ rows: [
+    ...makeRows(3),
+    {
+      topic: "Primitive types",
+      mainIdea: "Java int stores a whole integer.",
+      keyFacts: "Primitive types are built into Java.",
+      example: "The value 42 uses int.",
+      sourceAnchor: "Photosynthesis stores chemical energy in glucose"
+    }
+  ] }, {
+    sourceType: "notes",
+    rawText: groundedSentence
+  }), /row 4 main idea is not supported/);
+
+  const unusable = Array.from({ length: 5 }, () => ({ topic: "Missing main idea" }));
+  const long = CheatSheet.normalizeCheatSheet({ rows: [...unusable, ...makeRows(8)] }, {
+    sourceType: "notes",
+    rawText: `${groundedSentence} ${"supporting study detail ".repeat(1000)}`
+  });
+  assert.equal(long.rows.length, 8);
 });
 
 test("builds a local legacy fallback from visual nodes and fills sparse generated output", () => {

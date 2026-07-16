@@ -10,6 +10,7 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
+const DEFAULT_STATUS_MESSAGE = "Ready for your next study action.";
 
 const STOP_WORDS = new Set([
   "about", "after", "again", "also", "because", "before", "being", "between",
@@ -98,6 +99,7 @@ const elements = {
   resultView: document.getElementById("resultView"),
   sessionTitle: document.getElementById("sessionTitle"),
   sessionMeta: document.getElementById("sessionMeta"),
+  keyPointsBlock: document.getElementById("keyPointsBlock"),
   summaryList: document.getElementById("summaryList"),
   cheatSheetBlock: document.getElementById("cheatSheetBlock"),
   cheatSheetIntro: document.getElementById("cheatSheetIntro"),
@@ -110,6 +112,9 @@ const elements = {
   scoreBlock: document.getElementById("scoreBlock"),
   scoreTitle: document.getElementById("scoreTitle"),
   weakTopicText: document.getElementById("weakTopicText"),
+  recoveryCompositionText: document.getElementById("recoveryCompositionText"),
+  reviewWeakConceptButton: document.getElementById("reviewWeakConceptButton"),
+  startRecoveryQuizButton: document.getElementById("startRecoveryQuizButton"),
   wrongAnswerList: document.getElementById("wrongAnswerList"),
   goalList: document.getElementById("goalList"),
   saveSessionButton: document.getElementById("saveSessionButton"),
@@ -150,6 +155,7 @@ const elements = {
   settingsDialog: document.getElementById("settingsDialog"),
   apiEndpointInput: document.getElementById("apiEndpointInput"),
   backendTokenInput: document.getElementById("backendTokenInput"),
+  clearLearningMemoryButton: document.getElementById("clearLearningMemoryButton"),
   saveSettingsButton: document.getElementById("saveSettingsButton")
 };
 
@@ -195,6 +201,7 @@ function init() {
   elements.studyNotesButton.addEventListener("click", handleStudyNotes);
   elements.demoNoteButton?.addEventListener("click", handleDemoNote);
   elements.submitQuizButton.addEventListener("click", handleSubmitQuiz);
+  elements.startRecoveryQuizButton?.addEventListener("click", handleGenerateRecoveryQuiz);
   elements.generateQuizButton?.addEventListener("click", openQuizSettings);
   elements.confirmGenerateQuizButton?.addEventListener("click", handleGenerateQuiz);
   elements.saveArtifactButton?.addEventListener("click", handleSaveArtifact);
@@ -219,6 +226,7 @@ function init() {
   });
   elements.settingsButton.addEventListener("click", openSettings);
   elements.saveSettingsButton.addEventListener("click", saveSettings);
+  elements.clearLearningMemoryButton?.addEventListener("click", handleClearLearningMemory);
   elements.apiEndpointInput?.addEventListener("change", handleBackendEndpointChange);
 
   void initializePersistentPanel();
@@ -447,6 +455,7 @@ function handleStudyModeKeydown(event) {
 }
 
 function switchView(viewId, options = {}) {
+  cleanupVisualModelRenderer();
   updateStudyModeSelection(viewId);
   elements.views.forEach((view) => {
     const active = view.id === viewId;
@@ -455,6 +464,7 @@ function switchView(viewId, options = {}) {
   });
   elements.resultView.classList.add("hidden");
   elements.resultView.setAttribute("aria-hidden", "true");
+  if (!options.preserveStatus) resetStatus();
   if (!options.skipViewLoad && viewId === "libraryView") {
     renderLibrary();
   } else if (!options.skipViewLoad && viewId === "journeyView") {
@@ -1805,12 +1815,14 @@ async function createStudyNote(input) {
   let note;
   let generationError = "";
   try {
-    note = noteEndpoint
+    const generated = noteEndpoint
       ? await generateNotesWithBackend(noteEndpoint, input, settings)
       : generateLocalStudyNote(input);
+    note = finalizeStudyNoteGrounding(generated, input);
   } catch (error) {
+    if (!noteEndpoint) throw error;
     generationError = error?.message || "AI notes backend was unavailable.";
-    note = generateLocalStudyNote(input);
+    note = finalizeStudyNoteGrounding(generateLocalStudyNote(input), input);
   }
 
   const normalizedCheatSheet = normalizeStudyCheatSheet(note, input);
@@ -1828,8 +1840,77 @@ async function createStudyNote(input) {
   };
 }
 
+function finalizeStudyNoteGrounding(note, input) {
+  let grounded = normalizeSavedVisualNote(note, input);
+  if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
+    grounded = globalThis.ExamCramJourney.attachCollectionProvenance(
+      grounded,
+      input.collectionSources,
+      input.rawText
+    );
+    assertCollectionVisualSourceCoverage(grounded, input.collectionSources);
+  }
+  return grounded;
+}
+
+function assertCollectionVisualSourceCoverage(note, sources) {
+  const expectedIds = new Set((Array.isArray(sources) ? sources : [])
+    .map((source) => String(source?.id || source?.sourceId || "").trim())
+    .filter(Boolean));
+  if (!expectedIds.size) throw new Error("A combined visual note requires at least one saved source snapshot.");
+  const coveredIds = new Set((note?.visualLesson?.visualModel?.nodes || [])
+    .map((node) => String(node?.sourceId || node?.sourceRef?.sourceId || "").trim())
+    .filter((sourceId) => expectedIds.has(sourceId)));
+  const missingIds = [...expectedIds].filter((sourceId) => !coveredIds.has(sourceId));
+  if (missingIds.length) {
+    throw new Error(`The combined visual note omitted ${missingIds.length} saved source ${missingIds.length === 1 ? "snapshot" : "snapshots"}.`);
+  }
+  return true;
+}
+
+function normalizeSavedVisualNote(note, input) {
+  const visualLesson = note?.visualLesson && typeof note.visualLesson === "object" ? note.visualLesson : {};
+  const visualModel = visualLesson.visualModel && typeof visualLesson.visualModel === "object" ? visualLesson.visualModel : {};
+  const nodes = (Array.isArray(visualModel.nodes) ? visualModel.nodes : []).map((node) => {
+    const sourcePage = input.documentType === "pdf"
+      ? inferClientEvidencePage({ sourceText: node.sourceAnchor || node.sourceText || node.detail, sourcePage: node.sourcePage, sourceRef: node.sourceRef }, input)
+      : Math.max(0, Math.round(Number(node.sourcePage ?? node.sourceRef?.sourcePage) || 0));
+    const existingRef = node.sourceRef && typeof node.sourceRef === "object" ? node.sourceRef : {};
+    return {
+      ...node,
+      sourceId: node.sourceId || input.sourceId || "",
+      sourcePage,
+      sourceRef: {
+        ...existingRef,
+        sourceType: input.documentType === "pdf" ? "webpage" : existingRef.sourceType || input.sourceType,
+        documentType: input.documentType === "pdf" ? "pdf" : existingRef.documentType || "",
+        sourceId: node.sourceId || existingRef.sourceId || input.sourceId || "",
+        sourceFingerprint: existingRef.sourceFingerprint || input.sourceFingerprint || "",
+        url: existingRef.url || input.sourceUrl || "",
+        quote: existingRef.quote || node.sourceAnchor || node.sourceText || node.detail || "",
+        sourcePage
+      }
+    };
+  });
+  return {
+    ...note,
+    visualLesson: {
+      ...visualLesson,
+      visualModel: {
+        ...visualModel,
+        nodes,
+        edges: (Array.isArray(visualModel.edges) ? visualModel.edges : []).map((edge) => ({
+          ...edge,
+          type: normalizeClientVisualEdgeType(edge.type)
+        }))
+      }
+    }
+  };
+}
+
 function buildStudySourceBinding(input) {
   return {
+    sourceId: String(input.sourceId || "").slice(0, 100),
     type: input.sourceType || "notes",
     sourceType: input.sourceType || "notes",
     title: String(input.title || "Study source").slice(0, 180),
@@ -1848,6 +1929,9 @@ function buildStudySourceBinding(input) {
     chapter: String(input.chapterTitle || "Current chapter").slice(0, 140),
     chapterTitle: String(input.chapterTitle || "Current chapter").slice(0, 140),
     sourceRevisionHash: String(input.sourceRevisionHash || "").slice(0, 120),
+    compositionRevisionHash: String(input.compositionRevisionHash || "").slice(0, 120),
+    visualNoteCount: Math.max(0, Math.round(Number(input.visualNoteCount) || 0)),
+    sourceSnapshotCount: Math.max(0, Math.round(Number(input.sourceSnapshotCount) || 0)),
     rawText: String(input.rawText || "").slice(0, 60000),
     videoSegments: Array.isArray(input.videoSegments) ? input.videoSegments.slice(0, 600) : [],
     collectionSources: Array.isArray(input.collectionSources) ? input.collectionSources.slice(0, 40) : [],
@@ -1880,8 +1964,10 @@ async function createAndRecordStudyArtifact(input) {
     answers: {},
     score: null,
     submittedAt: null,
+    questionAttempts: [],
     wrongAnswers: [],
-    weakTopics: []
+    weakTopics: [],
+    weakConceptDiagnosis: []
   };
 
   let recorded;
@@ -1908,9 +1994,14 @@ async function createAndRecordStudyArtifact(input) {
     );
   }
   const chapterId = recorded?.result?.chapterId || recorded?.chapterId;
+  const sourceId = recorded?.result?.sourceId || recorded?.sourceId;
   if (chapterId) {
     artifact.journeyChapterId = chapterId;
     artifact.sourceBinding.chapterId = chapterId;
+  }
+  if (sourceId) {
+    artifact.sourceId = sourceId;
+    artifact.sourceBinding.sourceId = sourceId;
   }
   state.currentArtifact = artifact;
   state.currentSession = null;
@@ -1962,6 +2053,51 @@ function openQuizSettings() {
   if (typeof elements.quizSettingsDialog?.showModal === "function") elements.quizSettingsDialog.showModal();
 }
 
+function isStudyServiceUnreachableError(error) {
+  const message = String(error?.message || error || "");
+  const code = String(error?.code || error?.cause?.code || "");
+  return /failed to fetch|fetch failed|network\s*error|network request failed|err_connection_refused|econnrefused|connection refused|could not connect|couldn't connect|load failed/i
+    .test(`${message} ${code}`);
+}
+
+function getQuizGenerationErrorMessage(error, options = {}) {
+  if (isStudyServiceUnreachableError(error)) {
+    return options.localFallback
+      ? "Quiz ready from the saved source. The AI study service could not be reached, so the questions were generated locally."
+      : "The study service couldn’t be reached. Start the local backend, then try again.";
+  }
+  return String(error?.message || options.fallback || "Could not generate a quiz from this note.").trim();
+}
+
+function getQuizGenerationCompletionStatus({
+  questionCount = 0,
+  usedLocalFallback = false,
+  localFallbackError = null,
+  journeySaveError = null
+} = {}) {
+  const count = Math.max(0, Math.round(Number(questionCount) || 0));
+  const questionLabel = `${count} source-grounded question${count === 1 ? "" : "s"}`;
+  let message = usedLocalFallback
+    ? `Quiz ready: ${questionLabel} generated locally.`
+    : `Quiz ready: ${questionLabel} generated from the note’s original source and saved to Journey.`;
+  if (usedLocalFallback) {
+    const fallbackDetail = isStudyServiceUnreachableError(localFallbackError)
+      ? "The AI study service could not be reached."
+      : `AI generation was unavailable: ${getQuizGenerationErrorMessage(localFallbackError, { fallback: "unknown service error" })}`;
+    message = `${message} ${fallbackDetail}`;
+  }
+  if (journeySaveError) {
+    message = `${message} Journey could not be updated: ${journeySaveError.message || "unknown error"}`;
+  }
+  return { message, isError: Boolean(journeySaveError) };
+}
+
+function closeQuizSettingsDialog() {
+  if (elements.quizSettingsDialog?.open && typeof elements.quizSettingsDialog.close === "function") {
+    elements.quizSettingsDialog.close();
+  }
+}
+
 async function handleGenerateQuiz(event) {
   event?.preventDefault();
   const artifact = state.currentArtifact || state.currentExportItem;
@@ -1980,28 +2116,31 @@ async function handleGenerateQuiz(event) {
       quizStyle: elements.pageQuizStyle.value,
       questionCount: Number(elements.pageQuestionCount.value),
       summary: artifact.summary || [],
-      visualModel: artifact.visualLesson?.visualModel || null
+      visualModel: artifact.visualLesson?.visualModel || null,
+      cheatSheet: artifact.cheatSheet || null
     };
     updateGenerationProgress(32, "Generating questions from the pinned source…");
     const settings = await getStorage(STORAGE_KEYS.settings, {});
     const endpoint = getConfiguredApiEndpoint(settings);
     let quiz;
     let usedLocalFallback = false;
+    let localFallbackError = null;
     try {
       quiz = endpoint
         ? await generateQuizWithBackend(deriveBackendEndpoint(endpoint, "quiz"), quizRequest, settings)
         : generateLocalQuizArtifact(quizRequest);
     } catch (error) {
       usedLocalFallback = true;
+      localFallbackError = error;
       quiz = generateLocalQuizArtifact(quizRequest);
-      showStatus(`AI quiz unavailable; using the local backup. ${error.message || ""}`.trim(), true);
     }
-
     if (input.sourceType === "video" && globalThis.ExamCramJourney) {
       quiz = globalThis.ExamCramJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
     } else if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
       quiz = globalThis.ExamCramJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
     }
+    quiz = normalizeClientQuizArtifact(quiz, quizRequest, { allowConceptInference: quiz?.generator === "local" });
+    validateGeneratedQuiz(quiz, quizRequest, "Quiz generation");
 
     const combined = {
       ...artifact,
@@ -2017,6 +2156,9 @@ async function handleGenerateQuiz(event) {
       sourceBinding: artifact.sourceBinding,
       sourceType: input.sourceType,
       sourceUrl: input.sourceUrl,
+      sourceId: input.sourceId || artifact.sourceId || "",
+      documentType: input.documentType || artifact.sourceBinding?.documentType || "",
+      pageCount: input.pageCount || artifact.sourceBinding?.pageCount || 0,
       sourceTabId: artifact.sourceTabId,
       sourceFingerprint: artifact.sourceFingerprint,
       videoMediaId: artifact.videoMediaId,
@@ -2027,8 +2169,13 @@ async function handleGenerateQuiz(event) {
       answers: {},
       score: null,
       submittedAt: null,
+      questionAttempts: [],
       wrongAnswers: [],
       weakTopics: [],
+      weakConceptDiagnosis: [],
+      attemptType: "normal",
+      recoveryTargetConceptId: "",
+      recoveryComposition: null,
       usedLocalQuizFallback: usedLocalFallback
     };
     let journeySaveError = null;
@@ -2051,19 +2198,231 @@ async function handleGenerateQuiz(event) {
     state.submitted = false;
     await saveLibraryItem(combined);
     await persistCurrentSessionDraft();
+    closeQuizSettingsDialog();
     renderSession(combined);
-    elements.quizSettingsDialog?.close();
     finishProgress("Quiz ready.");
-    showStatus(journeySaveError
-      ? `Quiz ready, but Journey could not be updated: ${journeySaveError.message || "unknown error"}`
-      : "Quiz generated from the note’s original source and saved to Journey.", Boolean(journeySaveError));
+    const completion = getQuizGenerationCompletionStatus({
+      questionCount: combined.questions.length,
+      usedLocalFallback,
+      localFallbackError,
+      journeySaveError
+    });
+    showStatus(completion.message, completion.isError);
   } catch (error) {
+    closeQuizSettingsDialog();
     failProgress("Quiz generation failed.");
-    showStatus(error.message || "Could not generate a quiz from this note.", true);
+    showStatus(getQuizGenerationErrorMessage(error), true);
   } finally {
     elements.confirmGenerateQuizButton.disabled = false;
     elements.generateQuizButton.disabled = false;
   }
+}
+
+async function handleGenerateRecoveryQuiz() {
+  const session = state.currentSession;
+  const weakest = getWeakestConceptFromSession(session);
+  if (!session || !weakest?.conceptId) {
+    showStatus("Submit a quiz with a concept-linked missed answer before starting recovery.", true);
+    return;
+  }
+  elements.startRecoveryQuizButton.disabled = true;
+  startProgress(`Building recovery practice for ${weakest.label}â€¦`, 12);
+  try {
+    const input = await resolveQuizSourceInput(session);
+    const recoveryRequest = {
+      ...input,
+      noteId: session.noteId || session.id,
+      sourceFingerprint: session.sourceBinding?.fingerprint || session.sourceFingerprint || "",
+      title: session.title,
+      difficulty: session.difficulty || "normal",
+      quizStyle: "weakness",
+      questionCount: 5,
+      targetConceptId: weakest.conceptId,
+      summary: session.summary || [],
+      visualModel: session.visualLesson?.visualModel || null,
+      cheatSheet: session.cheatSheet || null
+    };
+    const settings = await getStorage(STORAGE_KEYS.settings, {});
+    const endpoint = getConfiguredApiEndpoint(settings);
+    let quiz;
+    let usedLocalFallback = false;
+    try {
+      quiz = endpoint
+        ? await generateQuizWithBackend(deriveBackendEndpoint(endpoint, "recovery-quiz"), recoveryRequest, settings)
+        : generateLocalRecoveryQuizArtifact(recoveryRequest);
+    } catch (error) {
+      usedLocalFallback = true;
+      quiz = generateLocalRecoveryQuizArtifact(recoveryRequest);
+    }
+    if (input.sourceType === "video" && globalThis.ExamCramJourney) {
+      quiz = globalThis.ExamCramJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
+    } else if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
+      quiz = globalThis.ExamCramJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
+    }
+    quiz = normalizeClientQuizArtifact(quiz, recoveryRequest, { allowConceptInference: false });
+    validateGeneratedQuiz(quiz, recoveryRequest, "Recovery quiz");
+    assertClientRecoveryComposition(quiz, recoveryRequest);
+
+    const combined = {
+      ...session,
+      ...quiz,
+      id: session.noteId || session.id,
+      noteId: session.noteId || session.id,
+      kind: "quiz",
+      visualLesson: session.visualLesson,
+      summary: session.summary,
+      cheatSheet: session.cheatSheet,
+      sourceBinding: session.sourceBinding,
+      sourceType: input.sourceType,
+      sourceUrl: input.sourceUrl,
+      sourceId: input.sourceId || session.sourceId || "",
+      sourceFingerprint: recoveryRequest.sourceFingerprint,
+      documentType: input.documentType || session.documentType || "",
+      pageCount: input.pageCount || session.pageCount || 0,
+      attemptType: "recovery",
+      recoveryTargetConceptId: weakest.conceptId,
+      answers: {},
+      score: null,
+      submittedAt: null,
+      questionAttempts: [],
+      wrongAnswers: [],
+      weakTopics: [],
+      weakConceptDiagnosis: [],
+      quizGeneratedAt: new Date().toISOString(),
+      usedLocalQuizFallback: usedLocalFallback
+    };
+    await recordLearningItem(combined, combined.journeyChapterId || combined.journeyChapterTitle);
+    state.currentSession = combined;
+    state.currentArtifact = combined;
+    state.currentExportItem = combined;
+    state.submitted = false;
+    await saveLibraryItem(combined);
+    await persistCurrentSessionDraft();
+    renderSession(combined);
+    finishProgress("Recovery quiz ready.");
+    showStatus(combined.recoveryComposition?.description || "Recovery quiz ready.");
+  } catch (error) {
+    failProgress("Recovery quiz generation failed.");
+    showStatus(error.message || "Could not create the recovery quiz.", true);
+  } finally {
+    elements.startRecoveryQuizButton.disabled = false;
+  }
+}
+
+function getClientRecoveryComposition(visualModel, targetConceptId) {
+  const nodeIds = new Set((visualModel?.nodes || []).map((node) => node.id));
+  const prerequisiteConceptIds = [...new Set((visualModel?.edges || [])
+    .filter((edge) => normalizeClientVisualEdgeType(edge.type) === "prerequisite_of" && edge.to === targetConceptId && nodeIds.has(edge.from))
+    .map((edge) => edge.from))];
+  const relatedConceptIds = [...new Set((visualModel?.edges || [])
+    .filter((edge) => normalizeClientVisualEdgeType(edge.type) === "related" && (edge.from === targetConceptId || edge.to === targetConceptId))
+    .map((edge) => edge.from === targetConceptId ? edge.to : edge.from)
+    .filter((id) => id !== targetConceptId && nodeIds.has(id) && !prerequisiteConceptIds.includes(id)))];
+  const prerequisiteQuestionCount = Math.min(2, prerequisiteConceptIds.length);
+  const relatedQuestionCount = Math.min(2 - prerequisiteQuestionCount, relatedConceptIds.length);
+  const extraTargetQuestionCount = 2 - prerequisiteQuestionCount - relatedQuestionCount;
+  const targetQuestionCount = 3 + extraTargetQuestionCount;
+  const primaryConceptIds = [
+    ...Array(targetQuestionCount).fill(targetConceptId),
+    ...Array(prerequisiteQuestionCount).fill(null).map((_, index) => prerequisiteConceptIds[index % prerequisiteConceptIds.length]),
+    ...Array(relatedQuestionCount).fill(null).map((_, index) => relatedConceptIds[index % relatedConceptIds.length])
+  ];
+  const parts = [`${targetQuestionCount} target`];
+  if (prerequisiteQuestionCount) parts.push(`${prerequisiteQuestionCount} prerequisite`);
+  if (relatedQuestionCount) parts.push(`${relatedQuestionCount} related`);
+  if (extraTargetQuestionCount) parts.push(`${extraTargetQuestionCount} extra target fallback`);
+  return {
+    targetConceptId,
+    targetQuestionCount,
+    prerequisiteQuestionCount,
+    relatedQuestionCount,
+    extraTargetQuestionCount,
+    prerequisiteConceptIds,
+    relatedConceptIds,
+    primaryConceptIds,
+    description: `Actual recovery composition: ${parts.join(", ")}.`
+  };
+}
+
+function generateLocalRecoveryQuizArtifact(input) {
+  const visualModel = input.visualModel || {};
+  const nodes = Array.isArray(visualModel.nodes) ? visualModel.nodes : [];
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const composition = getClientRecoveryComposition(visualModel, input.targetConceptId);
+  const sourceSentences = getSentences(normalizeText(input.rawText || ""));
+  const choiceBank = [...new Set([
+    ...nodes.flatMap((node) => [node.detail, node.sourceAnchor, node.example]),
+    ...sourceSentences
+  ].map((value) => String(value || "").trim()).filter((value) => value.length > 12))];
+  const questions = composition.primaryConceptIds.map((conceptId, index) => {
+    const node = byId.get(conceptId);
+    const answer = String(node?.detail || node?.sourceAnchor || sourceSentences[index % sourceSentences.length] || "").trim();
+    const distractors = choiceBank.filter((choice) => choice !== answer).slice(index, index + 3);
+    while (distractors.length < 3) {
+      const candidate = choiceBank.find((choice) => choice !== answer && !distractors.includes(choice));
+      if (!candidate) break;
+      distractors.push(candidate);
+    }
+    if (!answer || distractors.length < 3) {
+      throw new Error("The saved note does not contain enough distinct evidence for a five-question local recovery quiz.");
+    }
+    const promptLead = [
+      "Which source-grounded statement best explains",
+      "A student is reviewing the role of",
+      "Which statement should be used to correct a misunderstanding about",
+      "Which saved-note explanation applies to",
+      "Which evidence best supports"
+    ][index % 5];
+    const sourcePage = Number(node?.sourcePage) || inferClientEvidencePage({ sourceText: node?.sourceAnchor }, input);
+    return {
+      type: "mcq",
+      prompt: `${promptLead} ${node?.label || conceptId}?`,
+      choices: shuffle([answer, ...distractors]),
+      answer,
+      topic: node?.label || conceptId,
+      primaryConceptId: conceptId,
+      relatedConceptIds: getRelatedConceptIds(conceptId, visualModel),
+      questionStyle: index === 2 ? "Misconception" : "Application",
+      cognitiveLevel: index < 2 ? "understand" : "apply",
+      skill: `Recover ${node?.label || conceptId}`,
+      whyThisMatters: `This checks recovery of ${node?.label || conceptId}.`,
+      misconceptionTested: index === 2 ? `Confusing ${node?.label || conceptId} with a neighboring concept.` : "",
+      hint: node?.sourceAnchor || "Review the cited source evidence.",
+      explanation: answer,
+      sourceText: node?.sourceAnchor || answer,
+      sourceId: node?.sourceId || input.sourceId || "",
+      sourceSegmentId: node?.sourceSegmentId || "",
+      sourcePage,
+      sourceRef: node?.sourceRef || null
+    };
+  });
+  return normalizeClientQuizArtifact({
+    title: `${input.title} recovery quiz`,
+    sourceType: input.sourceType,
+    sourceUrl: input.sourceUrl,
+    difficulty: input.difficulty,
+    quizStyle: "weakness",
+    attemptType: "recovery",
+    recoveryTargetConceptId: input.targetConceptId,
+    recoveryComposition: composition,
+    questions,
+    generator: "local"
+  }, input, { allowConceptInference: false });
+}
+
+function assertClientRecoveryComposition(quiz, input) {
+  const composition = getClientRecoveryComposition(input.visualModel, input.targetConceptId);
+  const questions = quiz.questions || [];
+  const target = questions.filter((question) => question.primaryConceptId === input.targetConceptId).length;
+  const prerequisites = questions.filter((question) => composition.prerequisiteConceptIds.includes(question.primaryConceptId)).length;
+  const related = questions.filter((question) => composition.relatedConceptIds.includes(question.primaryConceptId)).length;
+  if (target !== composition.targetQuestionCount
+    || prerequisites !== composition.prerequisiteQuestionCount
+    || related !== composition.relatedQuestionCount) {
+    throw new Error(`Recovery quiz does not match its disclosed composition. ${composition.description}`);
+  }
+  quiz.recoveryComposition = quiz.recoveryComposition || composition;
+  return quiz;
 }
 
 async function resolveQuizSourceInput(artifact) {
@@ -2072,7 +2431,10 @@ async function resolveQuizSourceInput(artifact) {
     return {
       sourceType: binding.sourceType || artifact.sourceType || "notes",
       sourceUrl: binding.url || artifact.sourceUrl || "",
-      sourceId: "current-video",
+      sourceId: binding.sourceId || artifact.sourceId || ((binding.sourceType || artifact.sourceType) === "video" ? "current-video" : ""),
+      sourceFingerprint: binding.fingerprint || artifact.sourceFingerprint || "",
+      documentType: binding.documentType || artifact.documentType || "",
+      pageCount: binding.pageCount || artifact.pageCount || 0,
       rawText: binding.rawText,
       videoSegments: binding.videoSegments || [],
       collectionSources: binding.collectionSources || []
@@ -2091,6 +2453,9 @@ async function resolveQuizSourceInput(artifact) {
       sourceType: matched.type,
       sourceUrl: matched.url,
       sourceId: matched.id,
+      sourceFingerprint: matched.fingerprint || immutableFingerprint,
+      documentType: matched.documentType || "",
+      pageCount: matched.pageCount || 0,
       rawText,
       videoSegments: matched.segments || [],
       collectionSources: []
@@ -2100,10 +2465,257 @@ async function resolveQuizSourceInput(artifact) {
   if (artifact.sourceType === "webpage" && artifact.sourceUrl) {
     const current = await extractCurrentPage();
     if (samePageUrl(current.url, artifact.sourceUrl) && (!artifact.sourceFingerprint || current.sourceFingerprint === artifact.sourceFingerprint)) {
-      return { sourceType: "webpage", sourceUrl: current.url, rawText: current.text, videoSegments: [], collectionSources: [] };
+      return {
+        sourceType: "webpage",
+        sourceUrl: current.url,
+        sourceId: binding.sourceId || artifact.sourceId || "",
+        sourceFingerprint: current.sourceFingerprint || artifact.sourceFingerprint || "",
+        documentType: current.documentType || binding.documentType || "",
+        pageCount: current.pageCount || binding.pageCount || 0,
+        rawText: current.text,
+        videoSegments: [],
+        collectionSources: []
+      };
     }
   }
   throw new Error("The original evidence is no longer available. Open the saved source or create the visual note again before generating a quiz.");
+}
+
+function assertExactQuizQuestionCount(quiz, requestedCount, label = "Quiz") {
+  const expected = Number(requestedCount);
+  const actual = Array.isArray(quiz?.questions) ? quiz.questions.length : 0;
+  if (!Number.isInteger(expected) || expected < 1 || actual !== expected) {
+    throw new Error(`${label} returned ${actual} questions; expected exactly ${expected || 0}.`);
+  }
+  return quiz;
+}
+
+const QUIZ_GROUNDING_STOP_WORDS = new Set([
+  ...STOP_WORDS,
+  "and", "answer", "are", "best", "can", "choice", "choose", "correct", "does", "example",
+  "be", "following", "for", "how", "is", "it", "its", "lesson", "not", "note", "of", "one",
+  "option", "question", "saved", "source", "statement", "student", "the", "to", "was", "what", "will"
+]);
+
+const QUIZ_GENERIC_ANSWER_TERMS = new Set([
+  "above", "all", "below", "both", "cannot", "change", "changes", "continue", "continues",
+  "decrease", "decreased", "decreases", "determined", "enough", "false", "faster", "first",
+  "higher", "increase", "increased", "increases", "information", "insufficient", "last", "less",
+  "lower", "more", "neither", "never", "no", "none", "process", "rate", "remains", "same", "slower",
+  "stays", "stops", "true", "unchanged", "unknown", "value", "values", "yes"
+]);
+
+function getQuizGroundingTerms(value) {
+  return [...new Set(String(value || "").toLocaleLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length > 2 && !QUIZ_GROUNDING_STOP_WORDS.has(term)))];
+}
+
+function hasUnsegmentedQuizOverlap(sourceText, candidateText) {
+  const source = String(sourceText || "").toLocaleLowerCase();
+  const candidate = String(candidateText || "").toLocaleLowerCase();
+  if (!/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(source)) return false;
+  const fragments = candidate.match(/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+/gu) || [];
+  return fragments.some((fragment) => source.includes(fragment));
+}
+
+function hasQuizSourceOverlap(sourceText, candidateText, options = {}) {
+  const source = String(sourceText || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  const candidate = String(candidateText || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  if (!source || !candidate) return false;
+  if (candidate.length >= 12 && source.includes(candidate.slice(0, 240))) return true;
+  if (hasUnsegmentedQuizOverlap(source, candidate)) return true;
+
+  const sourceTerms = new Set(getQuizGroundingTerms(source));
+  const candidateTerms = getQuizGroundingTerms(candidate);
+  if (!candidateTerms.length) return false;
+  const matches = candidateTerms.filter((term) => sourceTerms.has(term)).length;
+  const minimumMatches = Math.min(Math.max(1, Number(options.minimumMatches) || 2), candidateTerms.length);
+  const minimumRatio = Number.isFinite(options.minimumRatio) ? options.minimumRatio : 0.25;
+  return matches >= minimumMatches && matches / candidateTerms.length >= minimumRatio;
+}
+
+function isQuizAnswerSupported(sourceText, evidenceText, answerText) {
+  const normalize = (value) => String(value || "")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase();
+  const source = normalize(`${sourceText || ""} ${evidenceText || ""}`);
+  const answer = normalize(answerText);
+  if (!answer) return false;
+  // Local fallback answers are lifted verbatim from their cited source sentence.
+  // Check that exact provenance before applying the keyword-based AI guard below;
+  // otherwise an answer made only of validator stop words (for example "will")
+  // is rejected even though it occurs in the immutable evidence.
+  const escapedAnswer = answer.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const hasWordCharacter = /[\p{L}\p{N}]/u.test(answer);
+  const exactAnswerPattern = hasWordCharacter
+    ? new RegExp(`(?:^|[^\\p{L}\\p{N}_])${escapedAnswer}(?=$|[^\\p{L}\\p{N}_])`, "u")
+    : null;
+  if (exactAnswerPattern ? exactAnswerPattern.test(source) : source.includes(answer)) return true;
+  if (hasUnsegmentedQuizOverlap(source, answer)) return true;
+
+  const sourceTerms = new Set(source.split(/[^\p{L}\p{N}]+/u).filter(Boolean));
+  const answerTerms = answer
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term && !QUIZ_GROUNDING_STOP_WORDS.has(term));
+  if (!answerTerms.length) return false;
+  if (answerTerms.some((term) => sourceTerms.has(term))) return true;
+  return answerTerms.every((term) => QUIZ_GENERIC_ANSWER_TERMS.has(term));
+}
+
+function assertQuizGroundedInSource(quiz, sourceText, label = "Quiz") {
+  const savedSource = String(sourceText || "").trim();
+  if (!savedSource) throw new Error(`${label} cannot be verified without its saved source.`);
+
+  quiz.questions.forEach((question, index) => {
+    const prompt = String(question?.prompt || "").trim();
+    const choices = Array.isArray(question?.choices) ? question.choices.map((choice) => String(choice).trim()) : [];
+    const answer = String(question?.answer || "").trim();
+    const uniqueChoices = new Set(choices.map((choice) => choice.toLocaleLowerCase()));
+    if (!prompt || choices.length !== 4 || uniqueChoices.size !== 4 || !choices.includes(answer)) {
+      throw new Error(`${label} question ${index + 1} is not a valid four-choice question.`);
+    }
+
+    const evidence = String(question?.sourceText || question?.explanation || "").trim();
+    if (!hasQuizSourceOverlap(savedSource, evidence)) {
+      throw new Error(`${label} question ${index + 1} cites evidence outside the saved source.`);
+    }
+    if (!hasQuizSourceOverlap(savedSource, `${prompt} ${answer}`, { minimumMatches: 1, minimumRatio: 0.15 })) {
+      throw new Error(`${label} question ${index + 1} is not grounded in the saved source.`);
+    }
+    if (!isQuizAnswerSupported(savedSource, evidence, answer)) {
+      throw new Error(`${label} question ${index + 1} has an answer that is not supported by the saved source.`);
+    }
+  });
+  return quiz;
+}
+
+function validateGeneratedQuiz(quiz, input, label = "Quiz") {
+  assertExactQuizQuestionCount(quiz, input.questionCount, label);
+  assertQuizIdentityAndConceptLinks(quiz, input, label);
+  return assertQuizGroundedInSource(quiz, input.rawText, label);
+}
+
+function normalizeClientQuizArtifact(quiz, input, { allowConceptInference = false } = {}) {
+  const visualModel = input.visualModel && typeof input.visualModel === "object" ? input.visualModel : {};
+  const nodes = Array.isArray(visualModel.nodes) ? visualModel.nodes : [];
+  const quizId = `quiz-${crypto.randomUUID()}`;
+  const questions = (Array.isArray(quiz?.questions) ? quiz.questions : []).map((question, index) => {
+    const inferredPrimary = allowConceptInference
+      ? chooseQuestionPrimaryConcept(question, nodes, index)?.id || ""
+      : "";
+    const primaryConceptId = String(question?.primaryConceptId || inferredPrimary || "").trim();
+    const inferredRelated = allowConceptInference
+      ? getRelatedConceptIds(primaryConceptId, visualModel)
+      : [];
+    const relatedConceptIds = [...new Set((Array.isArray(question?.relatedConceptIds)
+      ? question.relatedConceptIds
+      : inferredRelated).map((id) => String(id || "").trim()).filter((id) => id && id !== primaryConceptId))].slice(0, 4);
+    const sourcePage = inferClientEvidencePage(question, input);
+    const existingRef = question?.sourceRef && typeof question.sourceRef === "object" ? question.sourceRef : {};
+    const sourceRef = {
+      ...existingRef,
+      sourceType: input.documentType === "pdf" ? "webpage" : existingRef.sourceType || input.sourceType,
+      documentType: input.documentType === "pdf" ? "pdf" : existingRef.documentType || "",
+      sourceId: question?.sourceId || existingRef.sourceId || input.sourceId || "",
+      sourceFingerprint: existingRef.sourceFingerprint || input.sourceFingerprint || "",
+      title: existingRef.title || input.title || "",
+      url: existingRef.url || input.sourceUrl || "",
+      quote: existingRef.quote || question?.sourceText || question?.explanation || "",
+      sourcePage
+    };
+    return {
+      ...question,
+      id: `${quizId}-q-${String(index + 1).padStart(3, "0")}`,
+      primaryConceptId,
+      relatedConceptIds,
+      sourceId: question?.sourceId || input.sourceId || "",
+      sourcePage,
+      sourceRef
+    };
+  });
+  return { ...quiz, quizId, noteId: quiz?.noteId || input.noteId || "", questions };
+}
+
+function chooseQuestionPrimaryConcept(question, nodes, index = 0) {
+  if (!nodes.length) return null;
+  const questionTerms = new Set(getQuizGroundingTerms([
+    question?.topic,
+    question?.prompt,
+    question?.sourceText,
+    question?.explanation
+  ].filter(Boolean).join(" ")));
+  let best = nodes[index % nodes.length];
+  let bestScore = -1;
+  nodes.forEach((node) => {
+    const nodeTerms = getQuizGroundingTerms([
+      node?.label,
+      node?.role,
+      node?.detail,
+      node?.why,
+      node?.example,
+      node?.sourceAnchor
+    ].filter(Boolean).join(" "));
+    const score = nodeTerms.reduce((total, term) => total + (questionTerms.has(term) ? 1 : 0), 0);
+    if (score > bestScore) {
+      best = node;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
+function getRelatedConceptIds(primaryConceptId, visualModel) {
+  const ids = new Set((visualModel?.nodes || []).map((node) => node.id));
+  return [...new Set((visualModel?.edges || []).flatMap((edge) => {
+    if (edge.from === primaryConceptId && ids.has(edge.to)) return [edge.to];
+    if (edge.to === primaryConceptId && ids.has(edge.from)) return [edge.from];
+    return [];
+  }))].slice(0, 4);
+}
+
+function inferClientEvidencePage(question, input) {
+  const isPdf = input.documentType === "pdf" || question?.sourceRef?.documentType === "pdf";
+  if (!isPdf) return 0;
+  const inferPage = globalThis.ExamCramCheatSheet?.inferPdfPage;
+  const inferred = input.documentType === "pdf" && typeof inferPage === "function"
+    ? inferPage(question?.sourceText || question?.explanation || "", input.rawText)
+    : null;
+  const explicit = Math.round(Number(question?.sourcePage ?? question?.sourceRef?.sourcePage ?? question?.sourceRef?.pageNumber) || 0);
+  const page = inferred || explicit;
+  const pageCount = Math.max(0, Number(input.pageCount) || 0);
+  return Number.isInteger(page) && page > 0 && (!pageCount || page <= pageCount) ? page : 0;
+}
+
+function assertQuizIdentityAndConceptLinks(quiz, input, label) {
+  const quizId = String(quiz?.quizId || "").trim();
+  if (!quizId) throw new Error(`${label} did not provide a unique quiz ID.`);
+  const ids = new Set();
+  const allowedConceptIds = new Set((input.visualModel?.nodes || []).map((node) => String(node?.id || "")).filter(Boolean));
+  quiz.questions.forEach((question, index) => {
+    const id = String(question?.id || "").trim();
+    if (!id || !id.startsWith(`${quizId}-`) || ids.has(id)) {
+      throw new Error(`${label} question ${index + 1} does not have a globally unique ID.`);
+    }
+    ids.add(id);
+    if (!allowedConceptIds.has(question?.primaryConceptId)) {
+      throw new Error(`${label} question ${index + 1} is not linked to a primary concept in the visual note.`);
+    }
+    if ((question?.relatedConceptIds || []).some((idValue) => !allowedConceptIds.has(idValue))) {
+      throw new Error(`${label} question ${index + 1} contains an unknown related concept.`);
+    }
+    if (input.documentType === "pdf" || question?.sourceRef?.documentType === "pdf") {
+      if (question?.sourceRef?.sourceType !== "webpage" || question?.sourceRef?.documentType !== "pdf" || question.sourcePage < 1) {
+        throw new Error(`${label} question ${index + 1} does not identify its supporting PDF page.`);
+      }
+    }
+    if (input.sourceType !== "video" && question?.sourceId === "current-video") {
+      throw new Error(`${label} question ${index + 1} has an invalid video source identifier.`);
+    }
+  });
+  return quiz;
 }
 
 async function generateQuizWithBackend(endpoint, input, settings = {}) {
@@ -2120,13 +2732,12 @@ async function generateQuizWithBackend(endpoint, input, settings = {}) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || "The quiz service could not generate questions.");
-  if (!Array.isArray(payload.questions) || payload.questions.length < 3) throw new Error("The quiz service returned too few usable questions.");
-  return payload;
+  return validateGeneratedQuiz(payload, input, "The quiz service");
 }
 
 function generateLocalQuizArtifact(input) {
   const local = generateLocalStudySession(input);
-  return {
+  const quiz = normalizeClientQuizArtifact({
     title: input.title,
     sourceType: input.sourceType,
     sourceUrl: input.sourceUrl,
@@ -2134,10 +2745,11 @@ function generateLocalQuizArtifact(input) {
     quizStyle: input.quizStyle,
     questions: local.questions,
     generator: "local"
-  };
+  }, input, { allowConceptInference: true });
+  return validateGeneratedQuiz(quiz, input, "The local quiz backup");
 }
 
-function generateLocalStudyNote({ title, sourceType, sourceUrl, rawText }) {
+function generateLocalStudyNote({ title, sourceType, sourceUrl, rawText, collectionSources = [] }) {
   const cleanedText = normalizeText(rawText);
   const sentences = getSentences(cleanedText);
   const terms = getImportantTerms(cleanedText).slice(0, 12).map(toTitleCase);
@@ -2149,7 +2761,9 @@ function generateLocalStudyNote({ title, sourceType, sourceUrl, rawText }) {
     sourceUrl,
     summary,
     sections: buildLocalNoteSections(summary),
-    visualLesson: buildLocalVisualLesson(cleanedText, summary, terms),
+    visualLesson: sourceType === "collection"
+      ? buildLocalCollectionVisualLesson(cleanedText, summary, terms, collectionSources, rawText)
+      : buildLocalVisualLesson(cleanedText, summary, terms),
     terms,
     goals: [
       "Review the key notes once today.",
@@ -2158,6 +2772,89 @@ function generateLocalStudyNote({ title, sourceType, sourceUrl, rawText }) {
     ],
     generator: "local"
   };
+}
+
+function buildLocalCollectionVisualLesson(text, summary, terms, collectionSources, rawText) {
+  const baseLesson = buildLocalVisualLesson(text, summary, terms);
+  const sources = (Array.isArray(collectionSources) ? collectionSources : [])
+    .filter((source) => source && (source.id || source.sourceId))
+    .slice(0, 8);
+  const nodes = sources.map((source, index) => {
+    const sourceId = String(source.id || source.sourceId);
+    const excerpt = normalizeText(source.excerpt || source.text || getLocalCollectionSourceBlock(rawText, sourceId));
+    const sourceSentences = getSentences(excerpt);
+    const detail = compactSummaryItem(
+      sourceSentences[0] || excerpt || `${source.title || `Source ${index + 1}`} is included in this chapter.`,
+      220
+    );
+    const label = makeConceptLabel(detail) || String(source.title || `Source ${index + 1}`).slice(0, 80);
+    const sourcePage = Math.max(0, Math.round(Number(source.sourcePage || source.pageNumber) || 0));
+    return {
+      id: `${makeNodeId(label)}-${index + 1}`.slice(0, 80),
+      label,
+      role: `Evidence from ${String(source.title || `Source ${index + 1}`).slice(0, 100)}`,
+      detail,
+      why: `This chapter concept is grounded in ${String(source.title || `source ${index + 1}`).slice(0, 100)}.`,
+      example: detail,
+      sourceText: detail,
+      sourceAnchor: detail,
+      sourceId,
+      sourcePage,
+      sourceRef: {
+        sourceId,
+        sourceType: source.type || "webpage",
+        documentType: source.documentType || "",
+        sourceFingerprint: source.fingerprint || "",
+        title: source.title || `Source ${index + 1}`,
+        url: source.url || "",
+        quote: detail,
+        sourcePage
+      }
+    };
+  });
+  const edges = nodes.slice(1).map((node, index) => ({
+    from: nodes[index].id,
+    to: node.id,
+    label: "connects across the chapter",
+    type: "related"
+  }));
+  return {
+    ...baseLesson,
+    title: "Combined Visual Tutor Note",
+    visualModel: {
+      ...baseLesson.visualModel,
+      title: "Combined Visual Tutor Note",
+      objective: `Connect evidence across all ${nodes.length} saved source ${nodes.length === 1 ? "snapshot" : "snapshots"}.`,
+      kind: "system",
+      nodes,
+      edges,
+      scenarios: nodes.slice(0, 5).map((node, index) => ({
+        id: `source-case-${index + 1}`,
+        label: node.role,
+        activeIds: [node.id],
+        connections: [],
+        nodeValues: {},
+        outcome: node.detail,
+        insight: node.why
+      })),
+      check: {
+        prompt: nodes.length > 1 ? "Which statement is supported by the combined chapter sources?" : "Which statement is supported by this chapter source?",
+        choices: nodes.slice(0, 4).map((node) => node.detail),
+        answer: nodes[0]?.detail || "",
+        explanation: nodes[0]?.why || "Use the saved source evidence to verify the answer."
+      }
+    }
+  };
+}
+
+function getLocalCollectionSourceBlock(rawText, sourceId) {
+  const text = String(rawText || "");
+  const marker = `SOURCE ${sourceId}\n`;
+  const start = text.indexOf(marker);
+  if (start < 0) return "";
+  const contentStart = text.indexOf("\nCONTENT_BEGIN\n", start + marker.length);
+  const contentEnd = text.indexOf("\nCONTENT_END\n<<<END_SOURCE_BLOCK>>>", start + marker.length);
+  return text.slice(contentStart >= 0 ? contentStart + "\nCONTENT_BEGIN\n".length : start + marker.length, contentEnd >= 0 ? contentEnd : undefined);
 }
 async function createStudySession(input) {
   const { generationToken: requestedToken, ...sessionInput } = input;
@@ -2228,8 +2925,11 @@ async function createStudySession(input) {
     submittedAt: null,
     answers: {},
     score: null,
+    questionAttempts: [],
     wrongAnswers: [],
-    weakTopics: []
+    weakTopics: [],
+    weakConceptDiagnosis: [],
+    attemptType: "normal"
   };
   state.submitted = false;
   let journeyRecord = null;
@@ -2376,8 +3076,8 @@ function generateLocalStudySession({ title, sourceType, sourceUrl, rawText, ques
   const summary = buildSummary(sentences, terms);
   const questions = buildConceptQuestions(cleanedText, sentences, summary, questionCount, difficulty, quizStyle);
 
-  if (questions.length < 3) {
-    throw new Error("Not enough clear facts were found to create a useful quiz.");
+  if (questions.length !== questionCount) {
+    throw new Error(`The saved source supports ${questions.length} local questions; ${questionCount} were requested.`);
   }
 
   return {
@@ -2522,9 +3222,10 @@ function getSentences(text) {
 }
 
 function getWords(text) {
-  return text
-    .toLowerCase()
-    .match(/[a-z][a-z-]{3,}/g)
+  return String(text || "")
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .match(/\p{L}[\p{L}\p{M}\p{N}-]{3,}/gu)
     ?.filter((word) => !STOP_WORDS.has(word)) || [];
 }
 
@@ -2592,9 +3293,8 @@ function buildQuestions(sentences, terms, questionCount) {
   return buildConceptQuestions(sentences.join(" "), sentences, buildSummary(sentences, terms), questionCount);
 }
 
-function buildConceptQuestions(text, sentences, summary, questionCount, difficulty = "normal", quizStyle = "mixed") {
+function buildConceptQuestions(text, sentences, _summary, questionCount, difficulty = "normal", quizStyle = "mixed") {
   const bank = [];
-  const lower = text.toLowerCase();
   const add = (question) => {
     if (!question?.prompt || bank.some((item) => item.prompt === question.prompt)) return;
     bank.push({
@@ -2609,140 +3309,115 @@ function buildConceptQuestions(text, sentences, summary, questionCount, difficul
     });
   };
 
-  if (/variable/.test(lower)) {
-    add({
-      prompt: "What is the best description of a variable in Java?",
-      choices: shuffle(["A named container that stores a value", "A comment that explains code", "A class that always creates objects", "A number that cannot change"]),
-      answer: "A named container that stores a value",
-      topic: "Variables",
-      questionStyle: "Definition",
-      skill: "Explain what variables store",
-      hint: "Think about what a program needs to remember and reuse.",
-      explanation: "The source describes variables as containers used by a program to store values.",
-      sourceText: findSentence(sentences, "Variables are") || findSentence(sentences, "container")
-    });
-  }
-
-  if (/declared before it is used|declaring a variable|declare/.test(lower)) {
-    add({
-      prompt: "Why must a Java variable be declared before it is used?",
-      choices: shuffle(["So Java knows its data type, name, and required memory", "So the value is automatically printed", "So the program becomes object-oriented", "So Java ignores case sensitivity"]),
-      answer: "So Java knows its data type, name, and required memory",
-      topic: "Declaring Variables",
-      questionStyle: "Application",
-      cognitiveLevel: "apply",
-      skill: "Connect declaration to memory and identity",
-      hint: "Look at what declaration tells the compiler before a value is assigned.",
-      explanation: "Declaration states the data type and identifier so memory can be allocated and the variable can be accessed.",
-      sourceText: findSentence(sentences, "declared before") || findSentence(sentences, "memory")
-    });
-  }
-
-  if (/defin|initiali/.test(lower)) {
-    add({
-      prompt: "Which option correctly distinguishes declaring and defining a variable?",
-      choices: shuffle(["Declaring gives type/name; defining or initialising assigns a value", "Declaring assigns a value; defining deletes the variable", "Declaring only works for String; defining only works for int", "Declaring and defining are unrelated to memory"]),
-      answer: "Declaring gives type/name; defining or initialising assigns a value",
-      topic: "Declaration vs Definition",
-      questionStyle: "Comparison",
-      skill: "Compare declaration and definition",
-      hint: "One step introduces the variable; the other gives it a stored value.",
-      explanation: "The source explains that declaration states data type and name, while definition/initialisation assigns a value.",
-      sourceText: findSentence(sentences, "Declaring a variable means") || findSentence(sentences, "defining")
-    });
-  }
-
-  if (/primitive/.test(lower) && /object/.test(lower)) {
-    add({
-      prompt: "Which statement correctly compares primitive and object data types in Java?",
-      choices: shuffle(["Primitive types are predefined by Java; object types are defined by classes", "Primitive types are always written with uppercase names", "Object types cannot store sequences of characters", "Primitive and object types are exactly the same"]),
-      answer: "Primitive types are predefined by Java; object types are defined by classes",
-      topic: "Primitive vs Object Types",
-      questionStyle: "Comparison",
-      skill: "Separate primitive and object data types",
-      hint: "Focus on whether the type comes built into the language or from a class.",
-      explanation: "The source says primitive types are predefined as part of Java, while object types are defined by classes.",
-      sourceText: findSentence(sentences, "Primitive types") || findSentence(sentences, "object types")
-    });
-  }
-
-  const typeQuestions = [
-    ["boolean", "Which Java type should you choose for true/false values?", "boolean", ["int", "double", "char"]],
-    ["char", "Which Java type should you choose for a single character such as 'A'?", "char", ["String", "boolean", "double"]],
-    ["double", "Which Java type should you choose for a number with a decimal point?", "double", ["int", "char", "boolean"]],
-    ["int", "Which Java type should you choose for a whole integer number such as 42?", "int", ["double", "char", "boolean"]]
-  ];
-  typeQuestions.forEach(([keyword, prompt, answer, distractors]) => {
-    if (lower.includes(keyword)) {
-      add({
-        prompt,
-        choices: shuffle([answer, ...distractors]),
-        answer,
-        topic: "Primitive Data Types",
-        questionStyle: "Application",
-        cognitiveLevel: "apply",
-        skill: `Choose the correct ${keyword} type`,
-        hint: "Match the value shape to the data type.",
-        explanation: `The source lists ${keyword} as one of Java's primitive data types and gives examples of its values.`,
-        sourceText: findSentence(sentences, keyword) || keyword
-      });
-    }
-  });
-
-  if (/string/.test(lower) && /double quotes|sequence of characters/.test(lower)) {
-    add({
-      prompt: "What makes String different from char in the lesson?",
-      choices: shuffle(["String stores a sequence of characters in double quotes; char stores one character in single quotes", "String is a primitive type written in lowercase", "char stores whole sentences in double quotes", "String values must always be true or false"]),
-      answer: "String stores a sequence of characters in double quotes; char stores one character in single quotes",
-      topic: "String vs Char",
-      questionStyle: "Misconception",
-      cognitiveLevel: "analyze",
-      skill: "Avoid mixing String and char literals",
-      hint: "Pay attention to length and quote style.",
-      explanation: "The source says String stores character sequences using double quotes, while char stores a single character using single quotes.",
-      sourceText: findSentence(sentences, "double quotes") || findSentence(sentences, "single quotes")
-    });
-  }
-
-  if (/case-sensitive|case sensitive/.test(lower)) {
-    add({
-      prompt: "What does Java being case-sensitive imply for this lesson?",
-      choices: shuffle(["Uppercase and lowercase letters are treated differently", "All primitive types must start uppercase", "Quotes are optional around characters", "Boolean values can be written as True or False"]),
-      answer: "Uppercase and lowercase letters are treated differently",
-      topic: "Case Sensitivity",
-      questionStyle: "Misconception",
-      skill: "Recognize Java case sensitivity rules",
-      hint: "Think about why String starts with uppercase S but primitive types do not.",
-      explanation: "The source explicitly notes that Java is case-sensitive and points out lowercase primitive types and uppercase String.",
-      sourceText: findSentence(sentences, "case-sensitive")
-    });
-  }
-
-  buildStatementQuestions(summary, sentences).forEach(add);
-  return tuneLocalQuestions(bank, difficulty, quizStyle).slice(0, questionCount);
+  buildStatementQuestions(sentences).forEach(add);
+  buildSourceClozeQuestions(text, sentences, Math.max(questionCount * 2, 8)).forEach(add);
+  return tuneLocalQuestions(bank, difficulty, quizStyle)
+    .filter((question) => isLocalQuestionCandidateGrounded(question, text))
+    .slice(0, questionCount);
 }
 
-function buildStatementQuestions(summary, sentences) {
-  const useful = summary.filter((item) => item.length > 50).slice(0, 5);
-  return useful.map((sentence, index) => {
-    const correct = simplifyStatement(sentence);
+function isLocalQuestionCandidateGrounded(question, sourceText) {
+  try {
+    assertQuizGroundedInSource({ questions: [question] }, sourceText, "Local quiz candidate");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function buildStatementQuestions(sentences) {
+  const seen = new Set();
+  const useful = [...sentences]
+    .map((sourceText) => ({
+      sourceText: String(sourceText || "").trim(),
+      choice: simplifyStatement(String(sourceText || ""))
+    }))
+    .filter((item) => item.choice.length > 35)
+    .filter((item) => {
+      const key = item.choice.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 8);
+
+  if (useful.length < 4) return [];
+  return useful.map((item, index) => {
     const distractors = useful
-      .filter((item) => item !== sentence)
-      .map((item) => simplifyStatement(item))
+      .filter((candidate) => candidate !== item)
+      .map((candidate) => candidate.choice)
       .slice(0, 3);
-    while (distractors.length < 3) distractors.push(["This concept is only background information", "This rule applies only after object creation", "This value is ignored by Java"][distractors.length]);
     return {
-      prompt: `Which statement best matches the lesson idea: ${makeConceptLabel(sentence)}?`,
-      choices: shuffle([correct, ...distractors.slice(0, 3)]),
-      answer: correct,
-      topic: makeConceptLabel(sentence),
+      prompt: `Which statement from the saved note most directly explains ${makeConceptLabel(item.sourceText)}?`,
+      choices: shuffle([item.choice, ...distractors]),
+      answer: item.choice,
+      topic: makeConceptLabel(item.sourceText),
       questionStyle: ["Understand", "Application", "Comparison", "Misconception", "Sequence"][index % 5],
-      skill: `Explain ${makeConceptLabel(sentence)}`,
+      skill: `Explain ${makeConceptLabel(item.sourceText)}`,
       hint: "Choose the option that matches the source, not just a familiar keyword.",
-      explanation: sentence,
-      sourceText: sentence
+      explanation: item.sourceText,
+      sourceText: item.sourceText
     };
   });
+}
+
+function buildSourceClozeQuestions(text, sentences, maxQuestions) {
+  // Keep the local generator and grounding validator on the same vocabulary.
+  // Generic assessment words are useful prose but make poor cloze answers and
+  // are intentionally ignored by the validator's overlap checks.
+  const sourceTerms = getImportantTerms(text)
+    .filter((term) => !QUIZ_GROUNDING_STOP_WORDS.has(term))
+    .filter((term) => hasWholeWord(text, term));
+  const displayTerms = [];
+  const seenTerms = new Set();
+  sourceTerms.forEach((term) => {
+    const match = String(text || "").match(new RegExp(`\\b${escapeRegExp(term)}\\b`, "i"));
+    const display = match?.[0] || term;
+    const key = display.toLowerCase();
+    if (!seenTerms.has(key)) {
+      seenTerms.add(key);
+      displayTerms.push(display);
+    }
+  });
+  if (displayTerms.length < 4) return [];
+
+  const questions = [];
+  const used = new Set();
+  for (const sentence of sentences) {
+    const sentenceTerms = [...new Set(getWords(sentence))]
+      .filter((term) => sourceTerms.includes(term));
+    for (const term of sentenceTerms) {
+      const matcher = createWholeWordMatcher(term);
+      const match = String(sentence || "").match(matcher);
+      if (!match) continue;
+      const answer = match[0];
+      const key = `${sentence.toLowerCase()}::${answer.toLowerCase()}`;
+      if (used.has(key)) continue;
+      used.add(key);
+
+      const candidates = displayTerms.filter((candidate) => candidate.toLowerCase() !== answer.toLowerCase());
+      if (candidates.length < 3) continue;
+      const offset = questions.length % candidates.length;
+      const distractors = [...candidates.slice(offset), ...candidates.slice(0, offset)].slice(0, 3);
+      const sourceText = String(sentence || "").trim();
+      questions.push({
+        prompt: `Which source term correctly completes this saved note: “${sourceText.replace(matcher, "_____")}”?`,
+        choices: shuffle([answer, ...distractors]),
+        answer,
+        topic: makeConceptLabel(sourceText),
+        questionStyle: "Understand",
+        cognitiveLevel: "recall",
+        skill: `Recall ${makeConceptLabel(sourceText)}`,
+        whyThisMatters: "This checks the exact relationship stated in the saved source.",
+        misconceptionTested: "",
+        hint: "Use the term that appears in the saved note and makes the full statement accurate.",
+        explanation: sourceText,
+        sourceText
+      });
+      if (questions.length >= maxQuestions) return questions;
+    }
+  }
+  return questions;
 }
 
 
@@ -2902,9 +3577,13 @@ function lowercaseFirst(value) {
   const text = String(value || "").trim();
   return text ? text.charAt(0).toLowerCase() + text.slice(1) : "which option is correct?";
 }
-function findSentence(sentences, pattern) {
-  const lowerPattern = String(pattern || "").toLowerCase();
-  return sentences.find((sentence) => sentence.toLowerCase().includes(lowerPattern)) || "";
+
+function hasWholeWord(value, word) {
+  return createWholeWordMatcher(word).test(String(value || ""));
+}
+
+function createWholeWordMatcher(value) {
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(String(value || ""))}(?![\\p{L}\\p{N}_])`, "iu");
 }
 
 function simplifyStatement(sentence) {
@@ -2947,7 +3626,18 @@ async function getActiveTab() {
 
 function normalizePageUrl(value) {
   try {
-    return new URL(String(value || "")).href;
+    const url = new URL(String(value || ""));
+    const hash = url.hash || "";
+    if (hash.includes(":~:text=")) {
+      const anchor = hash.split(":~:text=")[0];
+      url.hash = anchor === "#" ? "" : anchor;
+    } else if (/^#(?:page=\d+|t=\d+)/i.test(hash)) {
+      // PDF page/search and media-time fragments are navigation state, not a
+      // different source. Preserve ordinary hashes because some SPAs route
+      // to genuinely different lessons through them.
+      url.hash = "";
+    }
+    return url.href;
   } catch {
     return "";
   }
@@ -2957,6 +3647,38 @@ function samePageUrl(firstUrl, secondUrl) {
   const first = normalizePageUrl(firstUrl);
   const second = normalizePageUrl(secondUrl);
   return Boolean(first && second && first === second);
+}
+
+function getEvidenceHighlightExcerpt(value, maxLength = 220) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  if (text.length <= maxLength) return text;
+  const cutoff = text.lastIndexOf(" ", maxLength);
+  return text.slice(0, cutoff >= 80 ? cutoff : maxLength).trim();
+}
+
+function encodeTextFragmentValue(value) {
+  return encodeURIComponent(value).replace(/[-!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function buildSourceHighlightUrl(value, sourceText) {
+  const safeUrl = normalizeSafeExternalUrl(value, { allowFile: true });
+  const excerpt = getEvidenceHighlightExcerpt(sourceText);
+  if (!safeUrl || !excerpt) return safeUrl;
+  const url = new URL(safeUrl);
+  const anchor = url.hash.replace(/^#/, "").split(":~:text=")[0];
+  url.hash = `${anchor}:~:text=${encodeTextFragmentValue(excerpt)}`;
+  return url.href;
+}
+
+function buildPdfEvidenceUrl(value, pageValue, quote = "") {
+  const safeUrl = normalizeSafeExternalUrl(value, { allowFile: true });
+  const page = Math.round(Number(pageValue) || 0);
+  if (!safeUrl || page < 1) return safeUrl;
+  const url = new URL(safeUrl);
+  const excerpt = getEvidenceHighlightExcerpt(quote, 140);
+  url.hash = `page=${page}${excerpt ? `&search=${encodeURIComponent(excerpt)}` : ""}`;
+  return url.href;
 }
 
 function makeContentFingerprint(value) {
@@ -3203,9 +3925,11 @@ async function extractCurrentPage() {
   throw new Error("The active page could not be read safely. Try again from the source page.");
 }
 function renderNote(note) {
+  resetStatus();
   state.currentSession = null;
   state.currentArtifact = note;
   state.currentExportItem = note;
+  state.submitted = false;
   elements.views.forEach((view) => {
     view.classList.remove("active");
     view.setAttribute("aria-hidden", "true");
@@ -3214,6 +3938,8 @@ function renderNote(note) {
   elements.resultView.classList.remove("hidden");
   elements.resultView.setAttribute("aria-hidden", "false");
   elements.quizBlock.classList.add("hidden");
+  elements.quizContainer.replaceChildren();
+  elements.quizProgress.textContent = "";
   elements.scoreBlock.classList.add("hidden");
   elements.submitQuizButton.classList.add("hidden");
   elements.saveSessionButton.classList.add("hidden");
@@ -3224,7 +3950,7 @@ function renderNote(note) {
   elements.sessionTitle.textContent = note.title;
   elements.sessionMeta.textContent = `${formatSessionSource(note)} | ${note.terms?.length || 0} key terms | ${note.generator || "ai"}`;
   const conciseSummary = compactSummaryForDisplay(note.summary || []);
-  elements.summaryList.replaceChildren(...conciseSummary.map((item) => createElement("li", item)));
+  renderSummaryPoints(conciseSummary);
   renderCheatSheet(note);
   renderNoteVisual({ ...note, summary: conciseSummary });
   elements.wrongAnswerList.replaceChildren();
@@ -3239,13 +3965,16 @@ function renderNoteVisual(note) {
 function normalizeStudyCheatSheet(artifact = {}, sourceContext = {}) {
   const api = globalThis.ExamCramCheatSheet;
   if (!api?.normalizeCheatSheet) return artifact.cheatSheet || null;
+  const normalize = sourceContext.forRender && typeof api.normalizeCheatSheetForRender === "function"
+    ? api.normalizeCheatSheetForRender
+    : api.normalizeCheatSheet;
   const binding = artifact.sourceBinding && typeof artifact.sourceBinding === "object"
     ? artifact.sourceBinding
     : {};
   const sourceType = binding.sourceType || binding.type || sourceContext.sourceType || artifact.sourceType || "webpage";
   const sourceUrl = binding.url || sourceContext.sourceUrl || artifact.sourceUrl || "";
   const sourceTitle = binding.title || sourceContext.title || artifact.title || "Study source";
-  return api.normalizeCheatSheet(artifact.cheatSheet, {
+  return normalize(artifact.cheatSheet, {
     artifact,
     title: artifact.title || sourceTitle,
     sourceTitle,
@@ -3266,7 +3995,14 @@ function normalizeStudyCheatSheet(artifact = {}, sourceContext = {}) {
 
 function renderCheatSheet(artifact = {}) {
   if (!elements.cheatSheetBlock || !elements.cheatSheetTableHost) return;
-  const sheet = normalizeStudyCheatSheet(artifact);
+  let sheet;
+  try {
+    sheet = normalizeStudyCheatSheet(artifact, { forRender: true });
+  } catch {
+    elements.cheatSheetBlock.classList.add("hidden");
+    elements.cheatSheetTableHost.replaceChildren();
+    return;
+  }
   const api = globalThis.ExamCramCheatSheet;
   if (!api?.hasUsableCheatSheet?.(sheet)) {
     elements.cheatSheetBlock.classList.add("hidden");
@@ -3274,7 +4010,6 @@ function renderCheatSheet(artifact = {}) {
     return;
   }
 
-  artifact.cheatSheet = sheet;
   elements.cheatSheetBlock.classList.remove("hidden");
   if (elements.cheatSheetIntro) {
     elements.cheatSheetIntro.textContent = `${sheet.caption} Use the evidence column to verify where each idea came from.`;
@@ -3323,6 +4058,14 @@ function renderCheatSheet(artifact = {}) {
 function renderCheatSheetEvidence(cell, evidence, artifact) {
   const label = createElement("strong", evidence.label || "Source passage", "cheat-sheet-evidence-label");
   cell.append(label);
+  if (evidence.unavailable) {
+    cell.append(createElement(
+      "span",
+      "This saved row could not be re-verified, so no source action is available.",
+      "cheat-sheet-evidence-anchor"
+    ));
+    return;
+  }
   if (evidence.anchor) cell.append(createElement("span", `“${evidence.anchor}”`, "cheat-sheet-evidence-anchor"));
 
   const actions = document.createElement("span");
@@ -3334,29 +4077,45 @@ function renderCheatSheetEvidence(cell, evidence, artifact) {
     jumpButton.textContent = `Jump to ${formatTimestamp(evidence.timestampSeconds)}`;
     jumpButton.addEventListener("click", async () => {
       jumpButton.disabled = true;
-      const binding = artifact.sourceBinding || {};
-      const result = await jumpToVideoTimestamp(evidence.timestampSeconds, {
-        expectedSourceUrl: evidence.url || binding.url || artifact.sourceUrl,
-        sourceTabId: Number.isInteger(artifact.sourceTabId) ? artifact.sourceTabId : binding.tabId,
-        videoMediaId: artifact.videoMediaId || binding.mediaId || ""
-      });
-      showStatus(result.message, !result.ok);
+      const result = await openEvidenceAtSource(evidence, artifact);
+      showStatus(result.message, !result.found);
       jumpButton.disabled = false;
     });
     actions.append(jumpButton);
   }
-  const safeEvidenceUrl = normalizeSafeExternalUrl(evidence.url);
+  const pdfPage = Math.round(Number(evidence.sourcePage ?? evidence.pageNumber) || 0);
+  if (evidence.documentType === "pdf" && pdfPage > 0) {
+    const pageButton = document.createElement("button");
+    pageButton.type = "button";
+    pageButton.className = "text-button cheat-sheet-source-action";
+    pageButton.textContent = `Review PDF page ${pdfPage}`;
+    pageButton.addEventListener("click", async () => {
+      pageButton.disabled = true;
+      const result = await openEvidenceAtSource({ ...evidence, sourcePage: pdfPage }, artifact);
+      showStatus(result.message, !result.found);
+      pageButton.disabled = false;
+    });
+    actions.append(pageButton);
+  }
+  const isPdfEvidence = evidence.documentType === "pdf";
+  const safeEvidenceUrl = normalizeSafeExternalUrl(evidence.url, { allowFile: isPdfEvidence });
   if (safeEvidenceUrl) {
     const sourceLink = document.createElement("a");
     sourceLink.className = "cheat-sheet-source-action";
     sourceLink.href = safeEvidenceUrl;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
-    sourceLink.textContent = evidence.sourceType === "video" ? "Open video" : "Open source";
+    sourceLink.textContent = evidence.sourceType === "video"
+      ? "Open video"
+      : isPdfEvidence
+        ? `Open and find sentence on page ${pdfPage || 1}`
+        : evidence.anchor
+          ? "Open and highlight source"
+          : "Open source";
     sourceLink.addEventListener("click", async (event) => {
       event.preventDefault();
-      await persistCurrentSessionDraft();
-      await openSafeExternalUrl(safeEvidenceUrl);
+      const result = await openEvidenceAtSource({ ...evidence, url: safeEvidenceUrl, sourcePage: pdfPage }, artifact);
+      showStatus(result.message, !result.found);
     });
     actions.append(sourceLink);
   }
@@ -3433,7 +4192,7 @@ function normalizeVisualModelForRender(value, summary = []) {
     : "system";
   const fallbackNotes = compactSummaryForDisplay(summary, 6);
   const rawNodes = Array.isArray(model.nodes) && model.nodes.length
-    ? model.nodes.slice(0, 8)
+    ? model.nodes.slice(0, 10)
     : fallbackNotes.map((detail, index) => ({
       id: `idea-${index + 1}`,
       label: makeConceptLabel(detail) || `Idea ${index + 1}`,
@@ -3487,6 +4246,7 @@ function normalizeVisualModelForRender(value, summary = []) {
       role: visualText(source.role || source.type, "concept", 40),
       sourceId: visualText(source.sourceId || source.sourceRef?.sourceId, "", 100),
       sourceSegmentId: visualText(source.sourceSegmentId || source.sourceRef?.segmentId, "", 90),
+      sourcePage: Math.max(0, Math.round(Number(source.sourcePage ?? source.sourceRef?.sourcePage ?? source.sourceRef?.pageNumber) || 0)),
       sourceTimestamp: Number.isFinite(Number(source.sourceTimestamp ?? Number(source.sourceRef?.startMs) / 1000))
         ? Math.max(0, Math.round(Number(source.sourceTimestamp ?? Number(source.sourceRef?.startMs) / 1000)))
         : null,
@@ -3518,7 +4278,8 @@ function normalizeVisualModelForRender(value, summary = []) {
       id,
       from,
       to,
-      label: visualText(source.label || source.relationship, "connects to", 55)
+      label: visualText(source.label || source.relationship, "connects to", 55),
+      type: normalizeClientVisualEdgeType(source.type)
     };
   }).filter(Boolean);
   if (!edges.length && nodes.length > 1) {
@@ -3526,7 +4287,8 @@ function normalizeVisualModelForRender(value, summary = []) {
       id: `${nodes[index].id}::${node.id}::${index + 1}`,
       from: nodes[index].id,
       to: node.id,
-      label: kind === "timeline" || kind === "flow" ? "then" : "connects"
+      label: kind === "timeline" || kind === "flow" ? "then" : "connects",
+      type: kind === "timeline" || kind === "flow" ? "precedes" : "related"
     }));
   }
 
@@ -3569,6 +4331,12 @@ function normalizeVisualModelForRender(value, summary = []) {
     check,
     suggestedQuestions
   };
+}
+
+function normalizeClientVisualEdgeType(value) {
+  const allowed = new Set(["prerequisite_of", "related", "causes", "enables", "precedes", "contrasts", "part_of", "transforms"]);
+  const type = String(value || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  return allowed.has(type) ? type : "related";
 }
 
 function normalizeVisualScenario(value, index, nodes, edges, resolveNodeId) {
@@ -3676,7 +4444,7 @@ function synthesizeVisualModel(lesson = {}, summary = []) {
   let edges = [];
 
   if (Array.isArray(conceptBlock?.nodes) && conceptBlock.nodes.length) {
-    nodes = conceptBlock.nodes.slice(0, 8).map((node, index) => ({
+    nodes = conceptBlock.nodes.slice(0, 10).map((node, index) => ({
       id: node.id || `concept-${index + 1}`,
       label: node.label || `Concept ${index + 1}`,
       detail: node.detail || conceptBlock.intro,
@@ -3687,7 +4455,7 @@ function synthesizeVisualModel(lesson = {}, summary = []) {
     edges = Array.isArray(conceptBlock.edges) ? conceptBlock.edges : [];
   } else if (Array.isArray(processBlock?.steps) && processBlock.steps.length) {
     kind = "flow";
-    nodes = processBlock.steps.slice(0, 8).map((step, index) => ({
+    nodes = processBlock.steps.slice(0, 10).map((step, index) => ({
       id: `step-${index + 1}`,
       label: step.label || `Step ${index + 1}`,
       detail: step.detail,
@@ -3697,7 +4465,7 @@ function synthesizeVisualModel(lesson = {}, summary = []) {
     }));
   } else if (Array.isArray(formulaBlock?.variables) && formulaBlock.variables.length) {
     kind = "formula";
-    nodes = formulaBlock.variables.slice(0, 8).map((variable, index) => ({
+    nodes = formulaBlock.variables.slice(0, 10).map((variable, index) => ({
       id: `variable-${index + 1}`,
       label: variable.symbol || `Term ${index + 1}`,
       detail: variable.meaning,
@@ -4652,7 +5420,8 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
   );
   const currentValue = scenario?.nodeValues?.[node.id];
   if (currentValue) header.append(createElement("span", currentValue, "vin-detail-value"));
-  const isPdfDocument = context.documentType === "pdf" || context.sourceBinding?.documentType === "pdf";
+  const nodeEvidence = resolveEvidenceDescriptor(node, context);
+  const isPdfDocument = nodeEvidence.documentType === "pdf";
 
   const content = document.createElement("div");
   content.className = "vin-detail-content";
@@ -4711,11 +5480,8 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
   const sourceStatus = document.createElement("span");
   sourceStatus.className = "vin-source-status";
   sourceStatus.setAttribute("aria-live", "polite");
-  const detailSourceUrl = node.sourceRef?.url || context.sourceUrl || "";
-  const pinnedBinding = context.sourceBinding || {};
-  const pinnedSourceTabId = Number.isInteger(context.sourceTabId) ? context.sourceTabId : pinnedBinding.tabId;
-  const pinnedMediaId = context.videoMediaId || pinnedBinding.mediaId || "";
-  if (!isPdfDocument && ["webpage", "collection"].includes(context.sourceType) && node.sourceText && detailSourceUrl) {
+  const detailSourceUrl = nodeEvidence.url;
+  if (!isPdfDocument && nodeEvidence.sourceType === "webpage" && node.sourceText && detailSourceUrl) {
     const findButton = document.createElement("button");
     findButton.type = "button";
     findButton.className = "text-button vin-source-button";
@@ -4724,49 +5490,41 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
     findButton.addEventListener("click", async () => {
       findButton.disabled = true;
       sourceStatus.textContent = "Looking for this passage in the original page...";
-      const result = await highlightSourceText(node.sourceText, {
-        announce: false,
-        expectedSourceUrl: detailSourceUrl,
-        sourceTabId: context.sourceType === "webpage" ? pinnedSourceTabId : null
-      });
+      const result = await openEvidenceAtSource(node, context);
       sourceStatus.textContent = result.message;
       findButton.disabled = false;
     });
     actions.append(findButton);
   }
-  if (context.sourceType === "video" && Number.isFinite(node.sourceTimestamp)) {
+  if (nodeEvidence.sourceType === "video" && Number.isFinite(nodeEvidence.timestampSeconds)) {
     const jumpButton = document.createElement("button");
     jumpButton.type = "button";
     jumpButton.className = "secondary timestamp-button";
-    jumpButton.textContent = `Jump to ${formatTimestamp(node.sourceTimestamp)}`;
+    jumpButton.textContent = `Jump to ${formatTimestamp(nodeEvidence.timestampSeconds)}`;
     jumpButton.addEventListener("click", async () => {
       jumpButton.disabled = true;
-      const result = await jumpToVideoTimestamp(node.sourceTimestamp, {
-        expectedSourceUrl: context.sourceUrl,
-        sourceTabId: pinnedSourceTabId,
-        videoMediaId: pinnedMediaId
-      });
+      const result = await openEvidenceAtSource(node, context);
       sourceStatus.textContent = result.message;
       jumpButton.disabled = false;
     });
     actions.append(jumpButton);
   }
-  const safeDetailSourceUrl = normalizeSafeExternalUrl(detailSourceUrl);
+  const safeDetailSourceUrl = normalizeSafeExternalUrl(detailSourceUrl, { allowFile: isPdfDocument });
   if (safeDetailSourceUrl) {
     const sourceLink = document.createElement("a");
     sourceLink.className = "vin-source-link";
     sourceLink.href = safeDetailSourceUrl;
     sourceLink.target = "_blank";
     sourceLink.rel = "noopener noreferrer";
-    sourceLink.textContent = context.sourceType === "video"
+    sourceLink.textContent = nodeEvidence.sourceType === "video"
       ? "Open original video"
       : context.sourceType === "collection"
         ? "Open cited source"
-        : isPdfDocument ? "Open original PDF" : "Open original page";
+        : isPdfDocument ? "Open PDF and find sentence" : nodeEvidence.quote ? "Open and highlight source" : "Open original page";
     sourceLink.addEventListener("click", async (event) => {
       event.preventDefault();
-      await persistCurrentSessionDraft();
-      await openSafeExternalUrl(safeDetailSourceUrl);
+      const result = await openEvidenceAtSource(node, context);
+      sourceStatus.textContent = result.message;
     });
     actions.append(sourceLink);
   }
@@ -5003,8 +5761,8 @@ function deriveVisualFollowupEndpoint(value) {
 function deriveBackendEndpoint(value, routeName) {
   try {
     const endpoint = new URL(value || DEFAULT_API_ENDPOINT);
-    if (/\/api\/(?:study-session|notes|quiz|visual-followup|journey-summary|video-transcript|transcript-chunk)\/?$/i.test(endpoint.pathname)) {
-      endpoint.pathname = endpoint.pathname.replace(/\/api\/(?:study-session|notes|quiz|visual-followup|journey-summary|video-transcript|transcript-chunk)\/?$/i, `/api/${routeName}`);
+    if (/\/api\/(?:study-session|notes|quiz|recovery-quiz|visual-followup|journey-summary|video-transcript|transcript-chunk)\/?$/i.test(endpoint.pathname)) {
+      endpoint.pathname = endpoint.pathname.replace(/\/api\/(?:study-session|notes|quiz|recovery-quiz|visual-followup|journey-summary|video-transcript|transcript-chunk)\/?$/i, `/api/${routeName}`);
     } else {
       endpoint.pathname = `/api/${routeName}`;
     }
@@ -5409,7 +6167,51 @@ function renderArtifactSourceBanner(item) {
   );
 }
 
+function isRenderableQuizArtifact(artifact) {
+  if (!artifact || !Array.isArray(artifact.questions) || artifact.questions.length === 0) return false;
+  return artifact.questions.every((question) => {
+    const prompt = typeof question?.prompt === "string" ? question.prompt.trim() : "";
+    const answer = typeof question?.answer === "string" ? question.answer.trim() : "";
+    const choices = Array.isArray(question?.choices)
+      ? question.choices.filter((choice) => typeof choice === "string" && choice.trim())
+      : [];
+    return Boolean(prompt && answer && choices.length >= 2 && choices.includes(answer));
+  });
+}
+
+function sanitizeDraftArtifact(artifact = {}, options = {}) {
+  if (!options.forceNote && isRenderableQuizArtifact(artifact)) return artifact;
+  const note = { ...artifact };
+  [
+    "quizId", "questions", "answers", "score", "submittedAt", "questionAttempts",
+    "wrongAnswers", "weakTopics", "weakConceptDiagnosis", "attemptType",
+    "recoveryTargetConceptId", "recoveryComposition", "quizGeneratedAt", "usedLocalQuizFallback"
+  ].forEach((key) => delete note[key]);
+  if (note.kind === "quiz") note.kind = "note";
+  return note;
+}
+
+function renderSummaryPoints(summary = []) {
+  const points = Array.isArray(summary) ? summary.filter(Boolean) : [];
+  elements.summaryList.replaceChildren(...points.map((item) => createElement("li", item)));
+  elements.keyPointsBlock?.classList.toggle("hidden", points.length === 0);
+}
+
 function renderSession(session) {
+  if (!isRenderableQuizArtifact(session)) {
+    renderNote(sanitizeDraftArtifact(session));
+    showStatus("The note was restored, but its quiz did not finish and was not shown.");
+    return false;
+  }
+  session = ensureStoredQuizIdentity(session);
+  session = {
+    ...session,
+    answers: session.answers && typeof session.answers === "object" && !Array.isArray(session.answers)
+      ? session.answers
+      : {}
+  };
+  resetStatus();
+  state.currentSession = session;
   state.currentArtifact = session;
   state.currentExportItem = session;
   elements.views.forEach((view) => {
@@ -5419,7 +6221,7 @@ function renderSession(session) {
   updateStudyModeSelection("");
   elements.resultView.classList.remove("hidden");
   elements.resultView.setAttribute("aria-hidden", "false");
-  elements.quizBlock.classList.remove("hidden");
+  elements.quizBlock.classList.add("hidden");
   elements.saveSessionButton.classList.remove("hidden");
   elements.generateQuizButton?.classList.remove("hidden");
   if (elements.generateQuizButton) elements.generateQuizButton.textContent = "Regenerate quiz";
@@ -5429,13 +6231,20 @@ function renderSession(session) {
   renderCheatSheet(session);
   renderQuizVisual({ ...session, summary: conciseSummary });
   elements.scoreBlock.classList.add("hidden");
-  elements.submitQuizButton.classList.remove("hidden");
+  elements.submitQuizButton.classList.add("hidden");
 
   elements.sessionTitle.textContent = session.title;
   elements.sessionMeta.textContent = `${formatDifficulty(session.difficulty)} | ${formatQuizStyle(session.quizStyle)} | ${formatSessionSource(session)} | ${session.questions.length} questions | ${session.generator || "ai"}`;
-  elements.summaryList.replaceChildren(...conciseSummary.map((item) => createElement("li", item)));
+  renderSummaryPoints(conciseSummary);
   elements.quizProgress.textContent = `0/${session.questions.length} answered`;
-  renderQuiz(session);
+  try {
+    renderQuiz(session);
+  } catch {
+    renderNote(sanitizeDraftArtifact(session, { forceNote: true }));
+    showStatus("The note was restored, but its quiz could not be displayed and was not shown.", true);
+    return false;
+  }
+  elements.quizBlock.classList.remove("hidden");
   Object.entries(session.answers || {}).forEach(([questionId, answer]) => {
     const input = document.querySelector(`input[name="${cssEscape(questionId)}"][value="${cssEscape(answer)}"]`);
     if (input) input.checked = true;
@@ -5445,8 +6254,42 @@ function renderSession(session) {
     markQuizAnswers();
     renderScore();
     elements.submitQuizButton.classList.add("hidden");
+  } else {
+    elements.submitQuizButton.classList.remove("hidden");
   }
   void persistCurrentSessionDraft();
+  return true;
+}
+
+function ensureStoredQuizIdentity(session) {
+  if (!session || !Array.isArray(session.questions)) return session;
+  const existingQuizId = String(session.quizId || "").trim();
+  const alreadyValid = existingQuizId && session.questions.every((question, index) => (
+    String(question?.id || "") === `${existingQuizId}-q-${String(index + 1).padStart(3, "0")}`
+  ));
+  if (alreadyValid) return session;
+  const quizId = `quiz-${crypto.randomUUID()}`;
+  const idMap = new Map();
+  const questions = session.questions.map((question, index) => {
+    const id = `${quizId}-q-${String(index + 1).padStart(3, "0")}`;
+    idMap.set(question.id, id);
+    return { ...question, id };
+  });
+  const answers = Object.fromEntries(Object.entries(session.answers || {}).map(([questionId, answer]) => [
+    idMap.get(questionId) || questionId,
+    answer
+  ]));
+  const wrongAnswers = (session.wrongAnswers || []).map((question) => ({
+    ...question,
+    id: idMap.get(question.id) || question.id
+  }));
+  const questionAttempts = (session.questionAttempts || []).map((attempt) => ({
+    ...attempt,
+    quizId,
+    questionId: idMap.get(attempt.questionId) || attempt.questionId,
+    attemptId: `${quizId}:${attempt.answeredAt || session.submittedAt || "legacy"}:${idMap.get(attempt.questionId) || attempt.questionId}`
+  }));
+  return { ...session, quizId, questions, answers, wrongAnswers, questionAttempts };
 }
 function renderQuiz(session) {
   const cards = session.questions.map((question, index) => {
@@ -5504,116 +6347,50 @@ function renderQuiz(session) {
 }
 
 async function revealHintWithSource(question, hintBox, hintButton) {
-  if (state.currentSession?.sourceType === "video") {
-    const timestamp = Number(question.sourceTimestamp ?? Number(question.sourceRef?.startMs) / 1000);
-    hintBox.classList.remove("hidden");
-    const children = [
-      createElement("strong", "Hint"),
-      createElement("p", question.hint || question.sourceText || "Review the related caption segment."),
-      createElement("p", question.sourceRef?.quote || question.sourceText || "The hint is grounded in the video transcript.", "hint-source-tip"),
-      createElement(
-        "p",
-        state.currentSession.timestampConfidence === "AI-estimated"
-          ? "Time confidence: AI-estimated from tab audio."
-          : state.currentSession.timestampConfidence === "user-provided"
-            ? "Time confidence: user-provided; verify it against the video."
-            : "Time confidence: publisher-caption-grounded.",
-        "hint-source-tip"
-      )
-    ];
-    if (Number.isFinite(timestamp)) {
-      const jumpButton = document.createElement("button");
-      jumpButton.type = "button";
-      jumpButton.className = "secondary timestamp-button";
-      jumpButton.textContent = `Jump to ${formatTimestamp(timestamp)}`;
-      jumpButton.addEventListener("click", async () => {
-        jumpButton.disabled = true;
-        const result = await jumpToVideoTimestamp(timestamp, {
-          expectedSourceUrl: state.currentSession.sourceUrl,
-          sourceTabId: state.currentSession.sourceTabId,
-          videoMediaId: state.currentSession.videoMediaId
-        });
-        showStatus(result.message, !result.found);
-        jumpButton.disabled = false;
-      });
-      children.push(jumpButton);
-    } else {
-      children.push(createElement("p", "This caption could not be tied to a safe timestamp.", "hint-source-tip"));
-    }
-    hintBox.replaceChildren(...children);
-    hintButton.disabled = false;
-    return;
-  }
-  if (state.currentSession?.sourceType === "collection") {
-    hintBox.classList.remove("hidden");
-    const sourceUrl = question.sourceRef?.url || "";
-    const safeSourceUrl = normalizeSafeExternalUrl(sourceUrl);
-    const children = [
-      createElement("strong", "Hint"),
-      createElement("p", question.hint || question.sourceText || "Review the cited chapter source."),
-      createElement("p", question.sourceRef?.quote || question.sourceText || "This hint was matched to a saved source.", "hint-source-tip")
-    ];
-    if (safeSourceUrl) {
-      const openButton = document.createElement("button");
-      openButton.type = "button";
-      openButton.className = "secondary timestamp-button";
-      openButton.textContent = `Open ${question.sourceRef?.title || "cited source"}`;
-      openButton.addEventListener("click", async () => {
-        await persistCurrentSessionDraft();
-        await openSafeExternalUrl(safeSourceUrl);
-      });
-      children.push(openButton);
-    }
-    hintBox.replaceChildren(...children);
-    hintButton.disabled = false;
-    return;
-  }
-  if (state.currentSession?.sourceBinding?.documentType === "pdf") {
-    hintBox.classList.remove("hidden");
-    const sourceUrl = state.currentSession.sourceUrl || state.currentSession.sourceBinding.url || "";
-    const safeSourceUrl = normalizeSafeExternalUrl(sourceUrl, { allowFile: true });
-    const children = [
-      createElement("strong", "Hint"),
-      createElement("p", question.hint || question.sourceText || "Review the related PDF passage."),
-      createElement("p", question.sourceText || question.explanation || "This hint is grounded in the PDF text saved with the note.", "hint-source-tip")
-    ];
-    if (safeSourceUrl) {
-      const openButton = document.createElement("button");
-      openButton.type = "button";
-      openButton.className = "secondary timestamp-button";
-      openButton.textContent = "Open original PDF";
-      openButton.addEventListener("click", async () => {
-        await persistCurrentSessionDraft();
-        await openSafeExternalUrl(safeSourceUrl, { allowFile: true });
-      });
-      children.push(openButton);
-    }
-    hintBox.replaceChildren(...children);
-    hintButton.disabled = false;
-    return;
-  }
+  const context = state.currentSession || {};
+  const descriptor = resolveEvidenceDescriptor(question, context);
+  const children = [
+    createElement("strong", "Hint"),
+    createElement("p", question.hint || question.sourceText || "Review the cited evidence before choosing."),
+    createElement("p", descriptor.quote || "This hint is grounded in the saved note evidence.", "hint-source-tip")
+  ];
   hintBox.classList.remove("hidden");
-  hintBox.replaceChildren(
-    createElement("strong", "Hint"),
-    createElement("p", question.hint || question.sourceText || "Review the related source section before choosing."),
-    createElement("p", "Looking for the matching sentence in the original page...", "hint-source-tip")
-  );
-  hintButton.disabled = true;
 
-  const result = await highlightSourceText(question.sourceText || question.explanation || question.prompt, {
-    announce: false,
-    expectedSourceUrl: state.currentSession?.sourceUrl,
-    sourceTabId: state.currentSession?.sourceTabId
-  });
-  const sourceTip = result.found
-    ? "The matching sentence is highlighted in yellow on the original page. Read it, then return here to answer."
-    : `${result.message} Use the hint to compare the choices with the source rule.`;
+  if (descriptor.sourceType === "video") {
+    children.push(createElement(
+      "p",
+      context.timestampConfidence === "AI-estimated"
+        ? "Time confidence: AI-estimated from tab audio."
+        : context.timestampConfidence === "user-provided"
+          ? "Time confidence: user-provided; verify it against the video."
+          : "Time confidence: publisher-caption-grounded.",
+      "hint-source-tip"
+    ));
+  } else if (descriptor.documentType === "pdf" && descriptor.sourcePage > 0) {
+    children.push(createElement("p", `Supporting evidence: PDF page ${descriptor.sourcePage}.`, "hint-source-tip"));
+  }
 
-  hintBox.replaceChildren(
-    createElement("strong", "Hint"),
-    createElement("p", question.hint || question.sourceText || "Review the related source section before choosing."),
-    createElement("p", sourceTip, "hint-source-tip")
-  );
+  if (descriptor.url) {
+    const openButton = document.createElement("button");
+    openButton.type = "button";
+    openButton.className = "secondary timestamp-button";
+    openButton.textContent = descriptor.sourceType === "video" && Number.isFinite(descriptor.timestampSeconds)
+      ? `Jump to ${formatTimestamp(descriptor.timestampSeconds)}`
+      : descriptor.documentType === "pdf" && descriptor.sourcePage > 0
+        ? `Open PDF page ${descriptor.sourcePage} and find sentence`
+        : descriptor.quote ? "Open and highlight source" : "Open source";
+    openButton.addEventListener("click", async () => {
+      openButton.disabled = true;
+      const result = await openEvidenceAtSource(question, context);
+      showStatus(result.message, !result.found);
+      openButton.disabled = false;
+    });
+    children.push(openButton);
+  } else {
+    children.push(createElement("p", "This item comes from saved notes, so there is no external page to open.", "hint-source-tip"));
+  }
+
+  hintBox.replaceChildren(...children);
   hintButton.disabled = false;
 }
 function updateQuizProgress() {
@@ -5644,11 +6421,24 @@ async function handleSubmitQuiz() {
     }
   });
 
-  const weakTopics = [...new Set(wrongAnswers.map((item) => item.topic))];
+  const weakTopics = [...new Set(wrongAnswers.map((item) => item.topic).filter(Boolean))];
+  const submittedAt = new Date().toISOString();
   state.currentSession.score = Math.round((correctCount / total) * 100);
   state.currentSession.wrongAnswers = wrongAnswers;
   state.currentSession.weakTopics = weakTopics;
-  state.currentSession.submittedAt = new Date().toISOString();
+  state.currentSession.submittedAt = submittedAt;
+  state.currentSession.questionAttempts = buildQuestionAttempts(state.currentSession, submittedAt);
+  if (globalThis.ExamCramJourney?.rankWeakConcepts) {
+    const journey = await getJourney().catch(() => null);
+    if (journey) {
+      state.currentSession.weakConceptDiagnosis = globalThis.ExamCramJourney.rankWeakConcepts(journey, {
+        noteId: state.currentSession.noteId || state.currentSession.id,
+        sourceFingerprint: state.currentSession.sourceFingerprint || state.currentSession.sourceBinding?.fingerprint || "",
+        currentAttempts: state.currentSession.questionAttempts,
+        limit: 10
+      });
+    }
+  }
   state.submitted = true;
   await persistCurrentSessionDraft();
 
@@ -5659,14 +6449,155 @@ async function handleSubmitQuiz() {
   try {
     const recorded = await recordLearningItem(
       state.currentSession,
-      state.currentSession.journeyChapterId || state.currentSession.journeyChapterTitle
+      state.currentSession.journeyChapterId || state.currentSession.journeyChapterTitle,
+      null,
+      state.currentSession.questionAttempts
     );
     if (recorded?.chapterId) state.currentSession.journeyChapterId = recorded.chapterId;
+    if (recorded?.journey && globalThis.ExamCramJourney?.rankWeakConcepts) {
+      state.currentSession.weakConceptDiagnosis = globalThis.ExamCramJourney.rankWeakConcepts(recorded.journey, {
+        noteId: state.currentSession.noteId || state.currentSession.id,
+        sourceFingerprint: state.currentSession.sourceFingerprint || state.currentSession.sourceBinding?.fingerprint || "",
+        currentAttempts: state.currentSession.questionAttempts,
+        limit: 10
+      });
+      renderScore();
+    }
+    await saveLibraryItem(state.currentSession);
     await persistCurrentSessionDraft();
     showStatus("Quiz complete and saved to your Journey.");
   } catch (error) {
     showStatus(`Quiz complete, but Journey saving failed. Use Save session and retry from the Library. ${error.message || ""}`.trim(), true);
   }
+}
+
+function buildQuestionAttempts(session, answeredAt) {
+  const quizId = String(session.quizId || `quiz-${crypto.randomUUID()}`);
+  session.quizId = quizId;
+  const noteId = String(session.noteId || session.id || "");
+  const sourceFingerprint = String(session.sourceFingerprint || session.sourceBinding?.fingerprint || "");
+  const conceptLabels = new Map((session.visualLesson?.visualModel?.nodes || []).map((node) => [node.id, node.label]));
+  return (session.questions || []).map((question) => {
+    const studentAnswer = session.answers?.[question.id];
+    return {
+      attemptId: `${quizId}:${answeredAt}:${question.id}`,
+      quizId,
+      questionId: question.id,
+      noteId,
+      sourceFingerprint,
+      primaryConceptId: question.primaryConceptId,
+      relatedConceptIds: Array.isArray(question.relatedConceptIds) ? question.relatedConceptIds : [],
+      conceptLabel: conceptLabels.get(question.primaryConceptId) || question.topic || question.primaryConceptId,
+      sourceRef: question.sourceRef || null,
+      sourcePage: Number(question.sourcePage || question.sourceRef?.sourcePage) || 0,
+      correctAnswer: question.answer,
+      studentAnswer,
+      result: studentAnswer === question.answer ? "correct" : "incorrect",
+      answeredAt,
+      attemptType: session.attemptType === "recovery" ? "recovery" : "normal",
+      targetConceptId: session.attemptType === "recovery" ? session.recoveryTargetConceptId || "" : ""
+    };
+  });
+}
+
+function resolveEvidenceDescriptor(evidence = {}, context = {}) {
+  const sourceRef = evidence?.sourceRef && typeof evidence.sourceRef === "object" ? evidence.sourceRef : {};
+  const binding = context?.sourceBinding && typeof context.sourceBinding === "object" ? context.sourceBinding : {};
+  const requestedSourceId = String(
+    evidence?.sourceId || sourceRef.sourceId || context?.sourceId || binding.sourceId || ""
+  ).trim();
+  const collectionSources = [
+    ...(Array.isArray(context?.sources) ? context.sources : []),
+    ...(Array.isArray(context?.collectionSources) ? context.collectionSources : []),
+    ...(Array.isArray(binding.collectionSources) ? binding.collectionSources : [])
+  ];
+  const citedSource = requestedSourceId
+    ? collectionSources.find((source) => String(source?.id || source?.sourceId || "") === requestedSourceId) || null
+    : null;
+  const suppliedSourceType = String(sourceRef.sourceType || sourceRef.type || evidence?.sourceType || "").toLowerCase();
+  const rawSourceType = String(
+    citedSource && (!suppliedSourceType || suppliedSourceType === "collection")
+      ? citedSource.type || citedSource.sourceType
+      : suppliedSourceType || citedSource?.type || citedSource?.sourceType || context?.sourceType || binding.sourceType || binding.type || "notes"
+  ).toLowerCase();
+  const documentType = String(
+    sourceRef.documentType || evidence?.documentType || citedSource?.documentType || context?.documentType || binding.documentType || (rawSourceType === "pdf" ? "pdf" : "")
+  ).toLowerCase();
+  let sourceType = rawSourceType;
+  if (sourceType === "pdf") sourceType = "webpage";
+  const url = String(sourceRef.url || evidence?.url || citedSource?.url || context?.sourceUrl || binding.url || "").trim();
+  const quote = String(
+    sourceRef.quote || evidence?.anchor || evidence?.sourceAnchor || evidence?.sourceText || evidence?.explanation || citedSource?.quote || ""
+  ).replace(/\s+/g, " ").trim();
+  const sourcePage = Math.round(Number(
+    evidence?.sourcePage ?? evidence?.pageNumber ?? sourceRef.sourcePage ?? sourceRef.pageNumber ?? citedSource?.sourcePage ?? citedSource?.pageNumber
+  ) || 0);
+  const startMs = Number(
+    sourceRef.startMs ?? evidence?.startMs ?? citedSource?.startMs ?? (Number(evidence?.sourceTimestamp) * 1000)
+  );
+  const suppliedTimestampSeconds = evidence?.timestampSeconds;
+  const timestampSeconds = suppliedTimestampSeconds !== null
+    && suppliedTimestampSeconds !== undefined
+    && suppliedTimestampSeconds !== ""
+    && Number.isFinite(Number(suppliedTimestampSeconds))
+    ? Math.max(0, Math.round(Number(evidence.timestampSeconds)))
+    : Number.isFinite(startMs) ? Math.max(0, Math.round(startMs / 1000)) : null;
+  const contextSourceUrl = String(context?.sourceUrl || binding.url || "").trim();
+  const isDirectContextSource = !citedSource || Boolean(contextSourceUrl && samePageUrl(url, contextSourceUrl));
+
+  return {
+    sourceId: requestedSourceId,
+    sourceType,
+    documentType,
+    url,
+    quote,
+    sourcePage,
+    timestampSeconds,
+    sourceFingerprint: String(
+      sourceRef.sourceFingerprint || evidence?.sourceFingerprint || citedSource?.fingerprint || context?.sourceFingerprint || binding.fingerprint || ""
+    ).trim(),
+    sourceTabId: isDirectContextSource
+      ? (Number.isInteger(context?.sourceTabId) ? context.sourceTabId : Number.isInteger(binding.tabId) ? binding.tabId : null)
+      : null,
+    videoMediaId: String(evidence?.videoMediaId || citedSource?.mediaId || context?.videoMediaId || binding.mediaId || "")
+  };
+}
+
+async function openEvidenceAtSource(evidence = {}, context = {}) {
+  const descriptor = resolveEvidenceDescriptor(evidence, context);
+  if (descriptor.sourceType === "video" && Number.isFinite(descriptor.timestampSeconds)) {
+    return jumpToVideoTimestamp(descriptor.timestampSeconds, {
+      expectedSourceUrl: descriptor.url,
+      sourceTabId: descriptor.sourceTabId,
+      videoMediaId: descriptor.videoMediaId
+    });
+  }
+  if (descriptor.documentType === "pdf" && descriptor.sourcePage > 0) {
+    return jumpToPdfPage(descriptor.sourcePage, {
+      expectedSourceUrl: descriptor.url,
+      sourceTabId: descriptor.sourceTabId,
+      expectedFingerprint: descriptor.sourceFingerprint,
+      quote: descriptor.quote
+    });
+  }
+  if (descriptor.url && descriptor.quote && descriptor.sourceType !== "video") {
+    return highlightSourceText(descriptor.quote, {
+      announce: false,
+      expectedSourceUrl: descriptor.url,
+      sourceTabId: descriptor.sourceTabId
+    });
+  }
+  const safeUrl = normalizeSafeExternalUrl(descriptor.url, { allowFile: descriptor.documentType === "pdf" });
+  if (safeUrl) {
+    await persistCurrentSessionDraft();
+    await openSafeExternalUrl(safeUrl, { allowFile: descriptor.documentType === "pdf" });
+    return { found: true, message: "Opened the saved source." };
+  }
+  const excerpt = descriptor.quote ? ` Saved evidence: “${descriptor.quote.slice(0, 220)}”` : "";
+  return {
+    found: false,
+    message: `This evidence comes from saved notes and does not have an external source page.${excerpt}`
+  };
 }
 
 async function jumpToVideoTimestamp(seconds, { expectedSourceUrl = "", sourceTabId = null, videoMediaId = "" } = {}) {
@@ -5684,6 +6615,13 @@ async function jumpToVideoTimestamp(seconds, { expectedSourceUrl = "", sourceTab
         tab = await chrome.tabs.get(sourceTabId).catch(() => null);
         if (tab && expectedSourceUrl && !samePageUrl(tab.url, expectedSourceUrl)) tab = null;
       }
+      if (!tab && expectedSourceUrl && typeof chrome.tabs.query === "function") {
+        const candidates = await chrome.tabs.query({});
+        tab = candidates.find((candidate) => candidate?.id && samePageUrl(candidate.url, expectedSourceUrl)) || null;
+      }
+      if (tab?.id && typeof chrome.tabs.update === "function") {
+        tab = await chrome.tabs.update(tab.id, { active: true });
+      }
     }
 
     if (!tab?.id) {
@@ -5691,8 +6629,14 @@ async function jumpToVideoTimestamp(seconds, { expectedSourceUrl = "", sourceTab
       if (safeExpectedSourceUrl && /(?:youtube\.com\/watch|youtu\.be\/)/i.test(safeExpectedSourceUrl)) {
         const url = new URL(safeExpectedSourceUrl);
         url.searchParams.set("t", `${Math.round(timestamp)}s`);
-        await chrome.tabs.create({ url: url.href });
+        await chrome.tabs.create({ url: url.href, active: true });
         return { found: true, message: `Opened the original video at ${formatTimestamp(timestamp)}.` };
+      }
+      if (safeExpectedSourceUrl) {
+        const url = new URL(safeExpectedSourceUrl);
+        url.hash = `t=${Math.round(timestamp)}`;
+        await chrome.tabs.create({ url: url.href, active: true });
+        return { found: true, message: `Opened the original media at ${formatTimestamp(timestamp)}.` };
       }
       return { found: false, message: "Open the original video tab, then use the timestamp again." };
     }
@@ -5734,8 +6678,72 @@ async function jumpToVideoTimestamp(seconds, { expectedSourceUrl = "", sourceTab
   }
 }
 
+async function jumpToPdfPage(pageValue, {
+  expectedSourceUrl = "",
+  sourceTabId = null,
+  expectedFingerprint = "",
+  quote = ""
+} = {}) {
+  await persistCurrentSessionDraft();
+  const page = Math.round(Number(pageValue) || 0);
+  if (page < 1) return { found: false, message: "This evidence does not include a valid PDF page." };
+  const safeSourceUrl = normalizeSafeExternalUrl(expectedSourceUrl, { allowFile: true });
+  if (!safeSourceUrl) {
+    const fallback = quote ? ` Saved evidence: “${String(quote).slice(0, 180)}”` : "";
+    return { found: false, message: `Reopen the original PDF, then go to page ${page}.${fallback}` };
+  }
+  if (!hasChromeTabs()) {
+    return { found: false, message: `Open the original PDF and go to page ${page}.` };
+  }
+
+  try {
+    let tab = null;
+    if (Number.isInteger(sourceTabId) && typeof chrome.tabs.get === "function") {
+      tab = await chrome.tabs.get(sourceTabId).catch(() => null);
+      if (tab && !samePageUrl(tab.url, safeSourceUrl)) tab = null;
+    }
+    if (!tab && typeof chrome.tabs.query === "function") {
+      const candidates = await chrome.tabs.query({});
+      tab = candidates.find((candidate) => candidate?.id && samePageUrl(candidate.url, safeSourceUrl)) || null;
+    }
+
+    if (tab?.id && typeof chrome.tabs.update === "function") {
+      await chrome.tabs.update(tab.id, { active: true });
+      if (expectedFingerprint) {
+        const current = await extractCurrentPage().catch(() => null);
+        if (!current?.sourceFingerprint || current.sourceFingerprint !== expectedFingerprint) {
+          const fallback = quote ? ` Saved evidence for page ${page}: “${String(quote).slice(0, 180)}”` : ` Use saved page ${page}.`;
+          return { found: false, message: `The open PDF could not be verified against the saved source.${fallback}` };
+        }
+      }
+      const targetUrl = buildPdfEvidenceUrl(safeSourceUrl, page, quote);
+      await chrome.tabs.update(tab.id, { url: targetUrl, active: true });
+      return {
+        found: true,
+        message: quote
+          ? `Opened the verified PDF at page ${page} and searched for the supporting sentence.`
+          : `Opened the verified PDF at page ${page}.`
+      };
+    }
+
+    const targetUrl = buildPdfEvidenceUrl(safeSourceUrl, page, quote);
+    await chrome.tabs.create({ url: targetUrl, active: true });
+    return {
+      found: true,
+      message: quote
+        ? `Opened PDF page ${page} and searched for the supporting sentence.`
+        : `Opened PDF page ${page}.`
+    };
+  } catch (error) {
+    return { found: false, message: error.message || `Could not open PDF page ${page}.` };
+  }
+}
+
 async function highlightSourceText(sourceText, { announce = true, expectedSourceUrl = "", sourceTabId = null } = {}) {
   await persistCurrentSessionDraft();
+  const safeExpectedSourceUrl = normalizeSafeExternalUrl(expectedSourceUrl, { allowFile: true });
+  const nativeHighlightUrl = buildSourceHighlightUrl(safeExpectedSourceUrl, sourceText);
+  let targetTabId = null;
   const finish = (found, message, isError = false) => {
     if (announce) showStatus(message, isError);
     return { found, message };
@@ -5751,7 +6759,8 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
     if (!hasChromeTabs()) {
       return finish(false, "Page highlighting is only available inside the Chrome extension.", true);
     }
-    let tab = await getActiveTab();
+    const activeTab = await getActiveTab();
+    let tab = activeTab;
     if (expectedSourceUrl && (!tab?.id || !samePageUrl(tab.url, expectedSourceUrl))) {
       tab = null;
       if (Number.isInteger(sourceTabId) && typeof chrome.tabs.get === "function") {
@@ -5766,20 +6775,21 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
         tab = await chrome.tabs.update(tab.id, { active: true });
       }
     }
-    if (!tab?.id || !/^https?:\/\//.test(tab.url || "")) {
-      const safeExpectedSourceUrl = normalizeSafeExternalUrl(expectedSourceUrl);
+    if (!tab?.id || !/^(?:https?|file):\/\//.test(tab.url || "")) {
       if (safeExpectedSourceUrl && typeof chrome.tabs.create === "function") {
-        await chrome.tabs.create({ url: safeExpectedSourceUrl });
-        return finish(false, "Opened the cited page. Reopen Exam-Cram there to highlight the passage.", false);
+        const created = await chrome.tabs.create({ url: nativeHighlightUrl || safeExpectedSourceUrl, active: true });
+        targetTabId = created?.id || null;
+        return finish(true, "Opened the cited page and highlighted the supporting sentence.");
       }
       return finish(false, "Open the original webpage tab, then try the highlight action again.", true);
     }
     if (expectedSourceUrl && !samePageUrl(tab.url, expectedSourceUrl)) {
       return finish(false, "The original source tab could not be found.", true);
     }
+    targetTabId = tab.id;
 
-    const [result] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
       args: [sourceText],
       func: (needle) => {
         const stopWords = new Set(["about", "after", "before", "between", "from", "into", "that", "their", "there", "these", "this", "with", "would", "which", "when", "where", "function", "source"]);
@@ -5812,6 +6822,34 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
         const exactCandidates = [target, target.split(" ").slice(0, 14).join(" "), target.split(" ").slice(0, 8).join(" ")]
           .filter((item) => item.length >= 20);
 
+        const highlightSelection = (candidate) => {
+          if (!candidate || typeof window.find !== "function") return false;
+          const selection = window.getSelection();
+          selection?.removeAllRanges();
+          if (!window.find(candidate, false, false, true, false, true, false)) return false;
+          const matchedSelection = window.getSelection();
+          if (!matchedSelection?.rangeCount) return false;
+          const range = matchedSelection.getRangeAt(0).cloneRange();
+          const matchedElement = range.startContainer?.parentElement || range.commonAncestorContainer?.parentElement;
+          matchedElement?.scrollIntoView({ behavior: "smooth", block: "center" });
+
+          if (globalThis.CSS?.highlights && typeof globalThis.Highlight === "function") {
+            const styleId = "exam-cram-evidence-highlight-style";
+            let style = document.getElementById(styleId);
+            if (!style) {
+              style = document.createElement("style");
+              style.id = styleId;
+              style.textContent = "::highlight(exam-cram-evidence) { background: #fff3a3; color: #171200; text-decoration: underline 2px #f5c542; }";
+              document.documentElement.append(style);
+            }
+            globalThis.CSS.highlights.delete("exam-cram-evidence");
+            globalThis.CSS.highlights.set("exam-cram-evidence", new globalThis.Highlight(range));
+            matchedSelection.removeAllRanges();
+            setTimeout(() => globalThis.CSS?.highlights?.delete("exam-cram-evidence"), 12000);
+          }
+          return true;
+        };
+
         const highlight = (element) => {
           element.scrollIntoView({ behavior: "smooth", block: "center" });
           element.setAttribute("data-exam-cram-highlight", "true");
@@ -5825,6 +6863,12 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
           }, 7000);
           return true;
         };
+
+        const selectionCandidates = [String(needle || "").replace(/\s+/g, " ").trim().slice(0, 220), ...exactCandidates]
+          .filter((item, index, items) => item.length >= 20 && items.indexOf(item) === index);
+        for (const candidate of selectionCandidates) {
+          if (highlightSelection(candidate)) return true;
+        }
 
         for (const candidate of exactCandidates) {
           const exactMatch = nodes.find((node) => normalize(node.innerText || node.textContent).includes(candidate));
@@ -5846,24 +6890,33 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
           return highlight(best);
         }
 
-        if (window.find && window.find(needle)) {
-          const selection = window.getSelection();
-          const matchedElement = selection?.anchorNode?.parentElement;
-          return matchedElement ? highlight(matchedElement) : false;
-        }
-
         return false;
       }
     });
 
-    const found = Boolean(result?.result);
+    const found = Array.isArray(results) && results.some((result) => Boolean(result?.result));
     if (tab.id !== activeTab?.id && typeof chrome.tabs.update === "function") {
       await chrome.tabs.update(tab.id, { active: true });
     }
-    return found
-      ? finish(true, "Highlighted the matching passage in yellow on the original page.")
-      : finish(false, "No close match was found. Open the original page and use the excerpt shown above.", true);
+    if (found) return finish(true, "Highlighted the matching sentence in yellow on the original page.");
+    if (nativeHighlightUrl && typeof chrome.tabs.update === "function") {
+      await chrome.tabs.update(tab.id, { url: nativeHighlightUrl, active: true });
+      return finish(true, "Opened the original page at the supporting sentence and highlighted it.");
+    }
+    return finish(false, "No close match was found. Open the original page and use the excerpt shown above.", true);
   } catch (error) {
+    if (nativeHighlightUrl) {
+      try {
+        if (targetTabId && typeof chrome.tabs.update === "function") {
+          await chrome.tabs.update(targetTabId, { url: nativeHighlightUrl, active: true });
+        } else if (typeof chrome.tabs.create === "function") {
+          await chrome.tabs.create({ url: nativeHighlightUrl, active: true });
+        }
+        return finish(true, "Opened the original page at the supporting sentence and highlighted it.");
+      } catch {
+        // Report the original highlighting error below.
+      }
+    }
     return finish(false, error.message || "Could not highlight source text.", true);
   }
 }
@@ -5886,10 +6939,33 @@ function renderScore() {
   elements.scoreBlock.classList.remove("hidden");
   elements.scoreTitle.textContent = `Score: ${session.score}%`;
 
-  if (session.weakTopics.length) {
-    elements.weakTopicText.textContent = `Weak topics: ${session.weakTopics.join(", ")}`;
+  const weakest = getWeakestConceptFromSession(session);
+  if (weakest) {
+    const pageGuidance = weakest.sourcePage > 0 ? ` Review PDF page ${weakest.sourcePage}, then try a recovery quiz.` : " Review the cited evidence, then try a recovery quiz.";
+    elements.weakTopicText.textContent = `Weakest concept: ${weakest.label}. You missed ${weakest.wrongCount} question${weakest.wrongCount === 1 ? "" : "s"} related to this topic.${pageGuidance}`;
+    elements.startRecoveryQuizButton?.classList.remove("hidden");
+    const reviewItem = weakest.evidenceItem;
+    if (elements.reviewWeakConceptButton && weakest.sourcePage > 0) {
+      elements.reviewWeakConceptButton.textContent = `Review PDF page ${weakest.sourcePage}`;
+      elements.reviewWeakConceptButton.classList.remove("hidden");
+      elements.reviewWeakConceptButton.onclick = async () => {
+        const result = await openEvidenceAtSource({ ...reviewItem, sourcePage: weakest.sourcePage }, session);
+        showStatus(result.message, !result.found);
+      };
+    } else if (elements.reviewWeakConceptButton) {
+      elements.reviewWeakConceptButton.classList.add("hidden");
+      elements.reviewWeakConceptButton.onclick = null;
+    }
   } else {
-    elements.weakTopicText.textContent = "No weak topics detected in this quiz.";
+    elements.weakTopicText.textContent = "No weak concepts detected in this quiz.";
+    elements.startRecoveryQuizButton?.classList.add("hidden");
+    elements.reviewWeakConceptButton?.classList.add("hidden");
+  }
+  if (session.recoveryComposition?.description) {
+    elements.recoveryCompositionText.textContent = session.recoveryComposition.description;
+    elements.recoveryCompositionText.classList.remove("hidden");
+  } else {
+    elements.recoveryCompositionText?.classList.add("hidden");
   }
 
   const wrongItems = session.wrongAnswers.map((item) => {
@@ -5898,27 +6974,16 @@ function renderScore() {
     const sourceButton = document.createElement("button");
     sourceButton.type = "button";
     sourceButton.className = "text-button";
-    const timestamp = Number(item.sourceTimestamp ?? Number(item.sourceRef?.startMs) / 1000);
-    if (session.sourceType === "video" && Number.isFinite(timestamp)) {
-      sourceButton.textContent = `Jump to ${formatTimestamp(timestamp)} in video`;
-      sourceButton.addEventListener("click", () => jumpToVideoTimestamp(timestamp, {
-        expectedSourceUrl: session.sourceUrl,
-        sourceTabId: session.sourceTabId,
-        videoMediaId: session.videoMediaId
-      }));
-    } else if (session.sourceType === "collection" && normalizeSafeExternalUrl(item.sourceRef?.url)) {
-      sourceButton.textContent = `Open ${item.sourceRef?.title || "cited source"}`;
-      sourceButton.addEventListener("click", async () => {
-        await persistCurrentSessionDraft();
-        await openSafeExternalUrl(item.sourceRef.url);
-      });
-    } else {
-      sourceButton.textContent = "Highlight supporting source";
-      sourceButton.addEventListener("click", () => highlightSourceText(
-        item.sourceText || item.explanation || item.prompt,
-        { expectedSourceUrl: session.sourceUrl, sourceTabId: session.sourceTabId }
-      ));
-    }
+    const descriptor = resolveEvidenceDescriptor(item, session);
+    sourceButton.textContent = descriptor.sourceType === "video" && Number.isFinite(descriptor.timestampSeconds)
+      ? `Jump to ${formatTimestamp(descriptor.timestampSeconds)} in video`
+      : descriptor.documentType === "pdf" && descriptor.sourcePage > 0
+        ? `Open PDF page ${descriptor.sourcePage} and find sentence`
+        : descriptor.url && descriptor.quote ? "Open and highlight supporting source" : "Show supporting evidence";
+    sourceButton.addEventListener("click", async () => {
+      const result = await openEvidenceAtSource(item, session);
+      showStatus(result.message, !result.found);
+    });
     node.append(
       createElement("strong", item.topic),
       createElement("p", `Your answer: ${item.selected}`),
@@ -5934,6 +6999,45 @@ function renderScore() {
 
   const goals = buildGoals(session);
   elements.goalList.replaceChildren(...goals.map((goal) => createElement("li", goal)));
+}
+
+function getWeakestConceptFromSession(session) {
+  if (!session) return null;
+  const diagnosis = Array.isArray(session.weakConceptDiagnosis) ? session.weakConceptDiagnosis : [];
+  const ranked = diagnosis.find((item) => item?.conceptId || item?.primaryConceptId);
+  const nodes = session.visualLesson?.visualModel?.nodes || [];
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  if (ranked) {
+    const conceptId = ranked.conceptId || ranked.primaryConceptId;
+    const relatedMiss = (session.wrongAnswers || []).find((item) => item.primaryConceptId === conceptId);
+    return {
+      conceptId,
+      label: ranked.conceptLabel || nodeById.get(conceptId)?.label || relatedMiss?.topic || conceptId,
+      wrongCount: Math.max(1, Number(ranked.wrongCount) || (session.wrongAnswers || []).filter((item) => item.primaryConceptId === conceptId).length),
+      sourcePage: Number(relatedMiss?.sourcePage ?? relatedMiss?.sourceRef?.sourcePage) || 0,
+      evidenceItem: relatedMiss || null,
+      state: ranked.state || "weak"
+    };
+  }
+  const groups = new Map();
+  (session.wrongAnswers || []).forEach((item) => {
+    const conceptId = String(item.primaryConceptId || "").trim();
+    if (!conceptId) return;
+    const group = groups.get(conceptId) || { conceptId, wrongCount: 0, lastIndex: -1, sourcePage: 0, topic: item.topic, evidenceItem: item };
+    group.wrongCount += 1;
+    group.lastIndex += 1;
+    group.sourcePage ||= Number(item.sourcePage ?? item.sourceRef?.sourcePage) || 0;
+    groups.set(conceptId, group);
+  });
+  const first = [...groups.values()].sort((a, b) => b.wrongCount - a.wrongCount || b.lastIndex - a.lastIndex || a.conceptId.localeCompare(b.conceptId))[0];
+  return first ? {
+    conceptId: first.conceptId,
+    label: nodeById.get(first.conceptId)?.label || first.topic || first.conceptId,
+    wrongCount: first.wrongCount,
+    sourcePage: first.sourcePage,
+    evidenceItem: first.evidenceItem,
+    state: "weak"
+  } : null;
 }
 
 function buildGoals(session) {
@@ -6039,9 +7143,10 @@ async function persistCurrentSessionDraft() {
   const currentArtifact = state.currentSession || state.currentArtifact || state.currentExportItem;
   if (!currentArtifact?.id) return false;
   try {
-    const artifact = typeof structuredClone === "function"
+    const clonedArtifact = typeof structuredClone === "function"
       ? structuredClone(currentArtifact)
       : JSON.parse(JSON.stringify(currentArtifact));
+    const artifact = sanitizeDraftArtifact(clonedArtifact);
     await setStorage(STORAGE_KEYS.sessionDraft, {
       savedAt: new Date().toISOString(),
       submitted: Boolean(state.submitted),
@@ -6057,29 +7162,49 @@ async function persistCurrentSessionDraft() {
 async function maybeRestoreSessionDraft() {
   if (state.currentArtifact || state.currentSession) return false;
   const draft = await getStorage(STORAGE_KEYS.sessionDraft, null);
-  const artifact = draft?.artifact || draft?.session;
-  if (!artifact?.id || typeof artifact !== "object") {
+  const storedArtifact = draft?.artifact || draft?.session;
+  if (!storedArtifact?.id || typeof storedArtifact !== "object") {
     if (draft) await removeStorage(STORAGE_KEYS.sessionDraft).catch(() => {});
     return false;
   }
-  const hasQuiz = Array.isArray(artifact.questions) && artifact.questions.length > 0;
+  const hasQuiz = isRenderableQuizArtifact(storedArtifact);
+  const hadIncompleteQuiz = !hasQuiz && (
+    storedArtifact.kind === "quiz"
+    || Object.prototype.hasOwnProperty.call(storedArtifact, "questions")
+    || Object.prototype.hasOwnProperty.call(storedArtifact, "quizId")
+  );
+  const artifact = hasQuiz ? storedArtifact : sanitizeDraftArtifact(storedArtifact);
   state.currentArtifact = artifact;
   state.currentExportItem = artifact;
   state.currentSession = hasQuiz ? artifact : null;
-  state.submitted = Boolean(draft.submitted || artifact.submittedAt || (artifact.score !== null && artifact.score !== undefined));
+  state.submitted = hasQuiz && Boolean(draft.submitted || artifact.submittedAt || (artifact.score !== null && artifact.score !== undefined));
   if (hasQuiz) renderSession(artifact);
   else renderNote(artifact);
   showStatus(hasQuiz
     ? "Restored your pinned note and quiz. The current browser page is shown separately."
-    : "Restored your pinned visual note. The current browser page is shown separately.");
+    : hadIncompleteQuiz
+      ? "Restored your pinned visual note. Its previous quiz did not finish, so quiz controls were not shown."
+      : "Restored your pinned visual note. The current browser page is shown separately.");
   return true;
 }
 
 async function handleSaveSession() {
   if (!state.currentSession) return;
-  await saveLibraryItem(state.currentSession);
-  showStatus("Session saved.");
-  renderLibrary();
+  try {
+    if (state.currentSession.submittedAt && Array.isArray(state.currentSession.questionAttempts)) {
+      await recordLearningItem(
+        state.currentSession,
+        state.currentSession.journeyChapterId || state.currentSession.journeyChapterTitle,
+        null,
+        state.currentSession.questionAttempts
+      );
+    }
+    await saveLibraryItem(state.currentSession);
+    showStatus("Session saved.");
+    renderLibrary();
+  } catch (error) {
+    showStatus(error.message || "Could not save the session.", true);
+  }
 }
 
 async function saveLibraryItem(item) {
@@ -6300,13 +7425,25 @@ function buildJourneySourceFromStudyInput(input, item) {
   };
 }
 
-async function recordLearningItem(item, chapterIdOrTitle, source = null) {
+async function recordLearningItem(item, chapterIdOrTitle, source = null, questionAttempts = []) {
   if (!globalThis.ExamCramJourney || !item) return null;
   const chapterValue = String(chapterIdOrTitle || item.journeyChapterTitle || "Current chapter").trim() || "Current chapter";
   const recorded = await mutateJourney("JOURNEY_UPSERT_SESSION", {
     chapterIdOrTitle: chapterValue,
     session: item,
-    source
+    source,
+    questionAttempts,
+    quizResult: questionAttempts.length ? {
+      quizId: item.quizId,
+      noteId: item.noteId || item.id,
+      sourceFingerprint: item.sourceFingerprint || item.sourceBinding?.fingerprint || "",
+      score: item.score,
+      total: item.questions?.length || questionAttempts.length,
+      attemptType: item.attemptType === "recovery" ? "recovery" : "normal",
+      targetConceptId: item.recoveryTargetConceptId || "",
+      targetQuestionCount: item.recoveryComposition?.targetQuestionCount || 3,
+      submittedAt: item.submittedAt
+    } : null
   });
   const chapterId = recorded.result?.chapterId;
   const chapter = globalThis.ExamCramJourney.findChapter(recorded.journey, chapterId);
@@ -6541,13 +7678,18 @@ async function handleBuildChapterLesson(chapterId) {
     const journey = await getJourney();
     const chapter = globalThis.ExamCramJourney.findChapter(journey, chapterId);
     if (!chapter?.sources.length) throw new Error("Add at least one source to this chapter first.");
-    const collection = globalThis.ExamCramJourney.buildCollectionPayload(chapter);
+    const savedArtifacts = await getStorage(STORAGE_KEYS.sessions, []);
+    const collection = globalThis.ExamCramJourney.buildChapterCollectionPayload(chapter, savedArtifacts);
     if (!globalThis.ExamCramDocumentReader.assessReadableContent(collection.text, "html").readable) {
       throw new Error("The collected sources do not contain enough distinct readable study content.");
     }
+    const noteCount = collection.visualNoteCount;
+    const compositionLead = noteCount
+      ? `Combining ${noteCount} saved visual note${noteCount === 1 ? "" : "s"} from ${collection.sourceSnapshotCount} distinct source ${collection.sourceSnapshotCount === 1 ? "snapshot" : "snapshots"}.`
+      : `Combining ${collection.sourceSnapshotCount} collected source ${collection.sourceSnapshotCount === 1 ? "snapshot" : "snapshots"}.`;
     showStatus(collection.condensed
-      ? `Using all ${collection.includedSourceCount} sources; long sources were evenly excerpted.`
-      : `Using all ${collection.includedSourceCount} collected sources.`);
+      ? `${compositionLead} Long sources were evenly excerpted.`
+      : compositionLead);
     await createAndRecordStudyArtifact({
       title: `${chapter.title}: combined visual note`,
       sourceType: "collection",
@@ -6556,12 +7698,18 @@ async function handleBuildChapterLesson(chapterId) {
       chapterId: chapter.id,
       chapterTitle: chapter.title,
       sourceRevisionHash: collection.sourceRevisionHash,
+      compositionRevisionHash: collection.compositionRevisionHash,
+      visualNoteCount: collection.visualNoteCount,
+      sourceSnapshotCount: collection.sourceSnapshotCount,
       collectionSources: collection.sources,
       collectionCondensed: collection.condensed,
       generationToken
     });
     finishProgress("Chapter visual note ready.");
-    showStatus("Combined visual note created from the saved sources. Generate a quiz when ready.");
+    const completionSubject = collection.visualNoteCount
+      ? `all ${collection.visualNoteCount} saved visual note${collection.visualNoteCount === 1 ? "" : "s"} and ${collection.sourceSnapshotCount} distinct source ${collection.sourceSnapshotCount === 1 ? "snapshot" : "snapshots"}`
+      : `${collection.sourceSnapshotCount} collected source ${collection.sourceSnapshotCount === 1 ? "snapshot" : "snapshots"}`;
+    showStatus(`Combined visual note created from ${completionSubject}. Generate a quiz when ready.`);
   } catch (error) {
     if (generationToken === state.generationToken) {
       failProgress("Chapter lesson failed.");
@@ -6961,6 +8109,36 @@ async function handleClearLibrary() {
   showStatus("Library cleared.");
 }
 
+async function handleClearLearningMemory() {
+  if (typeof globalThis.confirm === "function"
+    && !globalThis.confirm("Clear concept attempts and recovery state? Saved notes, sources, and Library items will remain.")) return;
+  elements.clearLearningMemoryButton.disabled = true;
+  try {
+    const result = await mutateJourney("JOURNEY_CLEAR_LEARNING_MEMORY", {});
+    const scrub = (item) => {
+      if (!item || typeof item !== "object") return item;
+      const next = { ...item };
+      delete next.questionAttempts;
+      delete next.weakConceptDiagnosis;
+      return next;
+    };
+    const sessions = await getStorage(STORAGE_KEYS.sessions, []);
+    if (Array.isArray(sessions)) await setStorage(STORAGE_KEYS.sessions, sessions.map(scrub));
+    const draft = await getStorage(STORAGE_KEYS.sessionDraft, null);
+    if (draft) await setStorage(STORAGE_KEYS.sessionDraft, scrub(draft));
+    state.currentSession = scrub(state.currentSession);
+    state.currentArtifact = scrub(state.currentArtifact);
+    state.currentExportItem = scrub(state.currentExportItem);
+    renderLibrary();
+    const cleared = Number(result?.result?.clearedAttemptCount) || 0;
+    showStatus(`Learning memory cleared (${cleared} question attempt${cleared === 1 ? "" : "s"}). Saved notes and sources were kept.`);
+  } catch (error) {
+    showStatus(error.message || "Could not clear learning memory.", true);
+  } finally {
+    elements.clearLearningMemoryButton.disabled = false;
+  }
+}
+
 function closeSession() {
   void removeStorage(STORAGE_KEYS.sessionDraft).catch(() => {});
   cleanupVisualModelRenderer();
@@ -7222,6 +8400,10 @@ function setBusy(isBusy, message = "") {
   elements.studyNotesButton.disabled = isBusy;
   if (elements.demoNoteButton) elements.demoNoteButton.disabled = isBusy;
   if (message) showStatus(message);
+}
+
+function resetStatus() {
+  showStatus(DEFAULT_STATUS_MESSAGE);
 }
 
 function showStatus(message, isError = false) {

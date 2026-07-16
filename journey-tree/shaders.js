@@ -9,6 +9,7 @@ export const particleVertexShader = /* glsl */ `
   uniform float uPointScale;
   uniform float uPointSizeGain;
   uniform float uEdgeDissolveStrength;
+  uniform float uEdgeFlowScale;
   uniform float uRepelRadius;
   uniform float uRepelDepth;
   uniform float uRepelStrength;
@@ -170,7 +171,7 @@ export const particleVertexShader = /* glsl */ `
         1.02,
         leafContourMask
       );
-      float flowDistance = travelProgress * travelProgress * flowDistanceLimit;
+      float flowDistance = travelProgress * travelProgress * flowDistanceLimit * uEdgeFlowScale;
       vec3 edgeReleaseOffset = outwardDirection * flowDistance;
       edgeReleaseOffset += encodedDriftDirection
         * filament

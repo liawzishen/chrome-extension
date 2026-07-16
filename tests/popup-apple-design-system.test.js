@@ -5,6 +5,7 @@ const path = require("node:path");
 
 const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "popup.html"), "utf8");
+const baseStyles = fs.readFileSync(path.join(root, "popup.css"), "utf8");
 const styles = fs.readFileSync(path.join(root, "popup-design-system.css"), "utf8");
 const script = fs.readFileSync(path.join(root, "popup.js"), "utf8");
 const previewServer = fs.readFileSync(path.join(root, "preview-server.js"), "utf8");
@@ -43,6 +44,11 @@ test("the semantic design system is the final popup stylesheet", () => {
   assert.match(previewServer, /\["\/popup-design-system\.css", "popup-design-system\.css"\]/);
 });
 
+test("compact Journey cards do not draw a timeline through their chapter numbers", () => {
+  assert.doesNotMatch(baseStyles, /\.journey-route(?::not\([^)]*\))?::before\s*\{/);
+  assert.doesNotMatch(styles, /\.journey-route(?::not\([^)]*\))?::before\s*\{/);
+});
+
 test("rendered semantic colors meet normal-text contrast targets", () => {
   assert.ok(contrastRatio(readHexToken("ui-label"), readHexToken("ui-background")) >= 4.5);
   assert.ok(contrastRatio(readHexToken("ui-label-secondary"), readHexToken("ui-background")) >= 4.5);
@@ -56,7 +62,15 @@ test("five compact study destinations use symbols and complete tab semantics", (
   assert.equal((html.match(/role="tab"/g) || []).length, 5);
   assert.equal((html.match(/role="tabpanel"/g) || []).length, 5);
   assert.match(html, /<nav class="tabs"[^>]*role="tablist"/);
-  for (const id of ["pageTab", "notesTab", "journeyTab", "focusTab", "libraryTab"]) {
+  const tabNames = {
+    pageTab: "Page",
+    notesTab: "Notes",
+    journeyTab: "Journey",
+    focusTab: "Focus",
+    libraryTab: "Library"
+  };
+  for (const [id, name] of Object.entries(tabNames)) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="${name}"`));
     assert.match(html, new RegExp(`id="${id}"[\\s\\S]{0,180}class="tab-icon"`));
   }
   assert.match(styles, /\.tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
@@ -73,6 +87,18 @@ test("tab selection exposes roving keyboard navigation without redundant pressed
   assert.doesNotMatch(selectionBlock, /aria-pressed/);
   assert.match(script, /view\.setAttribute\("aria-hidden", String\(!active\)\)/);
   assert.match(html, /id="resultView"[^>]*role="region"[^>]*aria-labelledby="sessionTitle"[^>]*aria-hidden="true"/);
+});
+
+test("view changes clear stale errors and de-layer the pinned artifact", () => {
+  const start = script.indexOf("function switchView(viewId, options = {})");
+  const end = script.indexOf("async function handleStudyPage()", start);
+  assert.ok(start >= 0 && end > start);
+  const switchBlock = script.slice(start, end);
+  assert.match(switchBlock, /resultView\.classList\.add\("hidden"\)/);
+  assert.match(switchBlock, /resultView\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(switchBlock, /if \(!options\.preserveStatus\) resetStatus\(\)/);
+  assert.match(script, /function resetStatus\(\) \{\s*showStatus\(DEFAULT_STATUS_MESSAGE\);\s*\}/);
+  assert.match(script, /function showStatus\(message, isError = false\)[\s\S]*classList\.toggle\("is-error", isError\)/);
 });
 
 test("primary controls and navigation affordances keep at least 44px hit regions", () => {

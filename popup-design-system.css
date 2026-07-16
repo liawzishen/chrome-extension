@@ -767,10 +767,6 @@ summary:focus-visible,
   margin: var(--ui-space-4) 0;
 }
 
-.journey-route:not(:has(.journey-node))::before {
-  display: none;
-}
-
 .journey-metric,
 .journey-chapter-detail,
 .journey-summary,

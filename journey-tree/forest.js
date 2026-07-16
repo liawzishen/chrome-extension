@@ -3,16 +3,30 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createParticleTree, getParticleBudget } from './particle-system.js';
 
 const TARGET_FRAME_INTERVAL = 1000 / 30;
-const OVERVIEW_TREE_BUDGET_CAP = 240_000;
+const OVERVIEW_GLOBAL_BUDGET_CAP = 180_000;
+const OVERVIEW_BUDGET_RATIO = 0.55;
+const OVERVIEW_MIN_TREE_BUDGET = 12_000;
+const FOCUS_BACKGROUND_MIN_TREE_BUDGET = 4_000;
+const FOCUS_BACKGROUND_MAX_RATIO = 0.24;
 const POINTER_REPEL_STRENGTH = 1.45;
 const POINTER_REPEL_RESPONSE = 16;
 const LABEL_TREE_GAP_RATIO = 0.25;
 const LABEL_EDGE_PADDING = 18;
 const MAX_CONCEPT_CONNECTOR_LENGTH = 112;
-const MAX_TREE_CONNECTOR_LENGTH = 96;
 const CONNECTOR_TREE_INSET = 4;
 const CONCEPT_CAMERA_DISTANCE = 2.75;
 const CONCEPT_CAMERA_TARGET_DROP = 0.16;
+const RIBBON_X_SPACING = 5.1;
+const RIBBON_Z_SPACING = 4.35;
+const RIBBON_GROUND_Y = -1.64;
+const OVERVIEW_TREE_SCALE = 0.56;
+const OVERVIEW_OPACITY = 0.86;
+const BACKGROUND_TREE_OPACITY = 0.18;
+const FOCUS_PARTICLE_RATIOS = Object.freeze({
+  seedling: 0.36,
+  growing: 0.68,
+  mature: 1,
+});
 
 function formatTreeDate(value) {
   const date = new Date(value);
@@ -28,15 +42,20 @@ function createLabelButton(record, kind, onActivate, onPress) {
   button.dataset.recordId = record.id;
   const eyebrow = document.createElement('span');
   eyebrow.className = 'forest-label__eyebrow';
-  eyebrow.textContent = kind === 'concept'
-    ? (record.role || formatTreeDate(record.createdAt))
+  const isNote = kind === 'note';
+  eyebrow.textContent = isNote
+    ? (record.eyebrow || 'VISUAL NOTE')
+    : kind === 'concept'
+      ? (record.role || formatTreeDate(record.createdAt))
     : formatTreeDate(record.createdAt);
   const title = document.createElement('span');
   title.className = 'forest-label__title';
-  title.textContent = kind === 'concept' ? record.label : record.name;
+  title.textContent = isNote ? record.title : (kind === 'concept' ? record.label : record.name);
   button.append(eyebrow, title);
-  button.setAttribute('aria-label', kind === 'concept'
-    ? `${record.label}${record.role ? `, ${record.role}` : ''}`
+  button.setAttribute('aria-label', isNote
+    ? `Open Visual Note ${record.title}`
+    : kind === 'concept'
+      ? `${record.label}${record.role ? `, ${record.role}` : ''}`
     : `${record.name}, created ${formatTreeDate(record.createdAt)}`);
   let pressedPointerId = null;
   let pressOrigin = { x: 0, y: 0 };
@@ -86,7 +105,7 @@ function disposeSystem(scene, system) {
 }
 
 function disposeHitTarget(scene, target) {
-  scene.remove(target);
+  target.removeFromParent();
   target.geometry.dispose();
   target.material.dispose();
 }
@@ -95,27 +114,107 @@ function damp(current, target, smoothing, deltaTime) {
   return THREE.MathUtils.lerp(current, target, 1 - Math.exp(-smoothing * deltaTime));
 }
 
-function buildLayout(count, aspect) {
-  if (count <= 1) return [{ x: 0, y: 0, z: 0 }];
-  const columns = Math.max(2, Math.ceil(Math.sqrt(count * Math.max(0.75, aspect))));
-  const rows = Math.ceil(count / columns);
-  const spacingX = 4.9;
-  const spacingZ = 4.6;
-  return Array.from({ length: count }, (_, index) => {
-    const row = Math.floor(index / columns);
-    const itemsInRow = Math.min(columns, count - row * columns);
-    const column = index - row * columns;
-    return {
-      x: (column - (itemsInRow - 1) / 2) * spacingX,
-      y: 0,
-      z: (row - (rows - 1) / 2) * spacingZ
-    };
-  });
+function getRibbonRowCount(count) {
+  return Math.max(1, Math.ceil(count / 4));
 }
 
-function transformedBounds(system) {
-  system.points.updateMatrixWorld(true);
-  return system.bounds.clone().applyMatrix4(system.points.matrixWorld);
+function buildLayout(count, aspect = 1) {
+  if (count <= 0) return [];
+  const rows = getRibbonRowCount(count);
+  const baseSize = Math.floor(count / rows);
+  const remainder = count % rows;
+  const rowSizes = Array.from({ length: rows }, (_, row) => baseSize + (row < remainder ? 1 : 0));
+  const compactness = THREE.MathUtils.clamp(aspect, 0.72, 1.65);
+  const spacingX = RIBBON_X_SPACING * THREE.MathUtils.lerp(0.88, 1.04, (compactness - 0.72) / 0.93);
+  const layout = [];
+  let itemIndex = 0;
+  rowSizes.forEach((itemsInRow, row) => {
+    const direction = row % 2 === 0 ? 1 : -1;
+    for (let slot = 0; slot < itemsInRow; slot += 1) {
+      const column = direction === 1 ? slot : itemsInRow - 1 - slot;
+      layout.push({
+        index: itemIndex,
+        row,
+        x: (column - (itemsInRow - 1) / 2) * spacingX,
+        y: 0,
+        z: (row - (rows - 1) / 2) * RIBBON_Z_SPACING,
+      });
+      itemIndex += 1;
+    }
+  });
+  return layout;
+}
+
+function growthLabel(record) {
+  if (record.growthStage === 'plot') return 'Empty plot';
+  if (record.growthStage === 'seedling') return 'Seedling';
+  if (record.growthStage === 'growing') return 'Normal tree';
+  return 'Huge tree';
+}
+
+function growthMeta(record) {
+  const units = Number(record.growthUnitCount) || 0;
+  const notes = Number(record.visualNoteCount) || 0;
+  const sources = Number(record.sourceCount) || 0;
+  return `${units} growth ${units === 1 ? 'unit' : 'units'} · ${notes} Visual ${notes === 1 ? 'Note' : 'Notes'} · ${sources} ${sources === 1 ? 'source' : 'sources'}`;
+}
+
+function particleBudgetForStage(record, totalBudget, overview = false) {
+  if (record.growthStage === 'plot') return 0;
+  const ratio = FOCUS_PARTICLE_RATIOS[record.growthStage] || 1;
+  const focusedBudget = Math.max(12_000, Math.round(totalBudget * ratio));
+  return overview ? Math.min(120_000, focusedBudget) : focusedBudget;
+}
+
+function allocateOverviewBudgets(records, totalBudget, options = {}) {
+  const visible = records.filter((record) => record.growthStage !== 'plot');
+  if (!visible.length) return new Map();
+  const requestedMinimum = Math.max(
+    2_000,
+    Math.floor(Number(options.minimumTreeBudget) || OVERVIEW_MIN_TREE_BUDGET),
+  );
+  const hasPoolLimit = Number.isFinite(Number(options.poolLimit));
+  const pool = Math.min(totalBudget, hasPoolLimit
+    ? Math.max(0, Math.min(Math.round(Number(options.poolLimit)), Math.round(totalBudget)))
+    : Math.max(
+      requestedMinimum * visible.length,
+      Math.min(OVERVIEW_GLOBAL_BUDGET_CAP, Math.round(totalBudget * OVERVIEW_BUDGET_RATIO)),
+    ));
+  if (!pool) return new Map();
+  const minimumTreeBudget = Math.min(requestedMinimum, Math.floor(pool / visible.length));
+  const weights = { seedling: 1, growing: 2, mature: 3 };
+  const caps = { seedling: 36_000, growing: 72_000, mature: 120_000 };
+  const remaining = Math.max(0, pool - minimumTreeBudget * visible.length);
+  const totalWeight = visible.reduce((sum, record) => sum + (weights[record.growthStage] || 1), 0);
+  return new Map(visible.map((record) => {
+    const share = remaining * (weights[record.growthStage] || 1) / Math.max(1, totalWeight);
+    const budget = Math.min(
+      caps[record.growthStage] || caps.mature,
+      Math.floor(minimumTreeBudget + share),
+    );
+    return [record.id, budget];
+  }));
+}
+
+function buildSmoothPath(points) {
+  if (!points.length) return '';
+  if (points.length === 1) {
+    const point = points[0];
+    return `M ${(point.x - 30).toFixed(1)} ${point.y.toFixed(1)} L ${(point.x + 30).toFixed(1)} ${point.y.toFixed(1)}`;
+  }
+  let path = `M ${points[0].x.toFixed(1)} ${points[0].y.toFixed(1)}`;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const previous = points[Math.max(0, index - 1)];
+    const current = points[index];
+    const next = points[index + 1];
+    const following = points[Math.min(points.length - 1, index + 2)];
+    const controlOneX = current.x + (next.x - previous.x) / 6;
+    const controlOneY = current.y + (next.y - previous.y) / 6;
+    const controlTwoX = next.x - (following.x - current.x) / 6;
+    const controlTwoY = next.y - (following.y - current.y) / 6;
+    path += ` C ${controlOneX.toFixed(1)} ${controlOneY.toFixed(1)}, ${controlTwoX.toFixed(1)} ${controlTwoY.toFixed(1)}, ${next.x.toFixed(1)} ${next.y.toFixed(1)}`;
+  }
+  return path;
 }
 
 function projectSystemHorizontalBounds(system, camera, viewportWidth) {
@@ -151,11 +250,16 @@ export function mountLearningForest(root, options = {}) {
   const sceneHost = root.querySelector('#forestScene');
   const labelsLayer = root.querySelector('#forestLabels');
   const connectorsLayer = root.querySelector('#forestConnectors');
+  const ribbonElement = root.querySelector('#forestRibbon');
+  const ribbonPath = root.querySelector('#forestRibbonPath');
+  const ribbonPlots = root.querySelector('#forestRibbonPlots');
+  const ribbonIndex = root.querySelector('#forestChapterIndex');
+  const ribbonStatus = root.querySelector('#forestRibbonStatus');
   const loadingElement = root.querySelector('#forestLoading');
   const errorElement = root.querySelector('#forestWebglError');
   const particleCountElement = root.querySelector('#forestParticleCount');
-  const treeCountElement = root.querySelector('#forestTreeCount');
-  if (!sceneHost || !labelsLayer || !connectorsLayer) {
+  if (!sceneHost || !labelsLayer || !connectorsLayer || !ribbonElement
+    || !ribbonPath || !ribbonPlots || !ribbonIndex || !ribbonStatus) {
     throw new Error('Learning Forest markup is incomplete.');
   }
 
@@ -175,8 +279,8 @@ export function mountLearningForest(root, options = {}) {
       isWebGLAvailable: false,
       setTrees() {},
       focusTree() {},
-      focusConcept() {},
-      clearConceptFocus() {},
+      focusVisualNote() {},
+      clearVisualNoteFocus() {},
       showOverview() {},
       setMotionPaused() {},
       destroy() {}
@@ -203,6 +307,7 @@ export function mountLearningForest(root, options = {}) {
   controls.rotateSpeed = 0.48;
   controls.zoomSpeed = 0.65;
   controls.autoRotate = false;
+  controls.enabled = true;
 
   const initialTarget = new THREE.Vector3(0, 0.12, 0);
   const focusCameraPosition = new THREE.Vector3(0.15, 0.22, 14.1);
@@ -215,14 +320,20 @@ export function mountLearningForest(root, options = {}) {
   const raycaster = new THREE.Raycaster();
   const clock = new THREE.Clock();
   const totalParticleBudget = getParticleBudget();
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  const reducedMotionQuery = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+  let reducedMotion = Boolean(reducedMotionQuery?.matches);
   let trees = [];
   let overviewSystems = [];
   let focusSystem = null;
   let hitTargets = [];
   let labelEntries = [];
+  let ribbonEntries = [];
+  let ribbonLayout = [];
+  let linkedTreeId = '';
   let selectedTreeId = '';
-  let selectedConceptId = '';
+  let selectedVisualNoteId = '';
+  let focusCameraDestination = focusCameraPosition.clone();
+  let focusControlTarget = initialTarget.clone();
   let mode = 'empty';
   let cameraIsFlying = false;
   let isOrbitDragging = false;
@@ -235,6 +346,69 @@ export function mountLearningForest(root, options = {}) {
   let animationFrameId = 0;
   let lastRenderedAt = -Infinity;
   let destroyed = false;
+  let forestIsIntersecting = true;
+
+  function isForestViewActive() {
+    return !destroyed
+      && !document.hidden
+      && (document.hasFocus?.() ?? true)
+      && forestIsIntersecting
+      && !root.hidden
+      && root.getClientRects().length > 0
+      && root.getAttribute('aria-hidden') !== 'true';
+  }
+
+  function isForestAnimationActive() {
+    return isForestViewActive() && !reducedMotion;
+  }
+
+  function stopAnimationLoop() {
+    if (!animationFrameId) return;
+    cancelAnimationFrame(animationFrameId);
+    animationFrameId = 0;
+  }
+
+  function scheduleAnimationFrame() {
+    if (animationFrameId || !isForestAnimationActive()) return;
+    animationFrameId = requestAnimationFrame(render);
+  }
+
+  function requestForestRender() {
+    if (!isForestViewActive()) {
+      stopAnimationLoop();
+      return;
+    }
+    if (reducedMotion) {
+      drawForestFrame(performance.now(), true);
+      return;
+    }
+    scheduleAnimationFrame();
+  }
+
+  function handleForestActivityChange() {
+    if (!isForestViewActive()) {
+      stopAnimationLoop();
+      return;
+    }
+    lastRenderedAt = -Infinity;
+    requestForestRender();
+  }
+
+  function handleForestBlur() {
+    stopAnimationLoop();
+  }
+
+  function handleReducedMotionChange(event) {
+    reducedMotion = Boolean(event.matches);
+    root.dataset.reducedMotion = reducedMotion ? 'true' : 'false';
+    if (reducedMotion && cameraIsFlying) {
+      camera.position.copy(targetCameraPosition);
+      controls.target.copy(targetControlPoint);
+      cameraIsFlying = false;
+    }
+    stopAnimationLoop();
+    handleForestActivityChange();
+  }
 
   function clearLabels() {
     labelEntries.forEach((entry) => {
@@ -249,6 +423,16 @@ export function mountLearningForest(root, options = {}) {
     hitTargets = [];
   }
 
+  function clearRibbon() {
+    ribbonEntries = [];
+    ribbonLayout = [];
+    linkedTreeId = '';
+    ribbonPlots.replaceChildren();
+    ribbonIndex.replaceChildren();
+    ribbonPath.setAttribute('d', '');
+    ribbonStatus.textContent = '';
+  }
+
   function clearOverview() {
     overviewSystems.forEach((entry) => disposeSystem(scene, entry.system));
     overviewSystems = [];
@@ -260,18 +444,20 @@ export function mountLearningForest(root, options = {}) {
   }
 
   function clearSceneContent() {
-    selectedConceptId = '';
-    delete root.dataset.focusedConcept;
+    selectedVisualNoteId = '';
+    delete root.dataset.focusedVisualNote;
     clearLabels();
     clearHitTargets();
     clearOverview();
     clearFocus();
+    clearRibbon();
   }
 
   function setMode(nextMode, treeId = '') {
     mode = nextMode;
     root.dataset.mode = nextMode;
     selectedTreeId = treeId;
+    controls.enabled = nextMode === 'overview' || nextMode === 'focus';
     options.onModeChange?.({ mode, treeId });
   }
 
@@ -284,6 +470,7 @@ export function mountLearningForest(root, options = {}) {
         entry.system.uniforms.uEdgeDissolveStrength.value = 1;
       });
     }
+    requestForestRender();
     return motionPaused;
   }
 
@@ -294,161 +481,319 @@ export function mountLearningForest(root, options = {}) {
       camera.position.copy(position);
       controls.target.copy(target);
       cameraIsFlying = false;
+      requestForestRender();
       return;
     }
     cameraIsFlying = true;
   }
 
   function fitCameraToOverview() {
-    if (!overviewSystems.length) return;
+    if (!ribbonLayout.length) return;
     const bounds = new THREE.Box3();
-    overviewSystems.forEach((entry) => bounds.union(transformedBounds(entry.system)));
+    ribbonLayout.forEach((position) => bounds.expandByPoint(new THREE.Vector3(position.x, 0, position.z)));
+    bounds.expandByVector(new THREE.Vector3(2.8, 3.1, 2));
     const size = bounds.getSize(new THREE.Vector3());
     const center = bounds.getCenter(new THREE.Vector3());
     const verticalFov = THREE.MathUtils.degToRad(camera.fov);
     const fitHeightDistance = size.y / (2 * Math.tan(verticalFov / 2));
     const fitWidthDistance = size.x / (2 * Math.tan(verticalFov / 2) * Math.max(camera.aspect, 0.1));
-    const distance = Math.max(fitHeightDistance, fitWidthDistance, size.z * 1.15, 8) * 1.34;
+    const distance = Math.max(fitHeightDistance, fitWidthDistance, size.z * 1.22, 10) * 1.24;
     const position = new THREE.Vector3(
       center.x,
-      center.y + Math.max(1.2, size.z * 0.24),
+      center.y + Math.max(5.6, size.z * 0.62),
       center.z + distance
     );
-    setCameraTarget(position, center);
+    setCameraTarget(position, center.clone().add(new THREE.Vector3(0, -0.6, 0)));
   }
 
-  function addOverviewLabel(entry) {
-    const connector = createConnector(connectorsLayer);
-    const button = createLabelButton(
-      entry.record,
-      'tree',
-      () => focusTree(entry.record.id),
-      () => { cameraIsFlying = false; },
-    );
-    labelsLayer.append(button);
-    labelEntries.push({
-      type: 'tree',
-      id: entry.record.id,
-      record: entry.record,
-      button,
-      connector,
-      system: entry.system,
-      anchor: new THREE.Vector3(
-        entry.system.bounds.getCenter(new THREE.Vector3()).x,
-        entry.system.bounds.max.y + 0.34,
-        entry.system.bounds.getCenter(new THREE.Vector3()).z
-      ),
-      points: entry.system.points,
-      projected: new THREE.Vector3()
+  function setLinkedTree(treeId = '') {
+    linkedTreeId = treeId;
+    ribbonEntries.forEach((entry) => {
+      const isLinked = Boolean(treeId && entry.record.id === treeId);
+      entry.plot.classList.toggle('is-linked', isLinked);
+      entry.indexButton.classList.toggle('is-linked', isLinked);
+    });
+    overviewSystems.forEach((entry) => {
+      const baseOpacity = mode === 'focus' ? BACKGROUND_TREE_OPACITY : OVERVIEW_OPACITY;
+      entry.targetOpacity = treeId && entry.record.id === treeId ? 1 : baseOpacity;
+    });
+    requestForestRender();
+  }
+
+  function bindRibbonFeedback(element, treeId) {
+    element.addEventListener('pointerenter', () => setLinkedTree(treeId));
+    element.addEventListener('pointerleave', () => {
+      if (linkedTreeId === treeId) setLinkedTree('');
+    });
+    element.addEventListener('focus', () => setLinkedTree(treeId));
+    element.addEventListener('blur', () => {
+      if (linkedTreeId === treeId) setLinkedTree('');
     });
   }
 
-  function buildOverview() {
+  function moveIndexFocus(event, index) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    let nextIndex = index;
+    if (event.key === 'ArrowLeft') nextIndex = Math.max(0, index - 1);
+    if (event.key === 'ArrowRight') nextIndex = Math.min(ribbonEntries.length - 1, index + 1);
+    if (event.key === 'Home') nextIndex = 0;
+    if (event.key === 'End') nextIndex = ribbonEntries.length - 1;
+    ribbonEntries[nextIndex]?.indexButton.focus({ preventScroll: true });
+  }
+
+  function createPlotButton(record, index) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'forest-ribbon__plot';
+    button.dataset.treeId = record.id;
+    button.dataset.growth = record.growthStage;
+    button.dataset.status = record.status;
+    button.title = record.name;
+    button.setAttribute(
+      'aria-label',
+      `Open chapter ${index + 1}, ${record.name}. ${growthLabel(record)}. ${growthMeta(record)}.`,
+    );
+
+    const number = document.createElement('span');
+    number.className = 'forest-ribbon__plot-number';
+    number.textContent = String(index + 1).padStart(2, '0');
+    const plant = document.createElement('span');
+    plant.className = 'forest-ribbon__plant';
+    plant.setAttribute('aria-hidden', 'true');
+    const crown = document.createElement('span');
+    crown.className = 'forest-ribbon__plant-crown';
+    const stem = document.createElement('span');
+    stem.className = 'forest-ribbon__plant-stem';
+    const base = document.createElement('span');
+    base.className = 'forest-ribbon__plant-base';
+    const pulse = document.createElement('span');
+    pulse.className = 'forest-ribbon__completion-pulse';
+    plant.append(crown, stem, base, pulse);
+    const title = document.createElement('span');
+    title.className = 'forest-ribbon__plot-title';
+    title.textContent = record.name;
+    const meta = document.createElement('span');
+    meta.className = 'forest-ribbon__plot-meta';
+    meta.textContent = `${record.visualNoteCount || 0} ${(record.visualNoteCount || 0) === 1 ? 'note' : 'notes'} · ${record.sourceCount || 0} ${(record.sourceCount || 0) === 1 ? 'source' : 'sources'}`;
+    button.append(number, plant, title, meta);
+    button.addEventListener('click', () => focusTree(record.id));
+    bindRibbonFeedback(button, record.id);
+    return button;
+  }
+
+  function createIndexButton(record, index) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'forest-ribbon__index-button';
+    button.dataset.treeId = record.id;
+    button.dataset.status = record.status;
+    button.setAttribute('aria-label', `Chapter ${index + 1}: ${record.name}`);
+    const number = document.createElement('span');
+    number.textContent = String(index + 1).padStart(2, '0');
+    const title = document.createElement('span');
+    title.textContent = record.name;
+    button.append(number, title);
+    button.addEventListener('click', () => focusTree(record.id));
+    button.addEventListener('keydown', (event) => moveIndexFocus(event, index));
+    bindRibbonFeedback(button, record.id);
+    return button;
+  }
+
+  function buildRibbon(activeTreeId, presentation) {
+    ribbonLayout = buildLayout(trees.length, camera.aspect || 1);
+    ribbonElement.hidden = false;
+    ribbonElement.dataset.presentation = presentation;
+    ribbonEntries = trees.map((record, index) => {
+      const plot = createPlotButton(record, index);
+      const indexButton = createIndexButton(record, index);
+      ribbonPlots.append(plot);
+      ribbonIndex.append(indexButton);
+      return {
+        record,
+        plot,
+        indexButton,
+        position: new THREE.Vector3(ribbonLayout[index].x, 0, ribbonLayout[index].z),
+        projected: new THREE.Vector3(),
+      };
+    });
+    const activeIndex = Math.max(0, trees.findIndex((tree) => tree.id === activeTreeId));
+    ribbonEntries.forEach((entry, index) => {
+      const isSelected = entry.record.id === activeTreeId;
+      entry.plot.classList.toggle('is-selected', isSelected);
+      entry.indexButton.classList.toggle('is-selected', isSelected);
+      entry.plot.setAttribute('aria-current', isSelected ? 'step' : 'false');
+      entry.indexButton.setAttribute('aria-current', isSelected ? 'step' : 'false');
+      entry.plot.hidden = false;
+      entry.plot.dataset.live = entry.record.growthStage === 'plot' ? 'false' : 'true';
+    });
+    const active = trees[activeIndex];
+    if (active) {
+      ribbonStatus.textContent = `${activeIndex + 1} of ${trees.length} · ${growthLabel(active)} · ${growthMeta(active)}`;
+      requestAnimationFrame(() => {
+        const selected = ribbonEntries[activeIndex]?.indexButton;
+        if (!selected) return;
+        const left = selected.offsetLeft - ribbonIndex.clientWidth / 2 + selected.offsetWidth / 2;
+        ribbonIndex.scrollTo({ left: Math.max(0, left), behavior: reducedMotion ? 'auto' : 'smooth' });
+      });
+    }
+  }
+
+  function addTreeHitTarget(record, system, position, visualScale) {
+    const systemSize = system.bounds.getSize(new THREE.Vector3()).multiplyScalar(visualScale);
+    const hitTarget = new THREE.Mesh(
+      new THREE.BoxGeometry(
+        Math.max(1.1, systemSize.x),
+        Math.max(1.4, systemSize.y),
+        Math.max(1.1, systemSize.z),
+      ),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }),
+    );
+    const systemCenter = system.bounds.getCenter(new THREE.Vector3()).multiplyScalar(visualScale);
+    hitTarget.position.copy(position).add(systemCenter);
+    hitTarget.userData = { kind: 'tree', treeId: record.id };
+    scene.add(hitTarget);
+    hitTargets.push(hitTarget);
+    return hitTarget;
+  }
+
+  function buildPreviewSystems({
+    excludeTreeId = '',
+    dimmed = false,
+    poolLimit,
+    minimumTreeBudget = OVERVIEW_MIN_TREE_BUDGET,
+  } = {}) {
+    const budgets = allocateOverviewBudgets(
+      trees.filter((record) => record.id !== excludeTreeId),
+      totalParticleBudget,
+      { poolLimit, minimumTreeBudget },
+    );
+    let particleTotal = 0;
+    ribbonEntries.forEach((ribbonEntry) => {
+      const record = ribbonEntry.record;
+      const budget = budgets.get(record.id) || 0;
+      if (!budget || record.id === excludeTreeId) return;
+      const system = createParticleTree([], renderer, {
+        seed: record.seed,
+        particleBudget: budget,
+        growthStage: record.growthStage,
+        opacity: 0,
+        edgeDissolveStrength: motionHasStarted ? 1 : 0,
+      });
+      const visualScale = OVERVIEW_TREE_SCALE * system.spatialScale;
+      system.points.scale.setScalar(visualScale);
+      system.points.position.copy(ribbonEntry.position);
+      scene.add(system.points);
+      const entry = {
+        record,
+        system,
+        targetOpacity: dimmed ? BACKGROUND_TREE_OPACITY : OVERVIEW_OPACITY,
+        targetScale: visualScale,
+      };
+      entry.hitTarget = addTreeHitTarget(record, system, ribbonEntry.position, visualScale);
+      overviewSystems.push(entry);
+      particleTotal += budget;
+    });
+    return particleTotal;
+  }
+
+  function getFocusPose(system, anchor) {
+    const scale = system?.spatialScale || 1;
+    const center = system
+      ? system.bounds.getCenter(new THREE.Vector3()).multiplyScalar(scale).add(anchor)
+      : anchor.clone().add(new THREE.Vector3(0, -1.25, 0));
+    const size = system
+      ? system.bounds.getSize(new THREE.Vector3()).multiplyScalar(scale)
+      : new THREE.Vector3(2.4, 2.2, 2.4);
+    const distance = THREE.MathUtils.clamp(Math.max(size.y * 1.55, size.x * 1.8, 5.2), 5.2, 16);
+    return {
+      position: center.clone().add(new THREE.Vector3(0.16, size.y * 0.04, distance)),
+      target: center.clone().add(new THREE.Vector3(0, -size.y * 0.06, 0)),
+    };
+  }
+
+  function buildOverview(preferredTreeId = selectedTreeId) {
+    const activeRecord = trees.find((tree) => tree.id === preferredTreeId) || trees[0];
     clearSceneContent();
     if (!trees.length) {
       setMode('empty');
+      ribbonElement.hidden = true;
       loadingElement.hidden = true;
       if (particleCountElement) particleCountElement.textContent = 'No grains';
       return;
     }
-    setMode('overview');
+    setMode('overview', activeRecord.id);
     loadingElement.hidden = false;
-    loadingElement.querySelector('span:last-child').textContent = 'Growing learning forest';
-    const layout = buildLayout(trees.length, camera.aspect || 1);
-    const perTreeBudget = Math.min(
-      OVERVIEW_TREE_BUDGET_CAP,
-      Math.max(12_000, Math.floor(totalParticleBudget / Math.max(1, trees.length)))
-    );
-    trees.forEach((record, index) => {
-      const system = createParticleTree([], renderer, {
-        seed: record.seed,
-        particleBudget: perTreeBudget,
-        opacity: 0,
-        edgeDissolveStrength: motionHasStarted ? 1 : 0
-      });
-      const position = layout[index];
-      const scale = trees.length <= 4 ? 0.62 : trees.length <= 10 ? 0.52 : 0.44;
-      const visualScale = scale * system.spatialScale;
-      system.points.scale.setScalar(visualScale);
-      system.points.position.set(position.x, position.y, position.z);
-      system.uniforms.uOpacity.value = 0;
-      scene.add(system.points);
-      const entry = { record, system, targetOpacity: 1 };
-      overviewSystems.push(entry);
-      addOverviewLabel(entry);
-
-      const hitTarget = new THREE.Mesh(
-        new THREE.BoxGeometry(3.9 * visualScale, 7.3 * visualScale, 3.9 * visualScale),
-        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false })
-      );
-      hitTarget.position.set(position.x, position.y + 0.55 * visualScale, position.z);
-      hitTarget.userData = { kind: 'tree', treeId: record.id };
-      scene.add(hitTarget);
-      hitTargets.push(hitTarget);
-    });
+    loadingElement.querySelector('span:last-child').textContent = 'Growing the learning forest';
+    buildRibbon(activeRecord.id, 'overview');
+    const particleTotal = buildPreviewSystems();
     if (particleCountElement) {
-      const total = perTreeBudget * trees.length;
-      particleCountElement.textContent = total >= 1_000_000
-        ? `${(total / 1_000_000).toFixed(2)}M grains`
-        : `${Math.round(total / 1000)}K grains`;
+      particleCountElement.textContent = particleTotal
+        ? `${Math.round(particleTotal / 1000)}K forest grains`
+        : 'Bare learning plots';
     }
-    labelsLayer.classList.toggle('is-directory', trees.length > 8 || sceneHost.clientWidth < 700);
     fitCameraToOverview();
     loadingElement.hidden = true;
+    requestForestRender();
   }
 
-  function addConceptLabels(record, system) {
+  function addVisualNoteLabels(record, system) {
     system.chapterLeaves.forEach((leaf) => {
-      const concept = record.concepts.find((item) => item.id === leaf.chapter.id);
-      if (!concept) return;
+      const note = record.visualNotes.find((item) => item.id === leaf.chapter.id);
+      if (!note) return;
       const connector = createConnector(connectorsLayer);
       const button = createLabelButton(
-        { ...concept, createdAt: record.createdAt },
-        'concept',
-        () => focusConcept(record.id, concept.id),
+        note,
+        'note',
+        () => focusVisualNote(record.id, note.id),
         () => { cameraIsFlying = false; },
       );
       labelsLayer.append(button);
       labelEntries.push({
-        type: 'concept',
-        id: concept.id,
-        record: concept,
+        type: 'note',
+        id: note.id,
+        record: note,
         treeRecord: record,
         leaf,
         system,
         points: system.points,
         button,
         connector,
-        projected: new THREE.Vector3()
+        projected: new THREE.Vector3(),
       });
-
       const hitTarget = new THREE.Mesh(
-        new THREE.SphereGeometry(
-          Math.max(0.24, leaf.length * 0.65) * system.spatialScale,
-          12,
-          8,
-        ),
-        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false })
+        new THREE.SphereGeometry(Math.max(0.28, leaf.length * 0.72), 12, 8),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }),
       );
-      hitTarget.position.copy(leaf.center).multiplyScalar(system.spatialScale);
-      hitTarget.userData = { kind: 'concept', treeId: record.id, conceptId: concept.id };
-      scene.add(hitTarget);
+      hitTarget.position.copy(leaf.center);
+      hitTarget.userData = { kind: 'visual-note', treeId: record.id, artifactId: note.id };
+      system.points.add(hitTarget);
       hitTargets.push(hitTarget);
     });
   }
 
-  function focusConcept(treeId, conceptId) {
+  function focusVisualNote(treeId, artifactId) {
     const record = trees.find((tree) => tree.id === treeId);
-    const concept = record?.concepts.find((item) => item.id === conceptId);
-    if (!record || !concept) return false;
+    const note = record?.visualNotes.find((item) => item.id === artifactId);
+    if (!record || !note) return false;
     if (!focusSystem || selectedTreeId !== record.id) focusTree(record.id);
     const entry = labelEntries.find((item) => (
-      item.type === 'concept'
+      item.type === 'note'
       && item.treeRecord.id === record.id
-      && item.id === concept.id
+      && item.id === note.id
     ));
     if (!entry) return false;
+    const { cameraDestination, framingTarget } = getVisualNotePose(entry);
+    selectedVisualNoteId = note.id;
+    root.dataset.focusedVisualNote = note.id;
+    labelEntries.forEach((item) => item.button.classList.toggle('is-selected', item.id === note.id));
+    setCameraTarget(cameraDestination, framingTarget);
+    options.onSelectVisualNote?.({ treeId: record.id, artifactId: note.id });
+    requestForestRender();
+    return true;
+  }
 
+  function getVisualNotePose(entry) {
     entry.points.updateMatrixWorld(true);
     const worldTarget = entry.leaf.center.clone().applyMatrix4(entry.points.matrixWorld);
     const approach = camera.position.clone().sub(worldTarget);
@@ -458,56 +803,98 @@ export function mountLearningForest(root, options = {}) {
       .addScaledVector(approach, CONCEPT_CAMERA_DISTANCE)
       .add(new THREE.Vector3(0, 0.08, 0));
     const framingTarget = worldTarget.clone().add(new THREE.Vector3(0, -CONCEPT_CAMERA_TARGET_DROP, 0));
-
-    selectedConceptId = concept.id;
-    root.dataset.focusedConcept = concept.id;
-    labelEntries.forEach((item) => item.button.classList.toggle('is-selected', item.id === concept.id));
-    setCameraTarget(cameraDestination, framingTarget);
-    options.onSelectConcept?.({ treeId: record.id, conceptId: concept.id });
-    return true;
+    return { cameraDestination, framingTarget };
   }
 
-  function clearConceptFocus() {
-    if (!selectedConceptId) return false;
-    selectedConceptId = '';
-    delete root.dataset.focusedConcept;
+  function clearVisualNoteFocus() {
+    if (!selectedVisualNoteId) return false;
+    selectedVisualNoteId = '';
+    delete root.dataset.focusedVisualNote;
     labelEntries.forEach((entry) => entry.button.classList.remove('is-selected'));
-    setCameraTarget(focusCameraPosition, initialTarget);
+    setCameraTarget(focusCameraDestination, focusControlTarget);
+    requestForestRender();
     return true;
   }
 
   function focusTree(treeId) {
     const record = trees.find((tree) => tree.id === treeId);
     if (!record) return false;
+    const wasOverview = mode === 'overview';
+    const previousAnchor = ribbonEntries.find((entry) => entry.record.id === record.id)?.position.clone();
     clearSceneContent();
     setMode('focus', record.id);
     loadingElement.hidden = false;
-    loadingElement.querySelector('span:last-child').textContent = record.isSeedling
-      ? 'Growing note seedling'
-      : `Growing ${record.name}`;
-    const conceptChapters = record.concepts.map((concept) => ({
-      id: concept.id,
-      date: formatTreeDate(record.createdAt),
-      subheader: concept.label
-    }));
-    const system = createParticleTree(conceptChapters, renderer, {
-      seed: record.seed,
-      particleBudget: totalParticleBudget,
-      opacity: 0,
-      edgeDissolveStrength: motionHasStarted ? 1 : 0
+    loadingElement.querySelector('span:last-child').textContent = `Opening ${record.name}`;
+    buildRibbon(record.id, 'focus');
+    const anchor = ribbonEntries.find((entry) => entry.record.id === record.id)?.position.clone()
+      || previousAnchor
+      || new THREE.Vector3();
+    const backgroundTreeCount = trees.filter((tree) => (
+      tree.id !== record.id && tree.growthStage !== 'plot'
+    )).length;
+    const requestedFocusBudget = particleBudgetForStage(record, totalParticleBudget, false);
+    const backgroundReserve = Math.min(
+      Math.round(totalParticleBudget * FOCUS_BACKGROUND_MAX_RATIO),
+      backgroundTreeCount * FOCUS_BACKGROUND_MIN_TREE_BUDGET,
+    );
+    const focusedBudget = record.growthStage === 'plot'
+      ? 0
+      : Math.max(12_000, Math.min(requestedFocusBudget, totalParticleBudget - backgroundReserve));
+    const backgroundTotal = buildPreviewSystems({
+      excludeTreeId: record.id,
+      dimmed: true,
+      poolLimit: Math.max(0, totalParticleBudget - focusedBudget),
+      minimumTreeBudget: FOCUS_BACKGROUND_MIN_TREE_BUDGET,
     });
+    if (record.growthStage === 'plot') {
+      const pose = getFocusPose(null, anchor);
+      focusCameraDestination.copy(pose.position);
+      focusControlTarget.copy(pose.target);
+      setCameraTarget(pose.position, pose.target);
+      if (particleCountElement) particleCountElement.textContent = backgroundTotal ? `${Math.round(backgroundTotal / 1000)}K background grains` : 'Bare learning plot';
+      loadingElement.hidden = true;
+      options.onSelectTree?.({ treeId: record.id });
+      requestForestRender();
+      return true;
+    }
+    const noteBranches = record.visualNotes.map((note) => ({
+      id: note.id,
+      date: formatTreeDate(note.createdAt || record.createdAt),
+      subheader: note.title,
+    }));
+    const system = createParticleTree(noteBranches, renderer, {
+      seed: record.seed,
+      particleBudget: focusedBudget,
+      growthStage: record.growthStage,
+      opacity: 0,
+      edgeDissolveStrength: motionHasStarted ? 1 : 0,
+    });
+    const focusedScale = system.spatialScale;
+    const startingScale = wasOverview ? OVERVIEW_TREE_SCALE * system.spatialScale : focusedScale;
+    system.points.position.copy(anchor);
+    system.points.scale.setScalar(startingScale);
     scene.add(system.points);
-    focusSystem = { record, system, targetOpacity: 1 };
-    addConceptLabels(record, system);
-    labelsLayer.classList.remove('is-directory');
-    setCameraTarget(focusCameraPosition, initialTarget);
+    focusSystem = {
+      record,
+      system,
+      targetOpacity: 1,
+      targetPosition: anchor.clone(),
+      targetScale: focusedScale,
+    };
+    addVisualNoteLabels(record, system);
+    if (reducedMotion) system.points.scale.setScalar(focusedScale);
+    const pose = getFocusPose(system, anchor);
+    focusCameraDestination.copy(pose.position);
+    focusControlTarget.copy(pose.target);
+    setCameraTarget(pose.position, pose.target);
     if (particleCountElement) {
-      particleCountElement.textContent = totalParticleBudget >= 1_000_000
-        ? `${(totalParticleBudget / 1_000_000).toFixed(2)}M grains`
-        : `${Math.round(totalParticleBudget / 1000)}K grains`;
+      particleCountElement.textContent = focusedBudget >= 1_000_000
+        ? `${(focusedBudget / 1_000_000).toFixed(2)}M focused grains`
+        : `${Math.round(focusedBudget / 1000)}K focused grains`;
     }
     loadingElement.hidden = true;
     options.onSelectTree?.({ treeId: record.id });
+    requestForestRender();
     return true;
   }
 
@@ -516,37 +903,68 @@ export function mountLearningForest(root, options = {}) {
       if (trees[0]) focusTree(trees[0].id);
       return;
     }
-    buildOverview();
+    buildOverview(selectedTreeId);
   }
 
   function setTrees(nextTrees) {
     const previousTreeId = selectedTreeId;
+    const previousVisualNoteId = selectedVisualNoteId;
     const wasFocused = mode === 'focus';
     trees = Array.isArray(nextTrees)
-      ? nextTrees.filter((tree) => tree?.id && tree?.name).map((tree) => ({ ...tree, concepts: (tree.concepts || []).slice(0, 7) }))
+      ? nextTrees.filter((tree) => tree?.id && tree?.name).map((tree) => {
+        const concepts = (tree.concepts || []).slice(0, 7);
+        const visualNotes = Array.isArray(tree.visualNotes)
+          ? tree.visualNotes.filter((note) => note?.id && note?.title)
+          : [];
+        const visualNoteCount = Number.isFinite(Number(tree.visualNoteCount))
+          ? Math.max(0, Math.floor(Number(tree.visualNoteCount)))
+          : visualNotes.length;
+        const sourceCount = Math.max(0, Math.floor(Number(tree.sourceCount) || 0));
+        const growthUnitCount = Number.isFinite(Number(tree.growthUnitCount))
+          ? Math.max(0, Math.floor(Number(tree.growthUnitCount)))
+          : visualNoteCount + sourceCount;
+        const growthStage = ['plot', 'seedling', 'growing', 'mature'].includes(tree.growthStage)
+          ? tree.growthStage
+          : (growthUnitCount === 0 ? 'plot' : growthUnitCount <= 2 ? 'seedling' : growthUnitCount <= 5 ? 'growing' : 'mature');
+        return {
+          ...tree,
+          concepts,
+          visualNotes,
+          visualNoteCount,
+          sourceCount,
+          growthUnitCount,
+          growthStage,
+        };
+      })
       : [];
-    if (treeCountElement) {
-      treeCountElement.textContent = `${String(trees.length).padStart(2, '0')} ${trees.length === 1 ? 'note tree' : 'note trees'}`;
-    }
     if (!trees.length) {
       clearSceneContent();
       setMode('empty');
+      ribbonElement.hidden = true;
       loadingElement.hidden = true;
+      requestForestRender();
       return;
     }
     if (trees.length === 1) {
       focusTree(trees[0].id);
+      if (previousVisualNoteId && trees[0].visualNotes.some((note) => note.id === previousVisualNoteId)) {
+        focusVisualNote(trees[0].id, previousVisualNoteId);
+      }
       return;
     }
     if (wasFocused && trees.some((tree) => tree.id === previousTreeId)) {
       focusTree(previousTreeId);
+      if (previousVisualNoteId && trees.find((tree) => tree.id === previousTreeId)?.visualNotes
+        .some((note) => note.id === previousVisualNoteId)) {
+        focusVisualNote(previousTreeId, previousVisualNoteId);
+      }
       return;
     }
-    buildOverview();
+    buildOverview(trees.some((tree) => tree.id === previousTreeId) ? previousTreeId : trees[0].id);
   }
 
   function getActiveSystems() {
-    return focusSystem ? [focusSystem] : overviewSystems;
+    return focusSystem ? [...overviewSystems, focusSystem] : overviewSystems;
   }
 
   function updatePointerRay() {
@@ -604,7 +1022,7 @@ export function mountLearningForest(root, options = {}) {
     if (!intersection) return;
     const data = intersection.object.userData;
     if (data.kind === 'tree') focusTree(data.treeId);
-    if (data.kind === 'concept') focusConcept(data.treeId, data.conceptId);
+    if (data.kind === 'visual-note') focusVisualNote(data.treeId, data.artifactId);
   }
 
   function onControlsStart() {
@@ -622,8 +1040,8 @@ export function mountLearningForest(root, options = {}) {
   }
 
   function onKeyDown(event) {
-    if (event.key === 'Escape' && selectedConceptId) {
-      clearConceptFocus();
+    if (event.key === 'Escape' && selectedVisualNoteId) {
+      clearVisualNoteFocus();
       return;
     }
     if (event.key === 'Escape' && mode === 'focus' && trees.length > 1) showOverview();
@@ -640,27 +1058,95 @@ export function mountLearningForest(root, options = {}) {
     getActiveSystems().forEach((entry) => {
       entry.system.uniforms.uPointScale.value = pointScale;
     });
-    labelsLayer.classList.toggle('is-directory', mode === 'overview' && (trees.length > 8 || width < 700));
+    ribbonPath.ownerSVGElement?.setAttribute('viewBox', `0 0 ${width} ${height}`);
+    if ((mode === 'overview' || mode === 'focus') && trees.length) {
+      const nextLayout = buildLayout(trees.length, camera.aspect || 1);
+      ribbonLayout = nextLayout;
+      ribbonEntries.forEach((entry, index) => {
+        const position = nextLayout[index];
+        entry.position.set(position.x, 0, position.z);
+      });
+      overviewSystems.forEach((overviewEntry) => {
+        const ribbonEntry = ribbonEntries.find((entry) => entry.record.id === overviewEntry.record.id);
+        if (!ribbonEntry) return;
+        overviewEntry.system.points.position.copy(ribbonEntry.position);
+        const systemCenter = overviewEntry.system.bounds.getCenter(new THREE.Vector3())
+          .multiplyScalar(overviewEntry.system.points.scale.x);
+        overviewEntry.hitTarget?.position.copy(ribbonEntry.position).add(systemCenter);
+      });
+      if (mode === 'overview') {
+        fitCameraToOverview();
+      } else {
+        const selectedEntry = ribbonEntries.find((entry) => entry.record.id === selectedTreeId);
+        if (!selectedEntry) return;
+        if (focusSystem) {
+          focusSystem.targetPosition.copy(selectedEntry.position);
+          focusSystem.system.points.position.copy(selectedEntry.position);
+          focusSystem.system.points.updateMatrixWorld(true);
+        }
+        const selectedNoteEntry = selectedVisualNoteId
+          ? labelEntries.find((entry) => entry.id === selectedVisualNoteId)
+          : null;
+        if (selectedNoteEntry) {
+          const pose = getVisualNotePose(selectedNoteEntry);
+          setCameraTarget(pose.cameraDestination, pose.framingTarget);
+        } else {
+          const pose = getFocusPose(focusSystem?.system || null, selectedEntry.position);
+          focusCameraDestination.copy(pose.position);
+          focusControlTarget.copy(pose.target);
+          setCameraTarget(pose.position, pose.target);
+        }
+      }
+    }
+    requestForestRender();
   }
 
-  function updateDirectoryLabels() {
-    labelEntries.forEach((entry) => {
-      entry.button.style.transform = '';
-      entry.button.style.opacity = '1';
-      entry.button.style.visibility = 'visible';
-      entry.connector.style.opacity = '0';
+  function getRibbonRoot(entry) {
+    const activeEntry = getActiveSystems().find((item) => item.record.id === entry.record.id);
+    if (activeEntry) {
+      activeEntry.system.points.updateMatrixWorld(true);
+      const bounds = activeEntry.system.bounds;
+      const center = bounds.getCenter(new THREE.Vector3());
+      return new THREE.Vector3(center.x, bounds.min.y - 0.08, center.z)
+        .applyMatrix4(activeEntry.system.points.matrixWorld);
+    }
+    if (mode === 'focus' && entry.record.id === selectedTreeId) {
+      return entry.position.clone().add(new THREE.Vector3(0, RIBBON_GROUND_Y, 0));
+    }
+    return entry.position.clone().add(new THREE.Vector3(0, RIBBON_GROUND_Y, 0));
+  }
+
+  function updateRibbonProjection() {
+    const width = sceneHost.clientWidth;
+    const height = sceneHost.clientHeight;
+    if (!width || !height || !ribbonEntries.length) return;
+    const dockTop = ribbonIndex.parentElement?.getBoundingClientRect().top ?? height;
+    const safeTop = width <= 560 ? 208 : (width <= 860 ? 150 : 112);
+    const safeBottom = Math.max(safeTop, dockTop - 54);
+    const trackPoints = [];
+    ribbonEntries.forEach((entry) => {
+      const rootPoint = getRibbonRoot(entry);
+      entry.projected.copy(rootPoint).project(camera);
+      const inFrustum = entry.projected.z > -1 && entry.projected.z < 1
+        && Math.abs(entry.projected.x) < 1.3 && Math.abs(entry.projected.y) < 1.3;
+      const screenX = (entry.projected.x * 0.5 + 0.5) * width;
+      const rawScreenY = (-entry.projected.y * 0.5 + 0.5) * height;
+      const screenY = THREE.MathUtils.clamp(rawScreenY, safeTop, safeBottom);
+      const shouldShow = inFrustum;
+      const isBackgroundPlot = mode === 'focus' && entry.record.id !== selectedTreeId;
+      entry.plot.style.transform = `translate3d(${screenX}px, ${screenY}px, 0) translate(-50%, -50%)`;
+      entry.plot.style.opacity = shouldShow ? (isBackgroundPlot ? '0.32' : '1') : '0';
+      entry.plot.style.visibility = shouldShow ? 'visible' : 'hidden';
+      if (mode === 'overview') trackPoints.push({ x: screenX, y: screenY });
     });
+    ribbonPath.setAttribute('d', mode === 'overview' ? buildSmoothPath(trackPoints) : '');
   }
 
   function updateProjectedLabels() {
     const width = sceneHost.clientWidth;
     const height = sceneHost.clientHeight;
     if (!width || !height) return;
-    if (labelsLayer.classList.contains('is-directory')) {
-      updateDirectoryLabels();
-      return;
-    }
-    const visible = [];
+    const visibleNotes = [];
     const projectedTreeBounds = new Map();
     getActiveSystems().forEach((entry) => {
       projectedTreeBounds.set(
@@ -669,7 +1155,7 @@ export function mountLearningForest(root, options = {}) {
       );
     });
     labelEntries.forEach((entry) => {
-      const localAnchor = entry.type === 'concept' ? entry.leaf.labelAnchor : entry.anchor;
+      const localAnchor = entry.leaf.labelAnchor;
       entry.projected.copy(localAnchor).applyMatrix4(entry.points.matrixWorld).project(camera);
       const inFrustum = Math.abs(entry.projected.x) < 1.26
         && Math.abs(entry.projected.y) < 1.26
@@ -681,13 +1167,13 @@ export function mountLearningForest(root, options = {}) {
       const treeCenterX = treeBounds ? (treeBounds.left + treeBounds.right) * 0.5 : width * 0.5;
       entry.placeAtRight = entry.leafScreenX >= treeCenterX;
       entry.screenY = entry.leafScreenY;
-      entry.isVisible = inFrustum && !selectedConceptId;
-      if (entry.isVisible) visible.push(entry);
+      entry.isVisible = inFrustum && !selectedVisualNoteId;
+      if (entry.isVisible) visibleNotes.push(entry);
     });
-    const labelSafeTop = width <= 560 ? 214 : (width <= 860 ? 150 : 140);
+    const labelSafeTop = width <= 560 ? 238 : (width <= 860 ? 150 : 140);
     const columns = [
-      visible.filter((entry) => !entry.placeAtRight),
-      visible.filter((entry) => entry.placeAtRight)
+      visibleNotes.filter((entry) => !entry.placeAtRight),
+      visibleNotes.filter((entry) => entry.placeAtRight)
     ];
     columns.forEach((column) => {
       column.sort((first, second) => first.screenY - second.screenY);
@@ -702,7 +1188,7 @@ export function mountLearningForest(root, options = {}) {
       const labelWidth = entry.button.offsetWidth || 136;
       const treeBounds = projectedTreeBounds.get(entry.system);
       let gutterX = entry.placeAtRight ? width - LABEL_EDGE_PADDING : LABEL_EDGE_PADDING;
-      if (entry.type === 'concept' && treeBounds) {
+      if (treeBounds) {
         if (entry.placeAtRight) {
           const sideSpan = Math.max(0, width - LABEL_EDGE_PADDING - treeBounds.right);
           const treeFacingX = treeBounds.right + sideSpan * LABEL_TREE_GAP_RATIO;
@@ -734,13 +1220,10 @@ export function mountLearningForest(root, options = {}) {
       const toLeafX = leafX - startX;
       const toLeafY = leafY - startY;
       const rawDistance = Math.max(1, Math.hypot(toLeafX, toLeafY));
-      const maximumLength = entry.type === 'concept'
-        ? MAX_CONCEPT_CONNECTOR_LENGTH
-        : MAX_TREE_CONNECTOR_LENGTH;
       const unitX = toLeafX / rawDistance;
       const unitY = toLeafY / rawDistance;
       const treeInset = Math.min(CONNECTOR_TREE_INSET, rawDistance * 0.2);
-      const connectorLength = Math.min(rawDistance - treeInset, maximumLength);
+      const connectorLength = Math.min(rawDistance - treeInset, MAX_CONCEPT_CONNECTOR_LENGTH);
       const endX = leafX - unitX * treeInset;
       const endY = leafY - unitY * treeInset;
       const connectorStartX = endX - unitX * connectorLength;
@@ -750,16 +1233,19 @@ export function mountLearningForest(root, options = {}) {
     });
   }
 
-  function render(timestamp = 0) {
-    if (destroyed) return;
-    animationFrameId = requestAnimationFrame(render);
-    if (document.hidden || timestamp - lastRenderedAt < TARGET_FRAME_INTERVAL) return;
+  function drawForestFrame(timestamp = 0, settleImmediately = false) {
     const delta = Math.min(clock.getDelta(), 0.05);
     lastRenderedAt = timestamp;
     if (cameraIsFlying) {
-      camera.position.lerp(targetCameraPosition, 1 - Math.exp(-4.6 * delta));
-      controls.target.lerp(targetControlPoint, 1 - Math.exp(-5.4 * delta));
-      if (camera.position.distanceTo(targetCameraPosition) < 0.01
+      if (settleImmediately) {
+        camera.position.copy(targetCameraPosition);
+        controls.target.copy(targetControlPoint);
+        cameraIsFlying = false;
+      } else {
+        camera.position.lerp(targetCameraPosition, 1 - Math.exp(-4.6 * delta));
+        controls.target.lerp(targetControlPoint, 1 - Math.exp(-5.4 * delta));
+      }
+      if (cameraIsFlying && camera.position.distanceTo(targetCameraPosition) < 0.01
         && controls.target.distanceTo(targetControlPoint) < 0.01) {
         camera.position.copy(targetCameraPosition);
         controls.target.copy(targetControlPoint);
@@ -769,25 +1255,53 @@ export function mountLearningForest(root, options = {}) {
     // OrbitControls documents that update() should follow manual camera or
     // target changes when damping is enabled.
     controls.update();
-    if (!motionPaused) motionElapsed += delta;
+    if (!motionPaused && !settleImmediately) motionElapsed += delta;
     const elapsed = motionElapsed;
     getActiveSystems().forEach((entry) => {
       const uniforms = entry.system.uniforms;
+      if (entry.targetPosition) {
+        if (settleImmediately) entry.system.points.position.copy(entry.targetPosition);
+        else entry.system.points.position.lerp(entry.targetPosition, 1 - Math.exp(-4.8 * delta));
+      }
+      if (Number.isFinite(entry.targetScale)) {
+        const nextScale = settleImmediately
+          ? entry.targetScale
+          : damp(entry.system.points.scale.x, entry.targetScale, 4.8, delta);
+        entry.system.points.scale.setScalar(nextScale);
+      }
       uniforms.u_time.value = elapsed;
-      uniforms.uRepelStrength.value = damp(
-        uniforms.uRepelStrength.value,
-        repelTarget,
-        POINTER_REPEL_RESPONSE,
-        delta,
-      );
-      uniforms.uOpacity.value = damp(uniforms.uOpacity.value, entry.targetOpacity, 5, delta);
+      uniforms.uRepelStrength.value = settleImmediately
+        ? 0
+        : damp(uniforms.uRepelStrength.value, repelTarget, POINTER_REPEL_RESPONSE, delta);
+      uniforms.uOpacity.value = settleImmediately
+        ? entry.targetOpacity
+        : damp(uniforms.uOpacity.value, entry.targetOpacity, 5, delta);
     });
+    updateRibbonProjection();
     updateProjectedLabels();
     renderer.render(scene, camera);
   }
 
+  function render(timestamp = 0) {
+    animationFrameId = 0;
+    if (!isForestAnimationActive()) return;
+    if (timestamp - lastRenderedAt < TARGET_FRAME_INTERVAL) {
+      scheduleAnimationFrame();
+      return;
+    }
+    drawForestFrame(timestamp);
+    scheduleAnimationFrame();
+  }
+
   const resizeObserver = new ResizeObserver(resize);
   resizeObserver.observe(sceneHost);
+  const visibilityObserver = typeof IntersectionObserver === 'function'
+    ? new IntersectionObserver(([entry]) => {
+      forestIsIntersecting = Boolean(entry?.isIntersecting);
+      handleForestActivityChange();
+    })
+    : null;
+  visibilityObserver?.observe(root);
   renderer.domElement.addEventListener('pointerenter', onPointerEnter);
   renderer.domElement.addEventListener('pointermove', onPointerMove);
   renderer.domElement.addEventListener('pointerleave', onPointerLeave);
@@ -796,23 +1310,29 @@ export function mountLearningForest(root, options = {}) {
   controls.addEventListener('start', onControlsStart);
   controls.addEventListener('end', onControlsEnd);
   window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('focus', handleForestActivityChange);
+  window.addEventListener('blur', handleForestBlur);
+  document.addEventListener('visibilitychange', handleForestActivityChange);
+  reducedMotionQuery?.addEventListener?.('change', handleReducedMotionChange);
+  root.dataset.reducedMotion = reducedMotion ? 'true' : 'false';
   resize();
   setMotionPaused(motionPaused);
-  animationFrameId = requestAnimationFrame(render);
+  handleForestActivityChange();
 
   return {
     isWebGLAvailable: true,
     setTrees,
     focusTree,
-    focusConcept,
-    clearConceptFocus,
+    focusVisualNote,
+    clearVisualNoteFocus,
     showOverview,
     setMotionPaused,
     destroy() {
       if (destroyed) return;
       destroyed = true;
-      cancelAnimationFrame(animationFrameId);
+      stopAnimationLoop();
       resizeObserver.disconnect();
+      visibilityObserver?.disconnect();
       controls.dispose();
       renderer.domElement.removeEventListener('pointerenter', onPointerEnter);
       renderer.domElement.removeEventListener('pointermove', onPointerMove);
@@ -822,6 +1342,10 @@ export function mountLearningForest(root, options = {}) {
       controls.removeEventListener('start', onControlsStart);
       controls.removeEventListener('end', onControlsEnd);
       window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('focus', handleForestActivityChange);
+      window.removeEventListener('blur', handleForestBlur);
+      document.removeEventListener('visibilitychange', handleForestActivityChange);
+      reducedMotionQuery?.removeEventListener?.('change', handleReducedMotionChange);
       clearSceneContent();
       renderer.dispose();
       renderer.domElement.remove();

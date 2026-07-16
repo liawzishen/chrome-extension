@@ -111,9 +111,9 @@ test("the note-only response schema and prompt require a cheat sheet but no quiz
 
 test("normalizes generated video cheat rows against immutable transcript timestamps", () => {
   const videoSegments = [
-    { id: "seg-0001", startMs: 12000, endMs: 18000, text: "Particles move down a concentration gradient by diffusion." },
-    { id: "seg-0002", startMs: 20000, endMs: 27000, text: "Water crosses a selectively permeable membrane by osmosis." },
-    { id: "seg-0003", startMs: 31000, endMs: 39000, text: "Cellular energy moves particles against a gradient by active transport." }
+    { id: "seg-0001", startMs: 12000, endMs: 18000, text: "Particles move down a concentration gradient by diffusion. No cellular energy is required. Oxygen crosses an alveolus." },
+    { id: "seg-0002", startMs: 20000, endMs: 27000, text: "Water crosses a selectively permeable membrane by osmosis. Water enters a plant cell." },
+    { id: "seg-0003", startMs: 31000, endMs: 39000, text: "Cellular energy moves particles against a gradient by active transport. A sodium-potassium pump is an example." }
   ];
   const input = prepareStudyNotesInput({
     sourceType: "video",
@@ -165,10 +165,10 @@ test("normalizes generated video cheat rows against immutable transcript timesta
 test("normalizes PDF cheat rows with page anchors and supports legacy note fallback", () => {
   const rawText = [
     "Page 1",
-    "Particles move down a concentration gradient by diffusion.",
-    "Water crosses a selectively permeable membrane by osmosis.",
+    "Particles move down a concentration gradient by diffusion. Oxygen crosses an alveolus.",
+    "Water crosses a selectively permeable membrane by osmosis. Water enters a plant cell.",
     "Page 2",
-    "Cellular energy moves particles against a gradient by active transport."
+    "Cellular energy moves particles against a gradient by active transport. A sodium-potassium pump is an example."
   ].join("\n");
   const input = prepareStudyNotesInput({
     sourceType: "webpage",

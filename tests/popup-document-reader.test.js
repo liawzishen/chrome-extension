@@ -74,9 +74,11 @@ test("PDF parsing is local, page anchored, and disables dynamic PDF evaluation",
   assert.doesNotMatch(popup, /localStorage.*fetched\.bytes|setStorage\([^\n]*fetched\.bytes/);
 });
 
-test("PDF evidence is labelled clearly and never offers an HTML highlight action", () => {
+test("PDF evidence is labelled clearly and routes to page search instead of HTML highlighting", () => {
   assert.match(popup, /This passage was extracted locally from the selected PDF/);
-  assert.match(popup, /!isPdfDocument && \["webpage", "collection"\]/);
-  assert.match(popup, /Open original PDF/);
+  assert.match(popup, /!isPdfDocument && nodeEvidence\.sourceType === "webpage"/);
+  assert.match(popup, /Open PDF and find sentence/);
+  assert.match(popup, /buildPdfEvidenceUrl\(safeSourceUrl, page, quote\)/);
+  assert.match(popup, /descriptor\.documentType === "pdf" && descriptor\.sourcePage > 0/);
   assert.match(popup, /source\.documentType === "pdf" \? "PDF"/);
 });

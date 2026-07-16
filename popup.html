@@ -57,23 +57,23 @@
       </section>
 
       <nav class="tabs" aria-label="Study modes" role="tablist">
-        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-selected="true" tabindex="0" type="button">
+        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-label="Page" aria-selected="true" tabindex="0" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4V20.5H6z"></path><path d="M14 3.5v4h4M9 12h6M9 16h6"></path></svg>
           <span>Page</span>
         </button>
-        <button id="notesTab" class="tab" data-view="notesView" role="tab" aria-selected="false" tabindex="-1" type="button">
+        <button id="notesTab" class="tab" data-view="notesView" role="tab" aria-label="Notes" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z"></path><path d="M8.5 9h5M8.5 13h5M17 7.5l2-2 1.5 1.5-3.5 3.5"></path></svg>
           <span>Notes</span>
         </button>
-        <button id="journeyTab" class="tab" data-view="journeyView" role="tab" aria-selected="false" tabindex="-1" type="button">
+        <button id="journeyTab" class="tab" data-view="journeyView" role="tab" aria-label="Journey" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2z"></path><path d="M9 4v14M15 6v14"></path></svg>
           <span>Journey</span>
         </button>
-        <button id="focusTab" class="tab" data-view="focusView" role="tab" aria-selected="false" tabindex="-1" type="button">
+        <button id="focusTab" class="tab" data-view="focusView" role="tab" aria-label="Focus" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg>
           <span>Focus</span>
         </button>
-        <button id="libraryTab" class="tab" data-view="libraryView" role="tab" aria-selected="false" tabindex="-1" type="button">
+        <button id="libraryTab" class="tab" data-view="libraryView" role="tab" aria-label="Library" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v4H5zM6.5 9.5h11v9h-11z"></path><path d="M10 13h4"></path></svg>
           <span>Library</span>
         </button>
@@ -260,7 +260,7 @@
             </div>
             <span class="feature-badge feature-badge-live"><span aria-hidden="true"></span> Explore · Connect · Verify</span>
           </div>
-          <section class="key-points-visible" aria-labelledby="keyPointsHeading">
+          <section id="keyPointsBlock" class="key-points-visible" aria-labelledby="keyPointsHeading">
             <div class="key-points-heading">
               <span class="eyebrow">Start here</span>
               <h3 id="keyPointsHeading">Key points</h3>
@@ -299,6 +299,9 @@
         <div id="scoreBlock" class="score-block hidden">
           <h3 id="scoreTitle"></h3>
           <p id="weakTopicText"></p>
+          <p id="recoveryCompositionText" class="hint hidden"></p>
+          <button id="reviewWeakConceptButton" class="secondary hidden" type="button">Review supporting evidence</button>
+          <button id="startRecoveryQuizButton" class="primary hidden" type="button">Start 5-question recovery quiz</button>
           <div id="wrongAnswerList"></div>
           <div class="goals">
             <h3>Next Goals</h3>
@@ -362,6 +365,8 @@
           <label for="backendTokenInput">Backend access token <span class="muted">(custom or remote backend only)</span></label>
           <input id="backendTokenInput" type="password" autocomplete="off" placeholder="Optional for the bundled local backend">
           <p id="backendSecurityHint" class="hint">A remote backend receives the source text or tab audio you choose to study. Access tokens are bound to one backend origin and cleared when that origin changes. Chrome local storage is not a password vault; never enter an AI provider key here.</p>
+          <button id="clearLearningMemoryButton" class="secondary" type="button">Clear learning memory</button>
+          <p class="hint">Clears concept attempts and recovery state while keeping saved notes, sources, and Library items.</p>
           <menu>
             <button value="cancel" class="text-button">Cancel</button>
             <button id="saveSettingsButton" value="default" class="primary">Save</button>

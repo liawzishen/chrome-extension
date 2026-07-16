@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "popup.js"), "utf8");
@@ -45,6 +46,46 @@ test("a pinned artifact persists until explicit Close is used", () => {
   assert.doesNotMatch(restore, /MAX_AGE|Date\.now\(\) - savedAt/);
   assert.match(restore, /draft\?\.artifact \|\| draft\?\.session/);
   assert.match(close, /removeStorage\(STORAGE_KEYS\.sessionDraft\)/);
+});
+
+test("draft restore accepts only coherent quizzes and hides empty or unfinished quiz UI", () => {
+  const helpers = functionBody("function isRenderableQuizArtifact", "function renderSummaryPoints");
+  const harness = vm.runInNewContext(`(() => {
+    ${helpers}
+    return { isRenderableQuizArtifact, sanitizeDraftArtifact };
+  })()`);
+  const incomplete = {
+    id: "note-incomplete",
+    kind: "quiz",
+    questions: [{ prompt: "", choices: [], answer: "" }],
+    answers: { orphan: "answer" }
+  };
+  assert.equal(harness.isRenderableQuizArtifact(incomplete), false);
+  const restoredNote = harness.sanitizeDraftArtifact(incomplete);
+  assert.equal(restoredNote.kind, "note");
+  assert.equal(Object.hasOwn(restoredNote, "questions"), false);
+  assert.equal(Object.hasOwn(restoredNote, "answers"), false);
+
+  const complete = {
+    id: "quiz-complete",
+    kind: "quiz",
+    questions: [{
+      prompt: "What stores captured energy?",
+      choices: ["Glucose", "Oxygen"],
+      answer: "Glucose"
+    }]
+  };
+  assert.equal(harness.isRenderableQuizArtifact(complete), true);
+  assert.equal(harness.sanitizeDraftArtifact(complete).questions.length, 1);
+
+  const restore = functionBody("async function maybeRestoreSessionDraft()", "async function handleSaveSession()");
+  assert.match(restore, /const hasQuiz = isRenderableQuizArtifact\(storedArtifact\)/);
+  assert.match(restore, /previous quiz did not finish, so quiz controls were not shown/);
+  assert.match(source, /keyPointsBlock\?\.classList\.toggle\("hidden", points\.length === 0\)/);
+
+  const render = functionBody("function renderSession(session)", "function ensureStoredQuizIdentity(session)");
+  assert.ok(render.indexOf('elements.quizBlock.classList.add("hidden")') < render.indexOf("renderQuiz(session)"));
+  assert.ok(render.indexOf("renderQuiz(session)") < render.indexOf('elements.quizBlock.classList.remove("hidden")'));
 });
 
 test("Journey separates saved artifacts from deduplicated source snapshots", () => {

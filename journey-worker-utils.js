@@ -15,6 +15,7 @@
     ADD_SOURCE: "JOURNEY_ADD_SOURCE",
     REMOVE_SOURCE: "JOURNEY_REMOVE_SOURCE",
     UPSERT_SESSION: "JOURNEY_UPSERT_SESSION",
+    CLEAR_LEARNING_MEMORY: "JOURNEY_CLEAR_LEARNING_MEMORY",
     SAVE_SUMMARY: "JOURNEY_SAVE_SUMMARY",
     FINALIZE_COLLECTION: "JOURNEY_FINALIZE_COLLECTION"
   });
@@ -133,19 +134,74 @@
         if (!payload.session || typeof payload.session !== "object") {
           throw new JourneyOperationError("INVALID_SESSION", "Saving a session requires session data.");
         }
+        if (payload.questionAttempts !== undefined && !Array.isArray(payload.questionAttempts)) {
+          throw new JourneyOperationError("INVALID_ATTEMPTS", "Saving question attempts requires a list.");
+        }
+        if (Array.isArray(payload.questionAttempts)) {
+          const attemptDefaults = {
+            quizId: payload.quizResult?.quizId || payload.session.quizId || payload.session.id,
+            noteId: payload.quizResult?.noteId || payload.session.noteId || payload.session.id,
+            sourceFingerprint: payload.quizResult?.sourceFingerprint
+              || payload.session.sourceFingerprint
+              || payload.session.sourceBinding?.fingerprint,
+            answeredAt: payload.quizResult?.submittedAt || payload.session.submittedAt,
+            attemptType: payload.quizResult?.attemptType || payload.session.attemptType,
+            targetConceptId: payload.quizResult?.targetConceptId || payload.session.recoveryTargetConceptId
+          };
+          if (payload.questionAttempts.some((attempt) => !Journey.normalizeQuestionAttempt(attempt, attemptDefaults))) {
+            throw new JourneyOperationError("INVALID_ATTEMPTS", "Every question attempt must include valid quiz, question, note, concept, answer, result, and time fields.");
+          }
+        }
         let sourceResult = null;
+        let sessionToRecord = payload.session;
         if (payload.source && typeof payload.source === "object") {
           const added = Journey.addSource(journey, chapter, payload.source, now);
           next = added.journey;
           chapter = added.chapterId;
           sourceResult = { sourceId: added.sourceId, sourceDuplicate: added.duplicate, sourceUpdated: added.updated };
+          const binding = payload.session.sourceBinding && typeof payload.session.sourceBinding === "object"
+            ? payload.session.sourceBinding
+            : {};
+          sessionToRecord = {
+            ...payload.session,
+            sourceId: added.sourceId,
+            sourceBinding: { ...binding, sourceId: added.sourceId }
+          };
         }
-        const recorded = Journey.recordSession(next, chapter, payload.session, now);
+        const recorded = Journey.recordSession(next, chapter, sessionToRecord, now);
         next = recorded.journey;
+        let attemptResult = null;
+        if (Array.isArray(payload.questionAttempts) && payload.questionAttempts.length) {
+          const quizResult = payload.quizResult && typeof payload.quizResult === "object" && !Array.isArray(payload.quizResult)
+            ? payload.quizResult
+            : {};
+          attemptResult = Journey.recordQuestionAttempts(next, payload.questionAttempts, {
+            ...payload.session,
+            ...quizResult,
+            quizId: quizResult.quizId || payload.session.quizId || payload.session.id,
+            noteId: quizResult.noteId || payload.session.noteId || payload.session.id,
+            sourceFingerprint: quizResult.sourceFingerprint
+              || payload.session.sourceFingerprint
+              || payload.session.sourceBinding?.fingerprint,
+            submittedAt: quizResult.submittedAt || payload.session.submittedAt
+          });
+          next = attemptResult.journey;
+        }
         result = {
           chapterId: recorded.chapterId,
           sessionId: recorded.sessionId,
+          recordedAttemptCount: attemptResult?.recordedCount || 0,
+          duplicateAttemptCount: attemptResult?.duplicateCount || 0,
           ...sourceResult
+        };
+        break;
+      }
+      case MESSAGE_TYPES.CLEAR_LEARNING_MEMORY: {
+        const cleared = Journey.clearLearningMemory(journey, now);
+        next = cleared.journey;
+        result = {
+          clearedAttemptCount: cleared.clearedAttemptCount,
+          clearedConceptCount: cleared.clearedConceptCount
         };
         break;
       }

@@ -8,6 +8,7 @@ const html = fs.readFileSync(path.join(root, "journey.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "journey-page.js"), "utf8");
 const styles = fs.readFileSync(path.join(root, "journey.css"), "utf8");
 const forest = fs.readFileSync(path.join(root, "journey-tree", "forest.js"), "utf8");
+const forestData = fs.readFileSync(path.join(root, "journey-tree-utils.js"), "utf8");
 const particles = fs.readFileSync(path.join(root, "journey-tree", "particle-system.js"), "utf8");
 const shaders = fs.readFileSync(path.join(root, "journey-tree", "shaders.js"), "utf8");
 const popupScript = fs.readFileSync(path.join(root, "popup.js"), "utf8");
@@ -26,45 +27,109 @@ test("replaces the old Wayfinder trail with the full-screen Learning Forest rout
   assert.doesNotMatch(script, /renderTrail|renderSidebar/);
 });
 
-test("exposes the forest controller lifecycle and stable tree/concept selection IDs", () => {
+test("exposes the forest lifecycle and selects Visual Tutor Notes by stable artifact ID", () => {
   assert.match(forest, /export function mountLearningForest/);
-  assert.match(forest, /return \{[\s\S]*?setTrees,[\s\S]*?focusTree,[\s\S]*?focusConcept,[\s\S]*?clearConceptFocus,[\s\S]*?showOverview,[\s\S]*?destroy\(\)/);
-  assert.match(forest, /onSelectTree\?\.\(\{ treeId: record\.id \}\)/);
-  assert.match(forest, /onSelectConcept\?\.\(\{ treeId: record\.id, conceptId: concept\.id \}\)/);
+  assert.match(forest, /return \{[\s\S]*?setTrees,[\s\S]*?focusTree,[\s\S]*?focusVisualNote,[\s\S]*?showOverview,[\s\S]*?destroy\(\)/);
+  assert.match(forest, /onSelectTree\?\.\(\{\s*treeId:\s*record\.id\s*\}\)/);
+  assert.match(forest, /onSelectVisualNote\?\.\(\{[\s\S]*?treeId:\s*record\.id[\s\S]*?artifactId:\s*(?:visualNote|note)\.id[\s\S]*?\}\)/);
+  assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?selectedVisualNoteId\s*=\s*artifactId/);
   assert.match(forest, /resizeObserver\.disconnect\(\)/);
   assert.match(forest, /controls\.dispose\(\)/);
   assert.match(forest, /renderer\.dispose\(\)/);
 });
 
-test("shows one tree's concepts immediately and uses name-only overview labels for multiple trees", () => {
+test("shows up to eight meaningful Visual Tutor Note branches and creates only real chapter ribbon entries", () => {
   assert.match(forest, /if \(trees\.length === 1\) \{[\s\S]*?focusTree\(trees\[0\]\.id\)/);
-  assert.match(forest, /function buildOverview\(\)[\s\S]*?createParticleTree\(\[\], renderer/);
-  assert.match(forest, /createLabelButton\(\s*entry\.record,\s*'tree'/);
-  assert.match(forest, /function focusTree\(treeId\)[\s\S]*?record\.concepts\.map/);
-  assert.match(forest, /createLabelButton\(\s*\{ \.\.\.concept, createdAt: record\.createdAt \},\s*'concept'/);
+  assert.match(html, /id="forestRibbon"[\s\S]*?id="forestRibbonPath"[\s\S]*?id="forestRibbonPlots"[\s\S]*?id="forestChapterIndex"/);
+  assert.match(forest, /function buildRibbon\(activeTreeId, presentation\)[\s\S]*?ribbonEntries = trees\.map/);
+  assert.match(forest, /String\(index \+ 1\)\.padStart\(2, '0'\)/);
+  assert.doesNotMatch(forest, /Array\.from\(\{ length: 11 \}/);
+  assert.match(forest, /function focusTree\(treeId\)[\s\S]*?record\.visualNotes\.map/);
+  assert.match(forest, /focusVisualNote\(record\.id,\s*(?:visualNote|note)\.id\)/);
+  assert.doesNotMatch(forest, /visualNotes[^;\n]*\.slice\(0,\s*7\)|visualNoteCount[^;\n]*Math\.min\(7,/);
+  assert.match(forestData, /const MAX_VISUAL_NOTES_PER_CHAPTER = 8/);
+  assert.match(forestData, /visualNoteBranchIdentity/);
+  assert.match(forestData, /slice\(0, MAX_VISUAL_NOTES_PER_CHAPTER\)/);
   assert.match(html, /id="backToForest"[^>]*>Back to forest</);
-  assert.match(script, /page\.back\.addEventListener\("click", \(\) => \{[\s\S]*?selectedConceptId = "";[\s\S]*?forestController\.showOverview\(\)/);
+  assert.match(script, /page\.back\.addEventListener\("click", \(\) => \{[\s\S]*?selectedVisualNoteId = "";[\s\S]*?forestController\.showOverview\(\)/);
 });
 
-test("keeps overview particle work bounded and rebuilds one full-detail focused tree", () => {
-  assert.match(forest, /OVERVIEW_TREE_BUDGET_CAP = 240_000/);
-  assert.match(forest, /Math\.floor\(totalParticleBudget \/ Math\.max\(1, trees\.length\)\)/);
-  assert.match(forest, /particleBudget: perTreeBudget/);
-  assert.match(forest, /particleBudget: totalParticleBudget/);
+test("places each chapter title beneath its planting root without decorative hit-area blockers", () => {
+  assert.match(forest, /className = 'forest-ribbon__plot-title'/);
+  assert.match(forest, /function getRibbonRoot\(entry\)[\s\S]*?bounds\.min\.y - 0\.08/);
+  assert.match(forest, /entry\.plot\.style\.transform = `translate3d\(\$\{screenX\}px, \$\{screenY\}px, 0\) translate\(-50%, -50%\)`/);
+  assert.match(styles, /\.forest-ribbon \{[\s\S]*?pointer-events:\s*none/);
+  assert.match(styles, /\.forest-ribbon__plot \{[\s\S]*?pointer-events:\s*auto/);
+  assert.match(styles, /\.forest-ribbon__plot-title \{[\s\S]*?top:\s*76px/);
+});
+
+test("keeps every non-empty growth stage visible in overview and preserves it when focused", () => {
+  assert.match(forest, /function buildPreviewSystems\([\s\S]*?ribbonEntries\.(?:forEach|map)\([\s\S]*?createParticleTree\([\s\S]*?growthStage:\s*record\.growthStage[\s\S]*?overviewSystems\.push/);
+  assert.match(forest, /function buildOverview\([\s\S]*?buildPreviewSystems\(\)/);
+  assert.match(forest, /button\.dataset\.growth\s*=\s*record\.growthStage/);
+  for (const stage of ["plot", "seedling", "growing", "mature"]) {
+    assert.match(styles, new RegExp(`forest-ribbon__plot\\[data-growth="${stage}"\\]`));
+  }
+  assert.match(forest, /entry\.plot\.hidden\s*=\s*false/);
+  assert.doesNotMatch(forest, /entry\.plot\.hidden\s*=\s*true/);
+  assert.match(forest, /function focusTree\(treeId\)[\s\S]*?createParticleTree\([\s\S]*?growthStage:\s*record\.growthStage/);
   assert.match(forest, /clearSceneContent\(\);[\s\S]*?setMode\('focus'/);
   assert.match(particles, /createParticleTree\(chapters, renderer, options = \{\}\)/);
-  assert.match(particles, /Math\.max\(12_000, Math\.round\(requestedBudget\)\)/);
 });
 
-test("uses a non-overlapping bounded layout and a responsive tree-name directory", () => {
-  assert.match(forest, /function buildLayout\(count, aspect\)/);
-  assert.match(forest, /spacingX = 4\.9/);
-  assert.match(forest, /spacingZ = 4\.6/);
-  assert.match(forest, /bounds\.union\(transformedBounds\(entry\.system\)\)/);
-  assert.match(forest, /trees\.length > 8 \|\| sceneHost\.clientWidth < 700/);
-  assert.match(styles, /\.forest-labels\.is-directory[\s\S]*?grid-template-columns:\s*repeat\(auto-fit, minmax\(130px, 1fr\)\)/);
+test("keeps focused and background plants inside one hardware-tier particle budget", () => {
+  assert.match(forest, /FOCUS_BACKGROUND_MIN_TREE_BUDGET = 4_000/);
+  assert.match(forest, /const backgroundReserve = Math\.min\([\s\S]*?backgroundTreeCount \* FOCUS_BACKGROUND_MIN_TREE_BUDGET/);
+  assert.match(forest, /const focusedBudget = record\.growthStage === 'plot'[\s\S]*?totalParticleBudget - backgroundReserve/);
+  assert.match(forest, /poolLimit: Math\.max\(0, totalParticleBudget - focusedBudget\)/);
+  assert.match(particles, /MAX_PARTICLE_BUDGET = 180_000/);
+  assert.match(particles, /Math\.min\(MAX_PARTICLE_BUDGET, Math\.max\(2_000, Math\.round\(requestedBudget\)\)\)/);
+  assert.match(forest, /const pool = Math\.min\(totalBudget,/);
+});
+
+test("idles the forest renderer while hidden, unfocused, offscreen, or reduced-motion", () => {
+  assert.match(forest, /function isForestViewActive\(\)[\s\S]*?!document\.hidden[\s\S]*?document\.hasFocus\?\.\(\)[\s\S]*?forestIsIntersecting[\s\S]*?getClientRects\(\)\.length[\s\S]*?aria-hidden/);
+  assert.match(forest, /function isForestAnimationActive\(\) \{[\s\S]*?isForestViewActive\(\) && !reducedMotion/);
+  assert.match(forest, /function scheduleAnimationFrame\(\) \{[\s\S]*?!isForestAnimationActive\(\)[\s\S]*?requestAnimationFrame\(render\)/);
+  assert.match(forest, /function requestForestRender\(\) \{[\s\S]*?if \(reducedMotion\) \{[\s\S]*?drawForestFrame\(performance\.now\(\), true\);[\s\S]*?scheduleAnimationFrame\(\)/);
+  assert.match(forest, /function render\(timestamp = 0\) \{[\s\S]*?animationFrameId = 0;[\s\S]*?if \(!isForestAnimationActive\(\)\) return;[\s\S]*?scheduleAnimationFrame\(\)/);
+  assert.match(forest, /new IntersectionObserver\([\s\S]*?forestIsIntersecting = Boolean\(entry\?\.isIntersecting\)/);
+  assert.match(forest, /function handleForestBlur\(\) \{[\s\S]*?stopAnimationLoop\(\)/);
+  assert.match(forest, /window\.addEventListener\('focus', handleForestActivityChange\)[\s\S]*?window\.addEventListener\('blur', handleForestBlur\)[\s\S]*?document\.addEventListener\('visibilitychange', handleForestActivityChange\)/);
+  assert.match(forest, /visibilityObserver\?\.disconnect\(\)[\s\S]*?window\.removeEventListener\('focus', handleForestActivityChange\)[\s\S]*?window\.removeEventListener\('blur', handleForestBlur\)[\s\S]*?document\.removeEventListener\('visibilitychange', handleForestActivityChange\)/);
+});
+
+test("retains exact note focus across one-tree refreshes and responsive reframing", () => {
+  assert.match(forest, /if \(trees\.length === 1\) \{[\s\S]*?previousVisualNoteId[\s\S]*?focusVisualNote\(trees\[0\]\.id, previousVisualNoteId\)/);
+  assert.match(forest, /if \(\(mode === 'overview' \|\| mode === 'focus'\) && trees\.length\)/);
+  assert.match(forest, /const selectedNoteEntry = selectedVisualNoteId[\s\S]*?getVisualNotePose\(selectedNoteEntry\)[\s\S]*?getFocusPose\(focusSystem\?\.system \|\| null, selectedEntry\.position\)/);
+  assert.match(script, /function handleStorageChanged\(changes, area\)[\s\S]*?metricsChanged = true[\s\S]*?else if \(metricsChanged\) renderHeaderMetrics\(\)/);
+  assert.doesNotMatch(script, /if \(!relevantSources\.length && chapter\.sources\.length === 1\)/);
+});
+
+test("uses a bounded serpentine ribbon and a scrollable exact-count chapter index", () => {
+  assert.match(forest, /function buildLayout\(count, aspect = 1\)/);
+  assert.match(forest, /ribbonEntries = trees\.map\(\(record, index\)/);
+  assert.match(forest, /function buildSmoothPath\(points\)/);
+  assert.match(styles, /\.forest-ribbon__index \{[\s\S]*?overflow-x:\s*auto/);
+  assert.match(styles, /\.forest-ribbon__index-button \{[\s\S]*?min-width:\s*104px/);
   assert.match(styles, /@media \(max-width: 560px\)/);
   assert.match(styles, /@media \(max-width: 360px\)/);
+});
+
+test("links plot and index feedback, pulses completed chapters, and preserves staged growth in focus", () => {
+  assert.match(forest, /function bindRibbonFeedback\(element, treeId\)[\s\S]*?pointerenter[\s\S]*?focus/);
+  assert.match(forest, /entry\.plot\.classList\.toggle\('is-linked', isLinked\)/);
+  assert.match(forest, /entry\.indexButton\.classList\.toggle\('is-linked', isLinked\)/);
+  assert.match(forest, /button\.dataset\.status = record\.status/);
+  assert.match(styles, /\.forest-ribbon__plot\[data-status="completed"\] \.forest-ribbon__completion-pulse[\s\S]*?animation: forest-completion-pulse/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.forest-ribbon__completion-pulse/);
+  assert.match(particles, /GROWTH_PROFILES = Object\.freeze\([\s\S]*?seedling:[\s\S]*?growing:[\s\S]*?mature:/);
+  assert.match(particles, /const growthStage = options\.growthStage/);
+  assert.match(particles, /const skeleton = generateSkeleton\(random, growthProfile\)/);
+  assert.doesNotMatch(forest, /controls\.enabled = nextMode === 'focus'/);
+  assert.match(forest, /controls\.enabled\s*=\s*(?:nextMode\s*!==\s*'empty'|nextMode === 'overview' \|\| nextMode === 'focus')/);
+  assert.match(forest, /entry\.system\.points\.position\.lerp\(entry\.targetPosition/);
 });
 
 test("places concept subheaders 12 percentage points closer at 25 percent of the side span", () => {
@@ -82,18 +147,17 @@ test("places concept subheaders 12 percentage points closer at 25 percent of the
 
 test("keeps short subheader connectors anchored to the tree and outside button hit areas", () => {
   assert.match(forest, /MAX_CONCEPT_CONNECTOR_LENGTH = 112/);
-  assert.match(forest, /MAX_TREE_CONNECTOR_LENGTH = 96/);
   assert.match(forest, /CONNECTOR_TREE_INSET = 4/);
-  assert.match(forest, /connectorLength = Math\.min\(rawDistance - treeInset, maximumLength\)/);
+  assert.match(forest, /connectorLength = Math\.min\(rawDistance - treeInset, MAX_CONCEPT_CONNECTOR_LENGTH\)/);
   assert.match(forest, /const endX = leafX - unitX \* treeInset/);
   assert.match(forest, /const connectorStartX = endX - unitX \* connectorLength/);
-  assert.match(forest, /labelSafeTop = width <= 560 \? 214 : \(width <= 860 \? 150 : 140\)/);
+  assert.match(forest, /labelSafeTop = width <= 560 \? 238 : \(width <= 860 \? 150 : 140\)/);
   assert.match(forest, /Math\.max\(entry\.screenY, labelSafeTop, lastY \+ 48\)/);
   assert.match(html, /class="forest-topbar__utility"[\s\S]*class="forest-controls" role="group" aria-label="Journey actions and tree navigation"/);
   assert.match(html, /class="forest-controls"[\s\S]*id="backToForest"[\s\S]*id="openTreeDetails"[\s\S]*id="openJourneySummary"/);
   assert.match(styles, /\.forest-connectors \{[^}]*pointer-events:\s*none/);
   assert.match(styles, /\.forest-labels \{[^}]*pointer-events:\s*none/);
-  assert.match(styles, /\.forest-labels\.is-directory \{[\s\S]*?pointer-events:\s*none/);
+  assert.match(styles, /\.forest-ribbon \{[\s\S]*?pointer-events:\s*none/);
   assert.match(styles, /\.forest-controls \{[\s\S]*?position:\s*static[\s\S]*?pointer-events:\s*auto/);
   assert.match(styles, /\.forest-control \{[^}]*pointer-events:\s*auto/);
   assert.match(styles, /@media \(max-width: 860px\)[\s\S]*?\.forest-connector \{ display: none; \}/);
@@ -105,7 +169,7 @@ test("keeps moving subheaders clickable above decorative layers", () => {
   assert.match(forest, /event\.detail === 0/);
   assert.match(forest, /\(\) => \{ cameraIsFlying = false; \}/);
   assert.match(styles, /\.forest-labels \{ z-index: 14; pointer-events: none; \}/);
-  assert.match(styles, /\.forest-axis,\s*\.forest-legend \{ pointer-events: none; \}/);
+  assert.match(styles, /\.forest-legend \{ pointer-events: none; \}/);
   assert.match(styles, /\.forest-label \{[\s\S]*?min-height: 40px;[\s\S]*?touch-action: manipulation/);
 });
 
@@ -162,8 +226,9 @@ test("enlarges and spaces the same particles while trunk, root, branch, and leaf
   assert.match(shaders, /vEdgeFlow = flowEmphasis/);
   assert.match(shaders, /alpha \*= 1\.0 \+ vEdgeFlow \* 0\.78/);
   assert.match(forest, /edgeDissolveStrength: motionHasStarted \? 1 : 0/g);
-  assert.match(forest, /const visualScale = scale \* system\.spatialScale/);
-  assert.match(forest, /leaf\.center\)\.multiplyScalar\(system\.spatialScale\)/);
+  assert.match(forest, /const visualScale = OVERVIEW_TREE_SCALE \* system\.spatialScale/);
+  assert.match(forest, /hitTarget\.position\.copy\(leaf\.center\)/);
+  assert.match(forest, /system\.points\.add\(hitTarget\)/);
   assert.match(particles, /new Float32Array\(count \* 3\)/);
   assert.match(particles, /new THREE\.Points\(geometry, material\)/);
   assert.equal((particles.match(/new THREE\.Points\(/g) || []).length, 1);
@@ -190,38 +255,37 @@ test("redesigns chapter evidence and Journey summary inside one accessible drawe
   assert.match(html, /id="pageSummarizeButton"/);
   assert.match(script, /Planted \$\{formatDate\(chapter\.createdAt\)\}/);
   assert.match(script, /Updated \$\{formatDate\(chapter\.updatedAt\)\}/);
-  assert.match(script, /Tree concepts/);
+  assert.match(script, /Visual Note branches/);
   assert.match(script, /Saved learning artifacts/);
   assert.match(script, /Saved source snapshots/);
   assert.match(styles, /\.forest-drawer\.is-open/);
 });
 
-test("zooms to a selected subheader and shows only its translucent concept information", () => {
+test("zooms to a Visual Tutor Note branch and opens its exact artifact in the bottom drawer", () => {
   assert.match(html, /id="forestDrawer"[^>]*tabindex="-1"/);
-  assert.match(script, /onSelectConcept\(\{ treeId, conceptId \}\)[\s\S]*?openDrawer\("chapter"\)/);
+  assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?selectedVisualNoteId\s*=\s*artifactId[\s\S]*?openDrawer\("chapter"\)/);
   assert.match(script, /page\.drawer\.focus\(\{ preventScroll: true \}\)/);
-  assert.match(script, /requestAnimationFrame\(revealSelectedConceptMessage\)/);
-  assert.match(script, /function revealSelectedConceptMessage\(\)/);
+  assert.match(script, /requestAnimationFrame\(revealSelectedVisualNote\w*\)/);
+  assert.match(script, /function revealSelectedVisualNote\w*\(\)/);
   assert.match(script, /scrollIntoView\(\{[\s\S]*?block: "nearest"/);
-  assert.match(forest, /function focusConcept\(treeId, conceptId\)/);
-  assert.match(forest, /entry\.leaf\.center\.clone\(\)\.applyMatrix4\(entry\.points\.matrixWorld\)/);
+  assert.match(forest, /function focusVisualNote\(treeId, artifactId\)/);
+  assert.match(forest, /record\?\.visualNotes\.find\(\(item\) => item\.id === artifactId\)/);
   assert.match(forest, /CONCEPT_CAMERA_DISTANCE = 2\.75/);
   assert.match(forest, /setCameraTarget\(cameraDestination, framingTarget\)/);
-  assert.match(forest, /entry\.isVisible = inFrustum && !selectedConceptId/);
-  assert.match(script, /function renderConceptFocusMessage\(chapter, record, selectedConcept\)/);
-  assert.match(script, /page\.drawer\.classList\.toggle\("is-concept-only"/);
-  assert.match(styles, /\.forest-drawer\.is-concept-only \{[\s\S]*rgba\(5, 7, 8, 0\.55\)/);
-  assert.match(styles, /\.forest-drawer\.is-concept-only \.forest-drawer__tabs,[\s\S]*display: none/);
-  assert.match(styles, /\.forest-drawer\.is-concept-only \.chapter-inspector \{[\s\S]*background: transparent/);
+  assert.match(script, /function renderVisualNoteFocus\([\s\S]*?renderChapterNotePreview\(chapter, record, selectedNote\.id\)/);
+  assert.match(script, /function renderChapterNotePreview\(chapter, record,\s*preferredArtifactId[\s\S]*?getExactChapterArtifact\(record, preferredArtifactId\)/);
+  assert.match(script, /page\.drawer\.classList\.toggle\("is-note-only"/);
+  assert.match(styles, /\.forest-drawer\.is-note-only[\s\S]*rgba\(5, 7, 8, 0\.55\)/);
 });
 
 test("keeps exact Visual Tutor Note and cheat sheet access in full Note details", () => {
   assert.match(script, /function openFullDetails\(tab, trigger\)/);
-  assert.match(script, /function renderChapterNotePreview\(chapter, record\)/);
-  assert.match(script, /getExactChapterArtifact\(record\)/);
+  assert.match(script, /function renderChapterNotePreview\(chapter, record,\s*\w+/);
+  assert.match(script, /function getExactChapterArtifact\(record,\s*\w+[\s\S]*?selectedVisualNoteId[\s\S]*?savedArtifacts\.find\(\(artifact\) => artifact\.id === artifactId\)/);
   assert.match(script, /savedArtifacts\.find\(\(artifact\) => artifact\.id === artifactId\)/);
   assert.match(script, /Visual Tutor Note/);
   assert.match(script, /function normalizeChapterCheatSheet\(artifact\)/);
+  assert.match(script, /normalizeCheatSheetForRender/);
   assert.match(script, /function renderChapterCheatSheet\(sheet\)/);
   assert.match(styles, /\.chapter-focus-message \{/);
   assert.match(styles, /\.visual-tutor-preview__nodes \{/);
@@ -231,7 +295,10 @@ test("keeps exact Visual Tutor Note and cheat sheet access in full Note details"
   assert.match(styles, /\.forest-drawer\.is-open \{[\s\S]*transform: translate\(-50%, 0\)/);
   assert.match(styles, /\.forest-drawer \{[\s\S]*pointer-events: none/);
   assert.match(styles, /\.forest-drawer\.is-open \{[\s\S]*pointer-events: auto/);
-  assert.match(styles, /\.forest-drawer__chrome \{[\s\S]*position: sticky[\s\S]*top: 0/);
+  assert.match(styles, /\.forest-drawer \{[\s\S]*display: grid[\s\S]*grid-template-rows: auto minmax\(0, 1fr\)[\s\S]*overflow: hidden/);
+  assert.match(styles, /\.forest-drawer__chrome \{[\s\S]*position: relative/);
+  assert.match(styles, /\.forest-drawer__panel \{[\s\S]*min-height: 0[\s\S]*overflow: auto/);
+  assert.doesNotMatch(styles, /\.forest-drawer\s*\{[^}]*position:\s*fixed[^}]*right:\s*0/);
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.forest-controls \{[^}]*display: grid[^}]*grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
 });
 
@@ -239,13 +306,13 @@ test("uses progressive disclosure, responsive regions, and a user-controlled mot
   assert.match(html, /class="forest-topbar__meta"/);
   assert.match(html, /id="toggleForestMotion"[^>]*aria-pressed="false"[^>]*>Pause motion</);
   assert.match(html, /<kbd>Drag<\/kbd> orbit[\s\S]*<kbd>Scroll<\/kbd> zoom/);
-  assert.match(script, /onSelectTree\(\{ treeId \}\) \{[\s\S]*?renderDetails\(\);\s*closeDrawer\(\);/);
-  assert.match(script, /onSelectConcept\(\{ treeId, conceptId \}\)[\s\S]*?openDrawer\("chapter"\)/);
+  assert.match(script, /onSelectTree\(\{\s*treeId\s*\}\) \{[\s\S]*?renderDetails\(\);\s*closeDrawer\(\);/);
+  assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?openDrawer\("chapter"\)/);
   assert.match(script, /function updateMotionControl\(\)[\s\S]*?Resume motion[\s\S]*?Pause motion/);
   assert.match(script, /function rememberDrawerReturnFocus\(preferred\)/);
   assert.match(script, /returnTarget\.focus\(\{ preventScroll: true \}\)/);
   assert.match(forest, /function setMotionPaused\(nextPaused\)/);
-  assert.match(forest, /if \(!motionPaused\) motionElapsed \+= delta/);
+  assert.match(forest, /if \(!motionPaused && !settleImmediately\) motionElapsed \+= delta/);
   assert.match(styles, /\.forest-topbar__meta \{/);
   assert.match(styles, /\.forest-control--motion\[aria-pressed="true"\]/);
   assert.match(styles, /@media \(max-width: 560px\)[\s\S]*\.forest-drawer \{[\s\S]*?bottom: 0;[\s\S]*?width: 100%/);
@@ -254,9 +321,11 @@ test("uses progressive disclosure, responsive regions, and a user-controlled mot
 test("documents the current Learning Forest interaction and verification contract", () => {
   assert.match(readme, /full Learning Forest/);
   assert.match(readme, /Pause motion/);
-  assert.match(readme, /subheader/i);
+  assert.match(readme, /up to eight meaningful Visual Tutor Note branches/i);
+  assert.match(readme, /Visual Tutor Notes.*distinct saved sources|distinct saved sources.*Visual Tutor Notes/i);
+  assert.match(readme, /360|orbit/i);
   assert.match(readme, /npm run build:journey/);
-  assert.doesNotMatch(readme, /All 153 automated tests currently pass/);
+  assert.doesNotMatch(readme, /## Current Release|### 0\.[0-9]|Version 0\.[0-9]|tests passing/i);
 });
 
 test("preserves source-specific names and the exact saved-artifact side-panel handoff", () => {
@@ -274,7 +343,8 @@ test("preserves source-specific names and the exact saved-artifact side-panel ha
 test("keeps reduced-motion behavior, keyboard exit, and touch-sized artifact actions", () => {
   assert.match(forest, /prefers-reduced-motion: reduce/);
   assert.match(forest, /event\.key === 'Escape'[\s\S]*?showOverview\(\)/);
-  assert.match(script, /event\.key === "Escape"[\s\S]*?closeDrawer\(\)/);
+  assert.match(script, /function handlePageKeyDown\(event\)[\s\S]*?event\.key === "Escape"[\s\S]*?dismissDetails\(\)/);
+  assert.match(script, /function handleBeforeUnload\(\)[\s\S]*?removeEventListener\("keydown", handlePageKeyDown\)[\s\S]*?removeListener\?\.\(handleStorageChanged\)[\s\S]*?forestController\.destroy\(\)/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
   assert.match(styles, /\.artifact-card \.artifact-open-button[\s\S]*?min-height:\s*44px/);
   assert.match(styles, /button:focus-visible/);

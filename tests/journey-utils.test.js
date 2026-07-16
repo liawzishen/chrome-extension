@@ -5,6 +5,28 @@ require("../journey-utils.js");
 
 const Journey = globalThis.ExamCramJourney;
 
+function questionAttempt(index, overrides = {}) {
+  return {
+    attemptId: `attempt-${String(index).padStart(3, "0")}`,
+    quizId: "quiz-memory",
+    questionId: `question-${String(index).padStart(3, "0")}`,
+    noteId: "note-memory",
+    sourceFingerprint: "source-memory",
+    primaryConceptId: "concept-alpha",
+    relatedConceptIds: [],
+    conceptLabel: "Concept Alpha",
+    sourceRef: { sourceId: "source-a", quote: "Grounded evidence", pageNumber: 2 },
+    sourcePage: 2,
+    correctAnswer: "Correct",
+    studentAnswer: "Correct",
+    result: "correct",
+    answeredAt: new Date(Date.parse("2026-07-15T01:00:00Z") + index * 1000).toISOString(),
+    attemptType: "normal",
+    targetConceptId: "",
+    ...overrides
+  };
+}
+
 test("creates an empty named chapter with a stable ID before any source or note exists", () => {
   const initial = Journey.createJourney("Biology", "2026-07-14T01:00:00Z");
   const created = Journey.createChapter(initial, "  Cell   Transport  ", "2026-07-14T01:30:00Z");
@@ -203,6 +225,102 @@ test("grounds combined chapter output to the saved source that contains the evid
   assert.equal(grounded.visualLesson.visualModel.nodes[0].sourceId, "source-a");
 });
 
+test("preserves PDF and video evidence metadata through collection payloads and provenance", () => {
+  const chapter = {
+    id: "chapter-evidence",
+    title: "Mixed evidence",
+    sources: [{
+      id: "source-pdf",
+      type: "webpage",
+      documentType: "pdf",
+      pageCount: 12,
+      sourcePage: 4,
+      title: "Transport handbook",
+      url: "https://reference.test/transport.pdf",
+      fingerprint: "fingerprint-pdf",
+      text: "Page 4 Active transport moves particles against a concentration gradient and requires cellular energy."
+    }, {
+      id: "source-video",
+      type: "video",
+      title: "Transport video",
+      url: "https://video.test/watch?v=transport",
+      fingerprint: "fingerprint-video",
+      durationMs: 120000,
+      mediaId: "video-transport",
+      segments: [{
+        id: "seg-0001",
+        startMs: 12000,
+        endMs: 18000,
+        text: "Diffusion moves particles down a concentration gradient."
+      }, {
+        id: "seg-0002",
+        startMs: 65000,
+        endMs: 71000,
+        text: "Active transport requires cellular energy."
+      }]
+    }]
+  };
+  const payload = Journey.buildCollectionPayload(chapter, 5000);
+  const pdfSource = payload.sources.find((source) => source.id === "source-pdf");
+  const videoSource = payload.sources.find((source) => source.id === "source-video");
+
+  assert.equal(pdfSource.documentType, "pdf");
+  assert.equal(pdfSource.pageCount, 12);
+  assert.equal(pdfSource.fingerprint, "fingerprint-pdf");
+  assert.equal(pdfSource.sourcePage, 4);
+  assert.equal(pdfSource.pageNumber, 4);
+  assert.equal(videoSource.fingerprint, "fingerprint-video");
+  assert.equal(videoSource.durationMs, 120000);
+  assert.equal(videoSource.mediaId, "video-transport");
+  assert.deepEqual(
+    videoSource.segments.map(({ id, startMs, endMs }) => ({ id, startMs, endMs })),
+    [
+      { id: "seg-0001", startMs: 12000, endMs: 18000 },
+      { id: "seg-0002", startMs: 65000, endMs: 71000 }
+    ]
+  );
+
+  const grounded = Journey.attachCollectionProvenance({
+    questions: [{
+      id: "question-pdf",
+      sourceId: "source-pdf",
+      sourceText: "Active transport moves particles against a concentration gradient.",
+      sourceRef: { sourcePage: 4 }
+    }, {
+      id: "question-video",
+      sourceId: "source-video",
+      sourceSegmentId: "seg-0002",
+      sourceText: "Active transport requires cellular energy."
+    }],
+    visualLesson: { visualModel: { nodes: [{
+      id: "node-pdf",
+      sourceId: "source-pdf",
+      sourceAnchor: "Active transport moves particles against a concentration gradient.",
+      pageNumber: 4
+    }] } }
+  }, payload.sources, payload.text);
+
+  const pdfQuestion = grounded.questions[0];
+  assert.equal(pdfQuestion.sourcePage, 4);
+  assert.equal(pdfQuestion.pageNumber, 4);
+  assert.equal(pdfQuestion.sourceRef.documentType, "pdf");
+  assert.equal(pdfQuestion.sourceRef.pageCount, 12);
+  assert.equal(pdfQuestion.sourceRef.sourcePage, 4);
+  assert.equal(pdfQuestion.sourceRef.pageNumber, 4);
+  assert.equal(pdfQuestion.sourceRef.sourceFingerprint, "fingerprint-pdf");
+
+  const videoQuestion = grounded.questions[1];
+  assert.equal(videoQuestion.sourceSegmentId, "seg-0002");
+  assert.equal(videoQuestion.sourceTimestamp, 65);
+  assert.equal(videoQuestion.sourceRef.sourceType, "video");
+  assert.equal(videoQuestion.sourceRef.sourceFingerprint, "fingerprint-video");
+  assert.equal(videoQuestion.sourceRef.segmentId, "seg-0002");
+  assert.equal(videoQuestion.sourceRef.startMs, 65000);
+  assert.equal(videoQuestion.sourceRef.endMs, 71000);
+  assert.equal(grounded.visualLesson.visualModel.nodes[0].sourceRef.sourcePage, 4);
+  assert.equal(grounded.sources.find((source) => source.id === "source-video").segments[1].startMs, 65000);
+});
+
 test("migrates v1 dates safely and separates generation from quiz submission", () => {
   const migrated = Journey.normalizeJourney({
     schemaVersion: 1,
@@ -227,7 +345,7 @@ test("migrates v1 dates safely and separates generation from quiz submission", (
   });
 
   const session = migrated.chapters[0].sessions[0];
-  assert.equal(migrated.schemaVersion, 2);
+  assert.equal(migrated.schemaVersion, Journey.SCHEMA_VERSION);
   assert.equal(session.generatedAt, "2026-06-01T12:00:00.000Z");
   assert.equal(session.submittedAt, "2026-06-01T12:00:00.000Z");
   assert.equal(session.createdAt, session.generatedAt);
@@ -397,7 +515,7 @@ test("records a sourceBinding as the latest learning context", () => {
   assert.equal(journey.lastStudySource.chapter, "Energy");
 });
 
-test("deduplicates a recaptured webpage while preserving distinct saved artifacts", () => {
+test("preserves distinct webpage revisions while deduplicating exact recaptures", () => {
   let journey = Journey.createJourney("Biology", "2026-07-11T00:00:00Z");
   const firstSource = Journey.addSource(journey, "Cells", {
     id: "source-original",
@@ -439,15 +557,79 @@ test("deduplicates a recaptured webpage while preserving distinct saved artifact
   }, "2026-07-11T02:05:00Z").journey;
 
   const chapter = journey.chapters[0];
-  assert.equal(recaptured.duplicate, true);
-  assert.equal(recaptured.updated, true);
-  assert.equal(chapter.sources.length, 1);
+  assert.equal(recaptured.duplicate, false);
+  assert.equal(recaptured.updated, false);
+  assert.equal(chapter.sources.length, 2);
   assert.equal(chapter.sources[0].id, "source-original");
-  assert.equal(chapter.sources[0].fingerprint, "fp-second");
-  assert.equal(chapter.sources[0].text, "Updated page evidence");
+  assert.equal(chapter.sources[0].fingerprint, "fp-first");
+  assert.equal(chapter.sources[1].fingerprint, "fp-second");
+  const exactRecapture = Journey.addSource(journey, firstSource.chapterId, {
+    id: "source-exact-copy",
+    type: "webpage",
+    title: "Cell transport updated",
+    url: "https://learn.example/cells#third",
+    fingerprint: "fp-second",
+    text: "Updated page evidence"
+  }, "2026-07-11T03:00:00Z");
+  assert.equal(exactRecapture.duplicate, true);
+  assert.equal(exactRecapture.updated, false);
+  assert.equal(exactRecapture.journey.chapters[0].sources.length, 2);
   assert.deepEqual(chapter.sessions.map((session) => session.id).sort(), ["note-first", "note-second"]);
   assert.ok(chapter.sessions.every((session) => session.hasVisualNote));
   assert.equal(chapter.sessions.find((session) => session.id === "note-first").visualConceptCount, 3);
+});
+
+test("builds a chapter collection from every visual note source revision", () => {
+  const chapter = {
+    id: "chapter-revisions",
+    title: "Cell transport",
+    sessions: [
+      { id: "note-first", title: "First note", hasVisualNote: true, generatedAt: "2026-07-11T01:00:00Z" },
+      { id: "note-second", title: "Second note", hasVisualNote: true, generatedAt: "2026-07-11T02:00:00Z" },
+      { id: "note-copy", title: "Exact-copy note", hasVisualNote: true, generatedAt: "2026-07-11T03:00:00Z" }
+    ],
+    sources: [{
+      id: "source-shared",
+      type: "webpage",
+      title: "Cell transport current",
+      url: "https://learn.example/cells",
+      fingerprint: "fp-second",
+      text: "Updated cell transport evidence explains active transport and cellular energy requirements."
+    }]
+  };
+  const artifact = (id, fingerprint, rawText) => ({
+    id,
+    kind: "note",
+    artifactType: "study",
+    journeyChapterId: chapter.id,
+    generatedAt: chapter.sessions.find((session) => session.id === id).generatedAt,
+    visualLesson: { visualModel: { nodes: [{ id: `${id}-concept` }] } },
+    sourceBinding: {
+      chapterId: chapter.id,
+      sourceId: "source-shared",
+      sourceType: "webpage",
+      title: "Cell transport",
+      url: "https://learn.example/cells",
+      fingerprint,
+      rawText
+    }
+  });
+  const artifacts = [
+    artifact("note-first", "fp-first", "Original cell transport evidence explains diffusion across a membrane and concentration gradients."),
+    artifact("note-second", "fp-second", "Updated cell transport evidence explains active transport and cellular energy requirements."),
+    artifact("note-copy", "fp-first", "Original cell transport evidence explains diffusion across a membrane and concentration gradients.")
+  ];
+
+  const payload = Journey.buildChapterCollectionPayload(chapter, artifacts, 6000);
+  assert.equal(payload.visualNoteCount, 3);
+  assert.equal(payload.availableVisualNoteCount, 3);
+  assert.equal(payload.sourceSnapshotCount, 2, "only exact source revisions should be deduplicated");
+  assert.equal(payload.includedSourceCount, 2);
+  assert.equal(new Set(payload.sources.map((source) => source.id)).size, 2, "colliding historical source IDs must be made unique");
+  assert.deepEqual(new Set(payload.sources.map((source) => source.fingerprint)), new Set(["fp-first", "fp-second"]));
+  assert.equal((payload.text.match(/<<<SOURCE_BLOCK>>>/g) || []).length, 2);
+  assert.equal(payload.sourceRevisionHash, Journey.sourceRevisionHash(chapter));
+  assert.notEqual(payload.compositionRevisionHash, "");
 });
 
 test("upgrades a saved visual note to visual note plus quiz evidence", () => {
@@ -480,6 +662,34 @@ test("upgrades a saved visual note to visual note plus quiz evidence", () => {
   assert.equal(Journey.getChapterStatus(journey.chapters[0]), "completed");
 });
 
+test("starting a replacement quiz does not erase the last completed result", () => {
+  let journey = Journey.recordSession(Journey.createJourney(), "Biology", {
+    id: "note-photo",
+    kind: "quiz",
+    title: "Photosynthesis quiz",
+    score: 60,
+    submittedAt: "2026-07-15T09:00:00Z",
+    weakTopics: ["Light reactions"],
+    questions: Array.from({ length: 5 }, (_, index) => ({ id: `old-${index}` }))
+  }, "2026-07-15T09:00:00Z").journey;
+
+  journey = Journey.recordSession(journey, journey.chapters[0].id, {
+    id: "note-photo",
+    kind: "quiz",
+    title: "Photosynthesis recovery in progress",
+    score: null,
+    submittedAt: null,
+    weakTopics: [],
+    questions: Array.from({ length: 5 }, (_, index) => ({ id: `new-${index}` }))
+  }, "2026-07-15T10:00:00Z").journey;
+
+  const [record] = journey.chapters[0].sessions;
+  assert.equal(record.score, 60);
+  assert.equal(record.submittedAt, "2026-07-15T09:00:00.000Z");
+  assert.deepEqual(record.weakTopics, ["Light reactions"]);
+  assert.equal(record.questionCount, 5);
+});
+
 test("preserves PDF document metadata on a saved webpage source", () => {
   const added = Journey.addSource(Journey.createJourney(), "Documents", {
     type: "webpage",
@@ -494,4 +704,325 @@ test("preserves PDF document metadata on a saved webpage source", () => {
   assert.equal(source.type, "webpage");
   assert.equal(source.documentType, "pdf");
   assert.equal(source.pageCount, 14);
+});
+
+test("migrates schema-v2 journeys with empty learning memory while preserving weakTopics", () => {
+  const migrated = Journey.normalizeJourney({
+    schemaVersion: 2,
+    id: "journey-v2",
+    title: "Legacy memory",
+    chapters: [{
+      id: "chapter-v2",
+      title: "Photosynthesis",
+      sessions: [{
+        id: "quiz-v2",
+        title: "Photosynthesis quiz",
+        itemKind: "quiz",
+        score: 40,
+        submittedAt: "2026-07-14T01:00:00Z",
+        weakTopics: ["Light-dependent reactions", "Calvin cycle"]
+      }]
+    }]
+  });
+
+  assert.equal(migrated.schemaVersion, 3);
+  assert.deepEqual(migrated.learningMemory, {
+    concepts: [],
+    attempts: [],
+    recordedAttemptIds: []
+  });
+  assert.deepEqual(
+    migrated.chapters[0].sessions[0].weakTopics,
+    ["Light-dependent reactions", "Calvin cycle"]
+  );
+});
+
+test("normalizes source-grounded question attempts into the schema-v3 shape", () => {
+  const normalized = Journey.normalizeQuestionAttempt(questionAttempt(1, {
+    relatedConceptIds: ["concept-alpha", " concept-beta ", "concept-beta"],
+    sourcePage: 20000,
+    sourceRef: {
+      sourceType: "webpage",
+      documentType: "pdf",
+      sourceId: "photosynthesis-note",
+      sourceFingerprint: "photosynthesis-source",
+      quote: "Chlorophyll absorbs light energy.",
+      pageNumber: 20000
+    },
+    attemptType: "unsupported"
+  }));
+
+  assert.equal(normalized.attemptId, "attempt-001");
+  assert.equal(normalized.result, "correct");
+  assert.deepEqual(normalized.relatedConceptIds, ["concept-beta"]);
+  assert.equal(normalized.sourcePage, 10000);
+  assert.equal(normalized.sourceRef.sourcePage, 10000);
+  assert.equal(normalized.sourceRef.sourceType, "webpage");
+  assert.equal(normalized.sourceRef.documentType, "pdf");
+  assert.equal(normalized.sourceRef.sourceFingerprint, "photosynthesis-source");
+  assert.equal(normalized.sourceRef.quote, "Chlorophyll absorbs light energy.");
+  assert.equal(normalized.attemptType, "normal");
+  assert.equal(normalized.targetConceptId, "");
+  assert.equal(Journey.normalizeQuestionAttempt({ questionId: "missing-required-fields" }), null);
+});
+
+test("keeps mixed recent attempts bounded to 20 without losing lifetime counts or idempotence", () => {
+  const attempts = Array.from({ length: 25 }, (_, offset) => {
+    const index = offset + 1;
+    return questionAttempt(index, {
+      noteId: index % 2 ? "note-a" : "note-b",
+      sourceFingerprint: index % 2 ? "source-a" : "source-b",
+      primaryConceptId: `concept-${(index % 3) + 1}`,
+      conceptLabel: `Concept ${(index % 3) + 1}`,
+      result: index % 4 === 0 ? "incorrect" : "correct",
+      studentAnswer: index % 4 === 0 ? "Wrong" : "Correct"
+    });
+  });
+
+  const first = Journey.recordQuestionAttempts(Journey.createJourney(), attempts, {
+    quizId: "quiz-memory",
+    score: 76,
+    submittedAt: "2026-07-15T02:00:00Z"
+  });
+
+  assert.equal(first.recordedCount, 25);
+  assert.equal(first.duplicateCount, 0);
+  assert.equal(first.journey.learningMemory.attempts.length, 20);
+  assert.deepEqual(
+    first.journey.learningMemory.attempts.map((attempt) => attempt.attemptId),
+    attempts.slice(5).map((attempt) => attempt.attemptId)
+  );
+  assert.deepEqual(
+    new Set(first.journey.learningMemory.attempts.map((attempt) => attempt.noteId)),
+    new Set(["note-a", "note-b"])
+  );
+  assert.equal(
+    first.journey.learningMemory.concepts.reduce((sum, concept) => sum + concept.timesTested, 0),
+    25
+  );
+
+  const revisionBeforeReplay = first.journey.revision;
+  const replay = Journey.recordQuestionAttempts(first.journey, [attempts[0]], {
+    quizId: "quiz-memory",
+    score: 100,
+    submittedAt: "2026-07-15T03:00:00Z"
+  });
+  assert.equal(replay.recordedCount, 0, "an evicted recent attempt must still be recognized as recorded");
+  assert.equal(replay.duplicateCount, 1);
+  assert.equal(replay.journey.revision, revisionBeforeReplay);
+  assert.equal(
+    replay.journey.learningMemory.concepts.reduce((sum, concept) => sum + concept.timesTested, 0),
+    25
+  );
+});
+
+test("moves a weak concept through qualifying recovery and a later stable quiz", () => {
+  let journey = Journey.createJourney("Recovery", "2026-07-15T00:00:00Z");
+  journey = Journey.recordQuestionAttempts(journey, [questionAttempt(1, {
+    result: "incorrect",
+    studentAnswer: "Wrong"
+  })], { score: 0, submittedAt: "2026-07-15T01:01:00Z" }).journey;
+
+  const conceptState = () => journey.learningMemory.concepts.find((concept) => (
+    concept.noteId === "note-memory" && concept.conceptId === "concept-alpha"
+  ));
+  assert.equal(conceptState().state, "weak");
+
+  const recoveryAttempts = [
+    ...[10, 11, 12].map((index) => questionAttempt(index, {
+      attemptType: "recovery",
+      targetConceptId: "concept-alpha"
+    })),
+    questionAttempt(13, {
+      primaryConceptId: "concept-beta",
+      conceptLabel: "Concept Beta"
+    }),
+    questionAttempt(14, {
+      primaryConceptId: "concept-gamma",
+      conceptLabel: "Concept Gamma",
+      result: "incorrect",
+      studentAnswer: "Wrong"
+    })
+  ];
+  journey = Journey.recordQuestionAttempts(journey, recoveryAttempts, {
+    score: 80,
+    submittedAt: "2026-07-15T01:02:00Z"
+  }).journey;
+  assert.equal(conceptState().state, "recovering");
+  assert.equal(conceptState().timesTested, 4);
+  assert.equal(conceptState().timesWrong, 1);
+
+  const laterQuiz = [20, 21, 22, 23, 24].map((index) => questionAttempt(index, {
+    primaryConceptId: index === 20 ? "concept-alpha" : `later-concept-${index}`,
+    conceptLabel: index === 20 ? "Concept Alpha" : `Later concept ${index}`
+  }));
+  journey = Journey.recordQuestionAttempts(journey, laterQuiz, {
+    score: 100,
+    submittedAt: "2026-07-15T01:03:00Z"
+  }).journey;
+
+  assert.equal(conceptState().state, "stable");
+  assert.equal(conceptState().timesTested, 5);
+  assert.equal(conceptState().timesWrong, 1);
+});
+
+test("requires the standard 3-of-3 recovery target count unless fallback metadata supplies another count", () => {
+  const startWeak = (index) => Journey.recordQuestionAttempts(
+    Journey.createJourney("Recovery counts", "2026-07-15T00:00:00Z"),
+    [questionAttempt(index, { result: "incorrect", studentAnswer: "Wrong" })],
+    { score: 0 }
+  ).journey;
+  const fourTargetRecovery = (startIndex) => [
+    ...[0, 1, 2, 3].map((offset) => questionAttempt(startIndex + offset, {
+      attemptType: "recovery",
+      targetConceptId: "concept-alpha"
+    })),
+    questionAttempt(startIndex + 4, {
+      primaryConceptId: "concept-beta",
+      conceptLabel: "Concept Beta",
+      attemptType: "recovery",
+      targetConceptId: "concept-alpha"
+    })
+  ];
+  const alphaState = (journey) => journey.learningMemory.concepts.find(
+    (concept) => concept.noteId === "note-memory" && concept.conceptId === "concept-alpha"
+  ).state;
+
+  let standard = startWeak(39);
+  standard = Journey.recordQuestionAttempts(standard, fourTargetRecovery(40), { score: 100 }).journey;
+  assert.equal(alphaState(standard), "weak", "four target questions are not the standard 3-of-3 composition");
+
+  let fallback = startWeak(49);
+  fallback = Journey.recordQuestionAttempts(fallback, fourTargetRecovery(50), {
+    score: 100,
+    expectedTargetCount: 4
+  }).journey;
+  assert.equal(alphaState(fallback), "recovering");
+});
+
+test("ranks weak concepts by primary-concept misses, current error rate, history, then recency", () => {
+  const concepts = [
+    ["concept-a", "Concept A", 10, 6, "2026-07-15T02:00:00Z"],
+    ["concept-b", "Concept B", 5, 4, "2026-07-15T02:01:00Z"],
+    ["concept-c", "Concept C", 10, 5, "2026-07-15T02:02:00Z"],
+    ["concept-d", "Concept D", 4, 2, "2026-07-15T02:03:00Z"],
+    ["concept-e", "Concept E", 4, 2, "2026-07-15T02:04:00Z"]
+  ].map(([conceptId, conceptLabel, timesTested, timesWrong, lastAttemptAt]) => ({
+    noteId: "note-rank",
+    sourceFingerprint: "source-rank",
+    conceptId,
+    conceptLabel,
+    timesTested,
+    timesWrong,
+    state: "weak",
+    lastAttemptAt
+  }));
+  const attempts = [
+    questionAttempt(30, {
+      noteId: "note-rank",
+      sourceFingerprint: "source-rank",
+      primaryConceptId: "concept-a",
+      relatedConceptIds: ["concept-b"],
+      conceptLabel: "Concept A",
+      result: "incorrect",
+      studentAnswer: "Wrong"
+    }),
+    questionAttempt(31, {
+      noteId: "note-rank",
+      sourceFingerprint: "source-rank",
+      primaryConceptId: "concept-a",
+      conceptLabel: "Concept A",
+      result: "incorrect",
+      studentAnswer: "Wrong"
+    }),
+    questionAttempt(32, {
+      noteId: "note-rank",
+      sourceFingerprint: "source-rank",
+      primaryConceptId: "concept-b",
+      conceptLabel: "Concept B",
+      result: "incorrect",
+      studentAnswer: "Wrong"
+    }),
+    questionAttempt(33, {
+      noteId: "note-rank",
+      sourceFingerprint: "source-rank",
+      primaryConceptId: "concept-b",
+      conceptLabel: "Concept B"
+    }),
+    ...["c", "d", "e"].map((suffix, index) => questionAttempt(34 + index, {
+      noteId: "note-rank",
+      sourceFingerprint: "source-rank",
+      primaryConceptId: `concept-${suffix}`,
+      conceptLabel: `Concept ${suffix.toUpperCase()}`,
+      result: "incorrect",
+      studentAnswer: "Wrong"
+    }))
+  ];
+  const olderMemoryAttempt = questionAttempt(29, {
+    noteId: "note-rank",
+    sourceFingerprint: "source-rank",
+    primaryConceptId: "concept-b",
+    conceptLabel: "Concept B",
+    result: "incorrect",
+    studentAnswer: "Wrong"
+  });
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Ranking", "2026-07-15T00:00:00Z"),
+    learningMemory: { concepts, attempts: [olderMemoryAttempt, ...attempts] }
+  });
+
+  const ranked = Journey.rankWeakConcepts(journey, {
+    noteId: "note-rank",
+    currentAttempts: attempts
+  });
+
+  assert.deepEqual(
+    ranked.map((concept) => concept.conceptId),
+    ["concept-a", "concept-c", "concept-e", "concept-d", "concept-b"]
+  );
+  assert.equal(ranked.find((concept) => concept.conceptId === "concept-b").wrongCount, 1);
+  assert.equal(ranked.find((concept) => concept.conceptId === "concept-b").errorRate, 0.5);
+  assert.equal(ranked.find((concept) => concept.conceptId === "concept-c").historicalMisses, 4);
+});
+
+test("clears only learning memory and leaves chapters, sources, sessions, events, and weakTopics intact", () => {
+  let journey = Journey.addSource(Journey.createJourney("Clear memory", "2026-07-15T00:00:00Z"), "Photosynthesis", {
+    id: "source-photo",
+    title: "Photosynthesis note",
+    fingerprint: "source-memory",
+    text: "Plants convert light energy into chemical energy."
+  }, "2026-07-15T00:10:00Z").journey;
+  journey = Journey.recordSession(journey, journey.chapters[0].id, {
+    id: "quiz-memory",
+    title: "Photosynthesis quiz",
+    score: 60,
+    submittedAt: "2026-07-15T00:20:00Z",
+    weakTopics: ["Calvin cycle"]
+  }, "2026-07-15T00:20:00Z").journey;
+  journey = Journey.recordQuestionAttempts(journey, [questionAttempt(1, {
+    result: "incorrect",
+    studentAnswer: "Wrong"
+  })], { score: 0, submittedAt: "2026-07-15T00:21:00Z" }).journey;
+
+  const chaptersBefore = structuredClone(journey.chapters);
+  const eventsBefore = structuredClone(journey.events);
+  const revisionBefore = journey.revision;
+  const cleared = Journey.clearLearningMemory(journey, "2026-07-15T00:30:00Z");
+
+  assert.equal(cleared.clearedAttemptCount, 1);
+  assert.equal(cleared.clearedConceptCount, 1);
+  assert.deepEqual(cleared.journey.learningMemory, {
+    concepts: [],
+    attempts: [],
+    recordedAttemptIds: []
+  });
+  assert.deepEqual(cleared.journey.chapters, chaptersBefore);
+  assert.deepEqual(cleared.journey.events, eventsBefore);
+  assert.deepEqual(cleared.journey.chapters[0].sessions[0].weakTopics, ["Calvin cycle"]);
+  assert.equal(cleared.journey.revision, revisionBefore + 1);
+
+  const clearedAgain = Journey.clearLearningMemory(cleared.journey, "2026-07-15T00:40:00Z");
+  assert.equal(clearedAgain.journey.revision, cleared.journey.revision);
+  assert.equal(clearedAgain.clearedAttemptCount, 0);
+  assert.equal(clearedAgain.clearedConceptCount, 0);
 });

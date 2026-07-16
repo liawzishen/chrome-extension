@@ -39,7 +39,7 @@ let focusState = globalThis.ExamCramFocus?.createDefaultFocusState?.() || {};
 let savedArtifacts = [];
 let forestRecords = [];
 let selectedChapterId = "";
-let selectedConceptId = "";
+let selectedVisualNoteId = "";
 let forestMode = "loading";
 let drawerReturnFocus = null;
 let motionPaused = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
@@ -47,19 +47,19 @@ let motionPaused = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)
 const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
   onSelectTree({ treeId }) {
     selectedChapterId = treeId;
-    selectedConceptId = "";
+    selectedVisualNoteId = "";
     renderDetails();
     closeDrawer();
   },
-  onSelectConcept({ treeId, conceptId }) {
+  onSelectVisualNote({ treeId, artifactId }) {
     rememberDrawerReturnFocus();
     selectedChapterId = treeId;
-    selectedConceptId = conceptId;
+    selectedVisualNoteId = artifactId;
     renderDetails();
     openDrawer("chapter");
     page.drawer.scrollTop = 0;
     page.drawer.focus({ preventScroll: true });
-    requestAnimationFrame(revealSelectedConceptMessage);
+    requestAnimationFrame(revealSelectedVisualNoteMessage);
   },
   onModeChange({ mode, treeId }) {
     forestMode = mode;
@@ -68,8 +68,8 @@ const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
     page.details.hidden = mode !== "focus";
     page.empty.hidden = mode !== "empty";
     if (mode === "overview") {
-      selectedConceptId = "";
-      page.drawer.classList.remove("is-concept-only");
+      selectedVisualNoteId = "";
+      page.drawer.classList.remove("is-note-only");
       closeDrawer();
     }
   },
@@ -85,7 +85,7 @@ updateMotionControl();
 page.summarize.addEventListener("click", () => void refreshSummary());
 page.createNote?.addEventListener("click", () => void openStudyPanel());
 page.back.addEventListener("click", () => {
-  selectedConceptId = "";
+  selectedVisualNoteId = "";
   forestController.showOverview();
 });
 page.details.addEventListener("click", () => openFullDetails("chapter", page.details));
@@ -98,29 +98,11 @@ page.motion.addEventListener("click", () => {
 });
 page.chapterTab.addEventListener("click", () => setDrawerTab("chapter"));
 page.summaryTab.addEventListener("click", () => setDrawerTab("summary"));
-window.addEventListener("beforeunload", () => forestController.destroy(), { once: true });
-window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && page.drawer.classList.contains("is-open")) dismissDetails();
-});
+window.addEventListener("beforeunload", handleBeforeUnload, { once: true });
+window.addEventListener("keydown", handlePageKeyDown);
 
 if (globalThis.chrome?.storage?.onChanged) {
-  globalThis.chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
-    let shouldRender = false;
-    if (changes[STORAGE.journey]) {
-      journey = globalThis.ExamCramJourney.normalizeJourney(changes[STORAGE.journey].newValue);
-      shouldRender = true;
-    }
-    if (changes[STORAGE.focus]) {
-      focusState = changes[STORAGE.focus].newValue || {};
-      shouldRender = true;
-    }
-    if (changes[STORAGE.sessions]) {
-      savedArtifacts = normalizeSavedArtifacts(changes[STORAGE.sessions].newValue);
-      shouldRender = true;
-    }
-    if (shouldRender) render();
-  });
+  globalThis.chrome.storage.onChanged.addListener(handleStorageChanged);
 }
 
 void load();
@@ -149,12 +131,16 @@ async function load() {
   }
 }
 
-function render() {
+function renderHeaderMetrics() {
   const history = Array.isArray(focusState?.history) ? focusState.history : [];
   const metrics = globalThis.ExamCramJourney.getMetrics(journey, history);
   page.title.textContent = journey.title;
   page.progress.textContent = `${metrics.progressPercent}%`;
   page.focus.textContent = `${metrics.focusMinutes}m`;
+}
+
+function render() {
+  renderHeaderMetrics();
   forestRecords = globalThis.ExamCramLearningForestData.buildForestRecords(
     journey,
     savedArtifacts,
@@ -162,7 +148,11 @@ function render() {
   );
   if (selectedChapterId && !forestRecords.some((record) => record.id === selectedChapterId)) {
     selectedChapterId = "";
-    selectedConceptId = "";
+    selectedVisualNoteId = "";
+  }
+  const selectedRecord = forestRecords.find((record) => record.id === selectedChapterId);
+  if (selectedVisualNoteId && !selectedRecord?.visualNotes.some((note) => note.id === selectedVisualNoteId)) {
+    selectedVisualNoteId = "";
   }
   if (forestRecords.length === 1) selectedChapterId = forestRecords[0].id;
   renderFallback();
@@ -184,13 +174,13 @@ function renderFallback() {
       createText("strong", record.name),
       createText(
         "span",
-        `${formatDate(record.createdAt)} · ${record.isSeedling ? "Seedling — build a visual note" : `${record.concepts.length} concepts`} · ${formatStatus(record.status)}`
+        `${formatDate(record.createdAt)} · ${formatGrowthStage(record)} · ${record.growthUnitCount} ${record.growthUnitCount === 1 ? "growth unit" : "growth units"} · ${record.visualNoteCount} Visual ${record.visualNoteCount === 1 ? "Note" : "Notes"} · ${record.sourceCount} ${record.sourceCount === 1 ? "source" : "sources"} · ${formatStatus(record.status)}`
       )
     );
     button.addEventListener("click", () => {
       rememberDrawerReturnFocus(button);
       selectedChapterId = record.id;
-      selectedConceptId = "";
+      selectedVisualNoteId = "";
       if (forestController.isWebGLAvailable) forestController.focusTree(record.id);
       renderDetails();
       openDrawer("chapter");
@@ -204,10 +194,10 @@ function renderDetails() {
   renderInspector();
   const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
   const record = forestRecords.find((item) => item.id === selectedChapterId);
-  const selectedConcept = record?.concepts.find((concept) => concept.id === selectedConceptId) || null;
-  page.context.hidden = Boolean(selectedConcept);
-  page.drawer.classList.toggle("is-concept-only", Boolean(selectedConcept));
-  page.drawerTitle.textContent = chapter?.title || "Note details";
+  const selectedNote = record?.visualNotes.find((note) => note.id === selectedVisualNoteId) || null;
+  page.context.hidden = Boolean(selectedNote);
+  page.drawer.classList.toggle("is-note-only", Boolean(selectedNote));
+  page.drawerTitle.textContent = selectedNote?.title || chapter?.title || "Note details";
 }
 
 function setDrawerTab(tab) {
@@ -218,7 +208,10 @@ function setDrawerTab(tab) {
   page.summaryPanel.hidden = !summarySelected;
   page.drawerTitle.textContent = summarySelected
     ? "Overall learning journey"
-    : (globalThis.ExamCramJourney.findChapter(journey, selectedChapterId)?.title || "Note details");
+    : (forestRecords.find((record) => record.id === selectedChapterId)?.visualNotes
+      .find((note) => note.id === selectedVisualNoteId)?.title
+      || globalThis.ExamCramJourney.findChapter(journey, selectedChapterId)?.title
+      || "Note details");
 }
 
 function openDrawer(tab = "chapter") {
@@ -227,7 +220,7 @@ function openDrawer(tab = "chapter") {
     renderDetails();
   }
   setDrawerTab(tab);
-  page.drawer.classList.toggle("is-concept-only", tab === "chapter" && Boolean(selectedConceptId));
+  page.drawer.classList.toggle("is-note-only", tab === "chapter" && Boolean(selectedVisualNoteId));
   page.drawer.classList.add("is-open");
   page.drawer.setAttribute("aria-hidden", "false");
   page.root.dataset.drawer = "open";
@@ -239,10 +232,10 @@ function closeDrawer() {
   page.root.dataset.drawer = "closed";
 }
 
-function clearSelectedConcept() {
-  if (!selectedConceptId) return;
-  selectedConceptId = "";
-  forestController.clearConceptFocus();
+function clearSelectedVisualNote() {
+  if (!selectedVisualNoteId) return;
+  selectedVisualNoteId = "";
+  forestController.clearVisualNoteFocus();
   renderDetails();
 }
 
@@ -250,7 +243,7 @@ function dismissDetails() {
   const returnTarget = drawerReturnFocus;
   drawerReturnFocus = null;
   closeDrawer();
-  clearSelectedConcept();
+  clearSelectedVisualNote();
   if (returnTarget?.isConnected) {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       returnTarget.focus({ preventScroll: true });
@@ -260,7 +253,7 @@ function dismissDetails() {
 
 function openFullDetails(tab, trigger) {
   rememberDrawerReturnFocus(trigger);
-  clearSelectedConcept();
+  clearSelectedVisualNote();
   openDrawer(tab);
   page.drawer.focus({ preventScroll: true });
 }
@@ -373,9 +366,9 @@ function renderInspector() {
     page.inspector.replaceChildren();
     return;
   }
-  const selectedConcept = record.concepts.find((concept) => concept.id === selectedConceptId) || null;
-  if (selectedConcept) {
-    page.inspector.replaceChildren(renderConceptFocusMessage(chapter, record, selectedConcept));
+  const selectedNote = record.visualNotes.find((note) => note.id === selectedVisualNoteId) || null;
+  if (selectedNote) {
+    page.inspector.replaceChildren(renderVisualNoteFocus(chapter, record, selectedNote));
     return;
   }
   const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
@@ -403,30 +396,32 @@ function renderInspector() {
     evidenceItem("Weak topics", weakTopics.length ? weakTopics.join(", ") : "None recorded")
   );
 
-  const concepts = document.createElement("section");
-  concepts.className = "summary-section concept-evidence";
-  concepts.append(createText("h3", "Tree concepts"));
-  const conceptList = document.createElement("div");
-  conceptList.className = "concept-evidence__list";
-  if (record.isSeedling) {
-    conceptList.append(createText("p", "This chapter is a seedling. Build and save a visual note to grow grounded concept branches.", "chapter-source-state"));
+  const visualNotes = document.createElement("section");
+  visualNotes.className = "summary-section concept-evidence";
+  visualNotes.append(createText("h3", "Visual Note branches"));
+  const visualNoteList = document.createElement("div");
+  visualNoteList.className = "concept-evidence__list";
+  if (!record.visualNotes.length) {
+    const message = record.sourceCount
+      ? "Create a Visual Note to add branches. Your collected sources are already growing this chapter."
+      : "This chapter is an empty planting plot. Collect a source or create a Visual Note to begin growing it.";
+    visualNoteList.append(createText("p", message, "chapter-source-state"));
   } else {
-    record.concepts.forEach((concept) => {
+    record.visualNotes.forEach((note) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "concept-evidence__item";
-      item.classList.toggle("is-selected", concept.id === selectedConceptId);
       item.append(
-        createText("strong", concept.label),
-        createText("span", concept.detail || concept.role || "Grounded concept from the saved visual note.")
+        createText("strong", note.title),
+        createText("span", `${formatDate(note.activityAt || note.generatedAt)} · ${note.concepts.length} grounded ${note.concepts.length === 1 ? "concept" : "concepts"}`)
       );
       item.addEventListener("click", () => {
-        forestController.focusConcept(record.id, concept.id);
+        forestController.focusVisualNote(record.id, note.id);
       });
-      conceptList.append(item);
+      visualNoteList.append(item);
     });
   }
-  concepts.append(conceptList);
+  visualNotes.append(visualNoteList);
 
   const notePreview = renderChapterNotePreview(chapter, record);
 
@@ -463,38 +458,43 @@ function renderInspector() {
       notePreview,
       sourceState,
       evidence,
-      concepts,
+      visualNotes,
       artifacts,
       chapter.sources.length ? sources : null
     ].filter(Boolean)
   );
 }
 
-function revealSelectedConceptMessage() {
-  page.drawer.querySelector(".chapter-focus-message")?.scrollIntoView({
+function revealSelectedVisualNoteMessage() {
+  page.drawer.querySelector(".chapter-note-preview")?.scrollIntoView({
     behavior: "auto",
     block: "nearest"
   });
 }
 
-function renderConceptFocusMessage(chapter, record, selectedConcept) {
-  const artifact = getExactChapterArtifact(record);
-  const noteTitle = artifact?.visualLesson?.title || artifact?.title || chapter.title;
+function renderVisualNoteFocus(chapter, record, selectedNote) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "selected-visual-note";
   const message = document.createElement("section");
   message.className = "chapter-focus-message";
   message.setAttribute("role", "status");
   message.setAttribute("aria-live", "polite");
   message.append(
-    createText("span", selectedConcept.role || "Selected chapter concept", "chapter-focus-message__eyebrow"),
-    createText("h3", selectedConcept.label),
-    createText("p", selectedConcept.detail || "This concept is grounded in the saved Visual Tutor Note."),
-    createText("small", `${chapter.title} · ${noteTitle}`, "chapter-focus-message__source")
+    createText("span", "Selected Visual Note", "chapter-focus-message__eyebrow"),
+    createText("h3", selectedNote.title),
+    createText("p", `Saved ${formatDate(selectedNote.activityAt || selectedNote.generatedAt)} · ${selectedNote.concepts.length} grounded ${selectedNote.concepts.length === 1 ? "concept" : "concepts"}`),
+    createText("small", chapter.title, "chapter-focus-message__source")
   );
-  return message;
+  wrapper.append(message);
+  const preview = renderChapterNotePreview(chapter, record, selectedNote.id);
+  if (preview) wrapper.append(preview);
+  const sourceSection = renderVisualNoteSources(chapter, selectedNote.id);
+  if (sourceSection) wrapper.append(sourceSection);
+  return wrapper;
 }
 
-function renderChapterNotePreview(chapter, record) {
-  const artifact = getExactChapterArtifact(record);
+function renderChapterNotePreview(chapter, record, preferredArtifactId = "") {
+  const artifact = getExactChapterArtifact(record, preferredArtifactId);
   if (!artifact?.visualLesson) return null;
 
   const lesson = artifact.visualLesson;
@@ -538,19 +538,13 @@ function renderChapterNotePreview(chapter, record) {
     const nodeList = document.createElement("div");
     nodeList.className = "visual-tutor-preview__nodes";
     nodes.forEach((node, index) => {
-      const conceptId = String(node?.id || record.concepts[index]?.id || "");
-      const nodeCard = document.createElement("button");
-      nodeCard.type = "button";
+      const nodeCard = document.createElement("article");
       nodeCard.className = "visual-tutor-preview__node";
-      nodeCard.classList.toggle("is-selected", Boolean(conceptId && conceptId === selectedConceptId));
       nodeCard.append(
         createText("span", node?.role || `Concept ${index + 1}`),
         createText("strong", node?.label || record.concepts[index]?.label || `Concept ${index + 1}`),
         createText("p", node?.detail || node?.why || "Saved concept from this visual note.")
       );
-      nodeCard.addEventListener("click", () => {
-        if (conceptId) forestController.focusConcept(record.id, conceptId);
-      });
       nodeList.append(nodeCard);
     });
     map.append(root, nodeList);
@@ -576,18 +570,88 @@ function renderChapterNotePreview(chapter, record) {
   return section;
 }
 
-function getExactChapterArtifact(record) {
-  const artifactId = String(record?.latestArtifactId || "");
+function getExactChapterArtifact(record, preferredArtifactId = "") {
+  const artifactId = String(preferredArtifactId || selectedVisualNoteId || record?.latestArtifactId || "");
   return artifactId ? savedArtifacts.find((artifact) => artifact.id === artifactId) || null : null;
+}
+
+function renderVisualNoteSources(chapter, artifactId) {
+  const artifact = savedArtifacts.find((item) => item.id === artifactId);
+  if (!artifact) return null;
+  const binding = artifact.sourceBinding && typeof artifact.sourceBinding === "object"
+    ? artifact.sourceBinding
+    : {};
+  const embeddedSources = [
+    ...(Array.isArray(artifact.sources) ? artifact.sources : []),
+    ...(Array.isArray(binding.collectionSources) ? binding.collectionSources : [])
+  ];
+  const sourceIds = new Set([
+    binding.sourceId,
+    artifact.sourceId,
+    ...embeddedSources.map((source) => source?.id || source?.sourceId)
+  ].filter(Boolean).map(String));
+  const sourceUrls = new Set([
+    binding.url,
+    artifact.sourceUrl,
+    ...embeddedSources.map((source) => source?.url)
+  ].filter(Boolean).map(String));
+  let relevantSources = chapter.sources.filter((source) => (
+    sourceIds.has(String(source.id || "")) || sourceUrls.has(String(source.url || ""))
+  ));
+  if (!relevantSources.length && embeddedSources.length) {
+    relevantSources = embeddedSources.filter((source) => source && typeof source === "object");
+  }
+  if (!relevantSources.length) return null;
+  const section = document.createElement("section");
+  section.className = "summary-section source-evidence selected-note-sources";
+  section.append(createText("h3", "Grounded sources"));
+  const list = document.createElement("div");
+  list.className = "source-leaves";
+  relevantSources.forEach((source) => list.append(renderSourceCard(source)));
+  section.append(list);
+  return section;
+}
+
+function handlePageKeyDown(event) {
+  if (event.key === "Escape" && page.drawer.classList.contains("is-open")) dismissDetails();
+}
+
+function handleStorageChanged(changes, area) {
+  if (area !== "local") return;
+  let shouldRender = false;
+  let metricsChanged = false;
+  if (changes[STORAGE.journey]) {
+    journey = globalThis.ExamCramJourney.normalizeJourney(changes[STORAGE.journey].newValue);
+    shouldRender = true;
+  }
+  if (changes[STORAGE.focus]) {
+    focusState = changes[STORAGE.focus].newValue || {};
+    metricsChanged = true;
+  }
+  if (changes[STORAGE.sessions]) {
+    savedArtifacts = normalizeSavedArtifacts(changes[STORAGE.sessions].newValue);
+    shouldRender = true;
+  }
+  if (shouldRender) render();
+  else if (metricsChanged) renderHeaderMetrics();
+}
+
+function handleBeforeUnload() {
+  window.removeEventListener("keydown", handlePageKeyDown);
+  globalThis.chrome?.storage?.onChanged?.removeListener?.(handleStorageChanged);
+  forestController.destroy();
 }
 
 function normalizeChapterCheatSheet(artifact) {
   const api = globalThis.ExamCramCheatSheet;
   if (!api?.normalizeCheatSheet) return artifact?.cheatSheet || null;
+  const normalize = typeof api.normalizeCheatSheetForRender === "function"
+    ? api.normalizeCheatSheetForRender
+    : api.normalizeCheatSheet;
   const binding = artifact?.sourceBinding && typeof artifact.sourceBinding === "object"
     ? artifact.sourceBinding
     : {};
-  return api.normalizeCheatSheet(artifact?.cheatSheet, {
+  return normalize(artifact?.cheatSheet, {
     artifact,
     title: artifact?.title || binding.title || "Study note",
     sourceTitle: binding.title || artifact?.sourceTitle || artifact?.title || "Study source",
@@ -671,16 +735,19 @@ function renderSourceCard(source) {
   const card = document.createElement("div");
   card.className = "source-leaf";
   const copy = document.createElement("div");
+  const title = source.title || source.sourceTitle || getSourceDomain(source.url) || "Saved source";
+  const sourceUrl = source.url || source.sourceUrl || "";
   copy.append(
-    createText("strong", source.title),
-    createText("span", `${formatSourceType(source.type, source.documentType)} · saved ${formatDate(source.capturedAt)}`)
+    createText("strong", title),
+    createText("span", `${formatSourceType(source.type || source.sourceType, source.documentType)} · saved ${formatDate(source.capturedAt || source.createdAt || source.generatedAt)}`)
   );
   const open = document.createElement("button");
   open.type = "button";
   open.textContent = "Open";
-  open.disabled = !source.url;
-  open.setAttribute("aria-label", source.url ? `Open ${source.title}` : `No saved link for ${source.title}`);
-  open.addEventListener("click", () => openSource(source.url));
+  open.disabled = !sourceUrl;
+  if (sourceUrl && source.title) open.setAttribute("aria-label", `Open ${source.title}`);
+  else open.setAttribute("aria-label", sourceUrl ? `Open ${title}` : `No saved link for ${title}`);
+  open.addEventListener("click", () => openSource(sourceUrl));
   card.append(copy, open);
   return card;
 }
@@ -727,6 +794,15 @@ function formatStatus(value) {
     review: "Needs review",
     planned: "Planned"
   }[value] || "In progress";
+}
+
+function formatGrowthStage(record) {
+  return {
+    plot: "Empty plot",
+    seedling: "Seedling",
+    growing: "Normal tree",
+    mature: "Huge tree"
+  }[record?.growthStage] || "Learning tree";
 }
 
 function formatSourceType(value, documentType = "") {

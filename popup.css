@@ -2260,16 +2260,6 @@ menu .primary {
   padding: 8px 4px;
 }
 
-.journey-route::before {
-  position: absolute;
-  top: 18px;
-  bottom: 18px;
-  left: 28px;
-  width: 2px;
-  background: var(--line-strong);
-  content: "";
-}
-
 .journey-node {
   position: relative;
   display: grid;

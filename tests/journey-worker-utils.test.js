@@ -9,6 +9,28 @@ function operation(type, opId, expectedRevision, payload = {}) {
   return { type, opId, expectedRevision, payload };
 }
 
+function workerAttempt(index, overrides = {}) {
+  return {
+    attemptId: `worker-attempt-${String(index).padStart(3, "0")}`,
+    quizId: "worker-quiz",
+    questionId: `worker-question-${String(index).padStart(3, "0")}`,
+    noteId: "worker-note",
+    sourceFingerprint: "worker-source",
+    primaryConceptId: "concept-light",
+    relatedConceptIds: [],
+    conceptLabel: "Light-dependent reactions",
+    sourceRef: { sourceId: "source-photo", quote: "Light energy drives photosynthesis." },
+    sourcePage: 1,
+    correctAnswer: "Light energy",
+    studentAnswer: "Light energy",
+    result: "correct",
+    answeredAt: new Date(Date.parse("2026-07-15T02:00:00Z") + index * 1000).toISOString(),
+    attemptType: "normal",
+    targetConceptId: "",
+    ...overrides
+  };
+}
+
 test("creates an empty chapter through the serialized Journey worker", () => {
   assert.equal(Worker.MESSAGE_TYPES.CREATE_CHAPTER, "JOURNEY_CREATE_CHAPTER");
   const initial = Journey.createJourney("Biology", "2026-07-14T00:00:00Z");
@@ -246,7 +268,7 @@ test("binds an idempotency key to a stable payload hash", () => {
   )), (error) => error.code === "OP_ID_REUSED" && error.details.payloadChanged === true);
 });
 
-test("updates a repeated webpage snapshot without adding a second source card", () => {
+test("preserves a changed webpage revision and keeps operation retries idempotent", () => {
   const initial = Journey.addSource(Journey.createJourney(), "Cells", {
     id: "source-stable",
     type: "webpage",
@@ -274,11 +296,181 @@ test("updates a repeated webpage snapshot without adding a second source card", 
   const updated = Worker.reduceJourneyOperation(initial, op, "2026-07-12T01:00:00Z");
   const duplicateRetry = Worker.reduceJourneyOperation(updated.journey, op, "2026-07-12T01:05:00Z");
 
-  assert.equal(updated.result.duplicate, true);
-  assert.equal(updated.result.updated, true);
-  assert.equal(updated.journey.chapters[0].sources.length, 1);
+  assert.equal(updated.result.duplicate, false);
+  assert.equal(updated.result.updated, false);
+  assert.equal(updated.journey.chapters[0].sources.length, 2);
   assert.equal(updated.journey.chapters[0].sources[0].id, "source-stable");
-  assert.equal(updated.journey.chapters[0].sources[0].fingerprint, "new-fingerprint");
+  assert.equal(updated.journey.chapters[0].sources[1].fingerprint, "new-fingerprint");
   assert.equal(duplicateRetry.duplicate, true);
-  assert.equal(duplicateRetry.result.updated, true);
+  assert.equal(duplicateRetry.result.updated, false);
+});
+
+test("atomically binds a saved session to the source ID assigned by Journey", () => {
+  const initial = Journey.createJourney("Source binding", "2026-07-16T00:00:00Z");
+  const saved = Worker.reduceJourneyOperation(initial, operation(
+    Worker.MESSAGE_TYPES.UPSERT_SESSION,
+    "op:source-session-binding",
+    initial.revision,
+    {
+      chapterTitle: "Photosynthesis",
+      source: {
+        type: "webpage",
+        title: "Photosynthesis",
+        url: "https://learn.example/photosynthesis",
+        fingerprint: "photo-source-v1",
+        text: "Light energy is converted into chemical energy stored in glucose."
+      },
+      session: {
+        id: "note-photo",
+        kind: "note",
+        artifactType: "study",
+        title: "Photosynthesis visual note",
+        sourceBinding: { sourceType: "webpage", sourceId: "" },
+        visualLesson: { visualModel: { nodes: [{ id: "light-energy" }] } }
+      }
+    }
+  ), "2026-07-16T01:00:00Z");
+
+  const session = saved.journey.chapters[0].sessions[0];
+  assert.equal(session.sourceId, saved.result.sourceId);
+  assert.equal(session.sourceId, saved.journey.chapters[0].sources[0].id);
+});
+
+test("atomically saves a quiz session and its normalized question attempts", () => {
+  assert.equal(Worker.MESSAGE_TYPES.CLEAR_LEARNING_MEMORY, "JOURNEY_CLEAR_LEARNING_MEMORY");
+  const initial = Journey.createJourney("Worker memory", "2026-07-15T00:00:00Z");
+  const request = operation(
+    Worker.MESSAGE_TYPES.UPSERT_SESSION,
+    "op:save-quiz-attempts",
+    initial.revision,
+    {
+      chapterTitle: "Photosynthesis",
+      session: {
+        id: "worker-note",
+        quizId: "worker-quiz",
+        title: "Photosynthesis quiz",
+        kind: "quiz",
+        score: 50,
+        submittedAt: "2026-07-15T02:05:00Z",
+        sourceFingerprint: "worker-source",
+        weakTopics: ["Calvin cycle"]
+      },
+      questionAttempts: [
+        workerAttempt(1),
+        workerAttempt(2, {
+          primaryConceptId: "concept-calvin",
+          conceptLabel: "Calvin cycle",
+          studentAnswer: "Oxygen",
+          result: "incorrect"
+        })
+      ]
+    }
+  );
+
+  const saved = Worker.reduceJourneyOperation(initial, request, "2026-07-15T02:05:00Z");
+
+  assert.equal(initial.chapters.length, 0, "the reducer must not mutate the input before the atomic result is returned");
+  assert.equal(saved.result.recordedAttemptCount, 2);
+  assert.equal(saved.result.duplicateAttemptCount, 0);
+  assert.equal(saved.journey.chapters[0].sessions.length, 1);
+  assert.deepEqual(saved.journey.chapters[0].sessions[0].weakTopics, ["Calvin cycle"]);
+  assert.equal(saved.journey.learningMemory.attempts.length, 2);
+  assert.equal(saved.journey.learningMemory.concepts.length, 2);
+  assert.equal(
+    saved.journey.learningMemory.concepts.find((concept) => concept.conceptId === "concept-calvin").state,
+    "weak"
+  );
+
+  const retry = Worker.reduceJourneyOperation(saved.journey, request, "2026-07-15T02:06:00Z");
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.changed, false);
+  assert.equal(retry.result.recordedAttemptCount, 2);
+  assert.equal(retry.result.duplicateAttemptCount, 0);
+  assert.equal(retry.journey.learningMemory.attempts.length, 2);
+});
+
+test("rejects malformed attempt collections without committing the session", () => {
+  const initial = Journey.createJourney("Worker memory", "2026-07-15T00:00:00Z");
+  const before = JSON.stringify(initial);
+
+  assert.throws(() => Worker.reduceJourneyOperation(initial, operation(
+    Worker.MESSAGE_TYPES.UPSERT_SESSION,
+    "op:invalid-attempts",
+    initial.revision,
+    {
+      chapterTitle: "Photosynthesis",
+      session: {
+        id: "worker-note",
+        title: "Photosynthesis quiz",
+        score: 100,
+        submittedAt: "2026-07-15T02:05:00Z"
+      },
+      questionAttempts: { attemptId: "not-a-list" }
+    }
+  )), (error) => error.code === "INVALID_ATTEMPTS");
+
+  assert.throws(() => Worker.reduceJourneyOperation(initial, operation(
+    Worker.MESSAGE_TYPES.UPSERT_SESSION,
+    "op:invalid-attempt-item",
+    initial.revision,
+    {
+      chapterTitle: "Photosynthesis",
+      session: {
+        id: "worker-note",
+        title: "Photosynthesis quiz",
+        score: 100,
+        submittedAt: "2026-07-15T02:05:00Z"
+      },
+      questionAttempts: [{ attemptId: "missing-required-fields" }]
+    }
+  )), (error) => error.code === "INVALID_ATTEMPTS");
+
+  assert.equal(JSON.stringify(initial), before);
+  assert.equal(initial.chapters.length, 0);
+});
+
+test("clears learning memory through the worker while preserving all Journey evidence", () => {
+  let journey = Journey.addSource(Journey.createJourney("Worker clear", "2026-07-15T00:00:00Z"), "Photosynthesis", {
+    id: "source-photo",
+    title: "Photosynthesis note",
+    fingerprint: "worker-source",
+    text: "Light energy drives photosynthesis."
+  }, "2026-07-15T01:00:00Z").journey;
+  journey = Journey.recordSession(journey, journey.chapters[0].id, {
+    id: "worker-note",
+    title: "Photosynthesis quiz",
+    score: 50,
+    submittedAt: "2026-07-15T01:30:00Z",
+    weakTopics: ["Light-dependent reactions"]
+  }, "2026-07-15T01:30:00Z").journey;
+  journey = Journey.recordQuestionAttempts(journey, [workerAttempt(1, {
+    result: "incorrect",
+    studentAnswer: "Wrong"
+  })], { score: 0, submittedAt: "2026-07-15T02:00:00Z" }).journey;
+  const chaptersBefore = structuredClone(journey.chapters);
+  const eventsBefore = structuredClone(journey.events);
+  const request = operation(
+    Worker.MESSAGE_TYPES.CLEAR_LEARNING_MEMORY,
+    "op:clear-learning-memory",
+    journey.revision
+  );
+
+  const cleared = Worker.reduceJourneyOperation(journey, request, "2026-07-15T03:00:00Z");
+
+  assert.equal(cleared.result.clearedAttemptCount, 1);
+  assert.equal(cleared.result.clearedConceptCount, 1);
+  assert.deepEqual(cleared.journey.learningMemory, {
+    concepts: [],
+    attempts: [],
+    recordedAttemptIds: []
+  });
+  assert.deepEqual(cleared.journey.chapters, chaptersBefore);
+  assert.deepEqual(cleared.journey.events, eventsBefore);
+  assert.deepEqual(cleared.journey.chapters[0].sessions[0].weakTopics, ["Light-dependent reactions"]);
+
+  const retry = Worker.reduceJourneyOperation(cleared.journey, request, "2026-07-15T03:05:00Z");
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.changed, false);
+  assert.equal(retry.result.clearedAttemptCount, 1);
+  assert.equal(retry.result.clearedConceptCount, 1);
 });

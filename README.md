@@ -6,6 +6,7 @@ The product is designed around one loop:
 
 ```text
 read across pages and videos
+  -> select or create the chapter that owns the evidence
   -> inspect the supporting evidence
   -> practise with a quiz
   -> record mastery and weak concepts
@@ -15,86 +16,28 @@ read across pages and videos
 
 This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; Exam-Cram is optimizing for traceability, active learning, persistence, and a clear next study action.
 
-## Current Release: 0.6.0 — 14 July 2026
+## Current Capabilities
 
-### 0.6.0 explicit chapters, least-privilege access, and release security
+| Runtime fact | Current value |
+| --- | --- |
+| Extension platform | Chrome Manifest V3, Chrome 116+ |
+| Local runtime | Node.js 18+ |
+| Learning structure | One stable Journey chapter ID = one independent Learning Forest tree |
+| Unpacked build | `release/exam-cram-extension` |
+| Verification | Build, syntax, test, secret-scan, dependency-audit, and package commands are documented below |
+| Publication safety | The extension packager copies an explicit runtime allowlist and excludes local credentials |
+
+### Explicit chapters, least-privilege access, and release security
 
 - adds **New chapter** beside the chapter selector in Page and Notes and to the compact Journey view; each unique chapter receives a stable ID and grows as an independent Learning Forest tree, while choosing an existing name selects its existing ID instead of silently creating or merging another record
 - changes note and source creation to require an explicitly selected chapter, passes both the stable chapter ID and display title through every creation path, and keeps same-titled legacy records isolated by IDs rather than fuzzy title matching
+- prevents a newly created or empty chapter from displaying another chapter's last studied source; chapter evidence now appears only when its stable chapter ID matches
+- replaces the dense multi-tree overview with an exact-count Journey Ribbon, keeps chapter titles beneath their planting roots, and removes the obsolete timeline rule that ran through compact Journey chapter numbers
 - renames the collection action to **Save source to chapter** and explains its behavior in place: it stores a bounded page, document, or video/transcript snapshot without generating a note, deduplicates an exact repeated source, and lets the learner later choose **Build chapter visual note** in Journey to combine the chapter's saved evidence
 - replaces global all-sites onboarding with an **Allow this site** banner for the current HTTP/HTTPS origin; document hosts, local-file access, Focus destinations, and custom backend origins are requested separately only when their corresponding action needs them
 - binds every saved backend token to the configured endpoint origin, clears a reused token when that origin changes, sends it only to its bound origin, permits plain HTTP only for loopback hosts, and requires HTTPS for custom remote backends
 - hardens the local services with loopback-only listeners, exact origin validation, constant-time bearer-token comparison, JSON-only API posts, bounded request bodies, per-origin/address rate limits, concurrency limits, timeouts, redacted server errors, no-store responses, and restrictive CSP, framing, referrer, MIME, and permissions headers
 - adds an allowlisted extension packager and publish-safety scanner, CI verification, CodeQL analysis, Dependabot updates, a private vulnerability-reporting policy, an explicit extension CSP, and expanded regression coverage for chapter isolation, permission contracts, endpoint-bound tokens, loopback authentication, JSON-only API posts, and defensive response headers
-
-### 0.5.5 calm, adaptive interface
-
-- replaces the feature-by-feature purple styling with a small semantic system: neutral reading surfaces, one blue action accent, system typography, consistent spacing, restrained radii, and one translucent material treatment for persistent navigation
-- keeps all five study destinations in one compact symbol-and-label tab row from 320px through desktop widths, with correct tab/tabpanel semantics, roving arrow-key navigation, and visible focus
-- normalizes important controls to at least 44px hit regions, adds pressed/disabled feedback, and keeps the primary study action visually distinct from file, collection, and secondary actions
-- simplifies permission, current-source, Journey, Focus, Library, note, cheat-sheet, and dialog surfaces so content hierarchy comes from spacing and type instead of nested gradients, saturated borders, and competing shadows
-- keeps visual-note maps, selected-concept evidence, and cheat sheets in document flow; the narrow action toolbar no longer floats over study content, and connector observers/listeners are disposed when a note is replaced or closed
-- adds explicit high-contrast, reduced-transparency, and reduced-motion adaptations plus regression coverage for semantic contrast, target sizing, compact navigation, responsive overflow, keyboard behavior, and renderer teardown
-- preserves every existing action ID, storage key, source/artifact link, backend route, and exact saved-note handoff; this release changes presentation and interaction quality rather than the learning data model
-
-### 0.5.4 reliable Chrome tab-audio authorization
-
-- replaces the unreliable side-panel `getMediaStreamId()` request with Chrome's supported action-driven flow: **Start tab audio** validates and arms the exact video, then one Exam-Cram toolbar click authorizes the tab and starts recording automatically
-- keeps the armed request in `chrome.storage.session` for up to 60 seconds, so a brief service-worker suspension cannot lose the user's intent; the one-use Chrome stream ID is created only after the toolbar invocation and is consumed immediately by the offscreen recorder
-- completes backend preflight before asking for the toolbar click, preventing a slow backend, missing provider key, or invalid token from consuming Chrome's short-lived stream authorization
-- cancels the armed request on navigation, tab closure, consent dismissal, expiry, or source mismatch and never reuses it for a similar title or a different tab
-- adds a clear two-step consent callout and live waiting/authorizing/error states; users no longer need to reauthorize the toolbar and then return to press **Start tab audio** a second time
-- provides `Ctrl+Shift+Y` (`Command+Shift+Y` on macOS) as an action shortcut with the same Chrome `activeTab` grant when the toolbar icon is not pinned
-
-### 0.5.3 transcription recovery, connected notes, and cheat sheets
-
-- replaces the full Journey's original Wayfinder presentation with an interactive Learning Forest: each stable chapter ID grows one deterministic bronze particle tree, saved Visual Tutor Note concepts become its subheaders, and source-only chapters remain visible as seedlings
-- uses progressive disclosure in the forest: selecting a tree isolates its concepts without opening a panel, selecting a concept flies to its canopy and opens a compact bottom card, and full note evidence or the Journey summary opens only from an explicit action
-- adds a user-controlled **Pause motion** action, stable orbit dragging, reliable captured subheader presses, strong keyboard focus, responsive command regions, and a complete list fallback when WebGL is unavailable
-- removes the manual backend-token step for the bundled loopback server when the browser-supplied extension Origin exactly matches `ALLOWED_EXTENSION_ORIGINS`; preview pages, missing/wrong origins, and custom/remote backends still require a valid bearer token
-- performs an authenticated-or-trusted-origin transcription preflight before `REC`, so an unavailable backend, missing Gemini key, wrong origin, or stale custom token is reported before audio capture begins
-- records every audio chunk as processing, transcribed, or failed; provider errors can no longer masquerade as received chunks while the segment count remains at zero
-- sends real `audio/wav` input to Gemini, retries one invalid or empty structured transcript once, and persists the final provider error and recovery message
-- restores a professional connected mind map with a central topic, 3–4 primary branches, supporting secondary branches, always-visible SVG connections, selected-neighborhood highlighting, branch focus, and keyboard traversal
-- adds a source-grounded cheat sheet to every visual note with Topic, Main idea, Key facts/rule, Example/application, and Evidence/citation fields; video times, PDF pages, and collection-source identity are retained
-- reflows dense mind maps and semantic cheat-sheet tables at 320, 360, 429, and 640 pixels without horizontal scrolling, while exports include the bounded cheat sheet but exclude private raw evidence
-
-### 0.5.2 source-ingestion reliability
-
-- replaces Chrome's unreliable native action-to-side-panel shortcut with one explicit toolbar action that both grants the current tab invocation and opens the same persistent global panel
-- binds every short-lived tab-audio reservation to the exact tab, canonical URL, media identity, and source fingerprint; navigation, replay, replacement, expiry, or tab closure revokes it before the recorder starts
-- reads current HTTP/HTTPS HTML pages across accessible frames and open shadow roots, allowed local HTML pages, and remote or local PDF documents without generating a quiz
-- replaces the old raw character threshold with a bounded Unicode-aware readability check, so structured and multilingual study pages are not rejected merely because they use CJK text or concise sections
-- adds **Open HTML or PDF file** as a local-file fallback that does not require Chrome file-URL access
-- parses PDFs locally with bundled PDF.js, preserves page-number anchors, and reports password-protected, malformed, oversized, or scanned/image-only PDFs clearly
-- bounds HTML nodes, PDF bytes/pages/text objects, extracted text, download time, and parse time; raw PDF bytes are never stored or exported
-- tries visible/player captions and Gemini public-YouTube analysis before offering tab audio; live capture now shows elapsed input, audibility, chunk, and segment progress and stops with a clear message when no samples or only silence arrive
-- introduced an overview-first heavy-note list fallback; 0.5.3 replaces that temporary fallback with the connected, focusable hierarchy described above
-
-### 0.5.1 reliability fixes
-
-- repairs the tab-audio request/reply lifecycle so capture failures cannot silently strand the consent dialog
-- converts closed or stale worker message ports into an explicit `Reload Exam-Cram` recovery action
-- makes compact and full-Journey saved-artifact cards reflow cleanly as the side panel or browser window changes size
-- keeps each **Open note** action attached to its exact saved artifact without squeezing or truncating the button
-- preserves the 0.5 note-first workflow, persistent side panel, deduplicated source snapshots, and real DOCX/PDF exports
-
-### 0.5.0 professional UX foundation
-
-- a global Chrome side panel that stays available across tabs and websites until the user closes it
-- a note-first workflow: visual notes contain no quiz UI or quiz request until **Generate quiz** is selected
-- interactive visual notes with responsive concept, comparison, formula, flow, and relationship layouts
-- source-bound quizzes with difficulty/style controls, unique safe IDs, distinct options, and balanced answer positions
-- stale-page, stale-video, transcript-fingerprint, and collection-revision guards
-- direct, editable OOXML `.docx` and genuine `.pdf` export with a unified content preview
-- explicit collection of pages, notes, and videos from different websites into one chapter
-- a dated chapter-first Journey with `Completed`, `In progress`, `Needs review`, and `Planned` states; the current full-page presentation is the Learning Forest described below
-- bounded overall Journey summaries with a deterministic local fallback
-- a timed Focus session blocker with 1–720 minute durations and domain/path rules
-- caption-grounded video lessons with timestamped visual nodes, hints, and jumps
-- automatic public-YouTube analysis when usable captions are unavailable
-- explicit audio-only tab capture for other detectable HTML5 videos, limited to 15 minutes
-- an authenticated local AI backend with an extension-origin allowlist
 
 ## Interface Design Principles
 
@@ -271,9 +214,9 @@ Refreshing the side panel is not the same as reloading the extension. A refreshe
 4. Open the video page and start playback.
 5. Click the Exam-Cram toolbar icon to open the global panel.
 6. Choose **Create note from video**, then **Auto-transcribe** and **Start tab audio** if the video has no usable captions.
-7. Keep that playing video tab active and click the Exam-Cram toolbar icon once more, or press `Ctrl+Shift+Y`. Version 0.6.0 authorizes that exact armed request and starts recording automatically.
+7. Keep that playing video tab active and click the Exam-Cram toolbar icon once more, or press `Ctrl+Shift+Y`. This authorizes the exact armed request and starts recording automatically.
 
-Version 0.6.0 performs backend preflight before the final toolbar invocation and never stores an unused Chrome stream ID. Navigation intentionally cancels the armed request; on the new video page, press **Start tab audio** again and then use the toolbar action once to authorize and start it.
+Exam-Cram performs backend preflight before the final toolbar invocation and never stores an unused Chrome stream ID. Navigation intentionally cancels the armed request; on the new video page, press **Start tab audio** again and then use the toolbar action once to authorize and start it.
 
 ## Core Workflows
 
@@ -352,9 +295,12 @@ Publisher-caption timestamps are labelled `caption-grounded`, pasted timestamp t
 The compact panel route and full Learning Forest page show:
 
 - explicit **New chapter** actions in Page, Notes, and Journey; a chapter can exist as an empty named tree before any source or note is added
-- one bronze particle tree per user-named Journey chapter, with source-only chapters shown as seedlings
-- a name-only forest overview when multiple note trees exist and a focused 3D concept tree when one is selected
-- up to seven grounded concept branches from the latest saved visual note, joined by stable chapter and artifact IDs
+- one planting plot per user-named Journey chapter on an adaptive serpentine ribbon; the ribbon creates only the chapters that exist and never pads a four-chapter journey with numbers 05–11
+- grounded growth stages based on saved learning units: Visual Tutor Notes and distinct saved sources each contribute one unit; 0 units is an empty plot, 1–2 is a seedling, 3–5 is a normal tree, and 6 or more is a huge tree
+- a stage-accurate bronze particle plant for every non-empty chapter in the overview, with the shared hardware-aware particle budget distributed across the forest so journeys of up to 24 chapters remain visible and bounded
+- focused trees and their dimmed background plants share that same hardware-tier ceiling; focus increases the selected plant's detail without stacking a second unbounded particle pool
+- a completion pulse at the base of chapters whose latest submitted quiz reaches the existing 80% completion threshold
+- up to eight meaningful Visual Tutor Note branches per chapter; repeated builds from the same exact source revision or combined-source composition collapse to the newest branch, while older artifacts remain available in the Library
 - saved source snapshots for pages, notes, documents, and videos inside the focused tree drawer
 - generation activity separately from submitted performance
 - chapter state based on the latest submitted quiz
@@ -367,13 +313,13 @@ Learning Forest interaction model:
 
 1. Choose **New chapter** from Page, Notes, or Journey, name it, and select it. The Journey writer creates an empty chapter with a stable ID; using an existing name selects the existing chapter rather than creating a title-based duplicate.
 2. Notes, saved sources, quizzes, and forest selection carry that stable chapter ID. Similar chapter or artifact titles are not used to merge unrelated records.
-3. With one chapter, the tree is centered and its grounded concept subheaders appear immediately.
-4. With multiple chapters, the overview shows tree names only. Select a name or tree to isolate that chapter and reveal up to seven concepts.
-5. Select a concept subheader to fly to its mapped canopy, hide the directory labels, and open only the compact grounded concept card at the bottom.
-6. Use **Note details** for the complete saved Visual Tutor Note, cheat sheet, quizzes, sources, dates, status, and chapter evidence. Use **Journey summary** for range-based overall progress.
-7. Use **Back to forest** or `Escape` to leave a focused tree or concept. Use **Pause motion** to freeze the wind and continuous contour flow without disabling tree selection, zoom, or evidence access.
+3. With one chapter, its saved-unit growth stage is centered, the ribbon shows only 01, and up to eight newest distinct Visual Tutor Note branches are available immediately.
+4. With multiple chapters, every stage-accurate plant remains visible in stored chapter order along the S-shaped ribbon. Drag to orbit the 360-degree overview, or hover and keyboard-focus an index to highlight its matching plot.
+5. Select a plot or chapter number to glide toward that tree without changing its seedling, normal, or huge stage. Select a Visual Tutor Note branch to fly to its mapped location and open that exact stable artifact in the centered bottom drawer.
+6. The bottom drawer shows the selected Visual Tutor Note, cheat sheet, quiz and source evidence, dates, and chapter status; **Open full note** restores the same artifact in the side panel. **Journey summary** retains its range-based overall progress view.
+7. Use **Back to forest** or `Escape` to leave a focused tree or note. Use **Pause motion** to freeze the wind and continuous contour flow without disabling tree selection, 360-degree orbit, zoom, or evidence access.
 
-The layout treats the canvas as the primary content region and the evidence drawer as auxiliary information. Desktop uses a centered bounded bottom panel; narrow viewports use a single-column bottom sheet. Controls retain visible 2px keyboard focus, pointer targets are at least 40px high, decorative layers cannot block labels, and `prefers-reduced-motion` starts the forest paused. These choices follow the responsive-region guidance in [GitHub Primer](https://primer-docs-preview.github.com/product/getting-started/foundations/layout/) and the target-size, focus, and motion guidance in [WCAG 2.2](https://www.w3.org/TR/WCAG22/).
+The layout treats the canvas as the primary content region and the evidence drawer as auxiliary information. Desktop uses a centered bounded bottom panel rather than a right-side inspector; narrow viewports use a single-column bottom sheet and a horizontally scrollable chapter index. The ribbon and connectors are non-interactive decoration, while every plot, index entry, Visual Tutor Note branch, and command remains a real HTML button. Controls retain visible 2px keyboard focus, pointer targets are at least 40px high, and `prefers-reduced-motion` starts the forest paused and turns the completion pulse into a static ring. These choices follow the responsive-region guidance in [GitHub Primer](https://primer-docs-preview.github.com/product/getting-started/foundations/layout/) and the target-size, focus, and motion guidance in [WCAG 2.2](https://www.w3.org/TR/WCAG22/).
 
 The renderer is bundled locally for extension CSP compliance. After editing `journey-tree/`, rebuild it with:
 
@@ -410,7 +356,7 @@ The MV3 worker stores an absolute deadline, recreates alarms after restart, inst
 
 ## Security And Publication
 
-No application can be guaranteed impossible to compromise. Version 0.6.0 reduces exposed authority, validates trust boundaries, bounds resource use, and adds repeatable release checks. See [SECURITY.md](SECURITY.md) for the supported release line, credential-response guidance, and private reporting process.
+No application can be guaranteed impossible to compromise. Exam-Cram reduces exposed authority, validates trust boundaries, bounds resource use, and adds repeatable release checks. See [SECURITY.md](SECURITY.md) for the supported release line, credential-response guidance, and private reporting process.
 
 ### Runtime protections
 
@@ -485,7 +431,7 @@ npm run security:audit
 npm run package:extension
 ```
 
-The complete automated suite covers real DOCX/PDF exports, grounded cheat-sheet sanitization and responsive semantics, PDF-backed source labels, multi-frame/open-shadow HTML extraction, multilingual readability, adversarial HTML/PDF bounds, genuine PDF text parsing, PDF-specific failure states, per-site and file-permission contracts, Focus-rule lifecycle, empty stable-ID chapter creation, duplicate-name resolution, cross-chapter isolation, Journey schema migration and document metadata, exact artifact handoff, Learning Forest ID joins and seedlings, progressive tree/concept disclosure, responsive bottom-sheet behavior, motion pausing, stable orbit dragging, reliable subheader activation, connected 3/5/8-concept mind maps, keyboard/reflow behavior, non-obscuring narrow action controls, collection provenance and deduplication, quiz isolation, endpoint-bound tokens, exact-origin loopback authentication, wrong-token and wrong-origin rejection, JSON-only API posts, defensive response headers, visible-caption and public-YouTube routing, stable video identity, executable service-worker action authorization, expiry and changed-page rejection, source-bound one-use stream reservations, reply-before-teardown behavior, live audio health/progress, explicit zero-segment failure, transcript binding, audio chunk limits, timestamp mapping, and WAV encoding.
+The complete automated suite covers real DOCX/PDF exports, grounded cheat-sheet sanitization and responsive semantics, PDF-backed source labels, multi-frame/open-shadow HTML extraction, multilingual readability, adversarial HTML/PDF bounds, genuine PDF text parsing, PDF-specific failure states, per-site and file-permission contracts, Focus-rule lifecycle, empty stable-ID chapter creation, duplicate-name resolution, cross-chapter isolation, Journey schema migration and document metadata, exact artifact handoff, Learning Forest saved-unit growth stages, persistent stage-accurate overviews, exact-count ribbon entries, stable Visual Tutor Note branch IDs, responsive bottom-drawer behavior, motion pausing, stable 360-degree orbit dragging, reliable branch activation, connected 3/5/8-concept mind maps, keyboard/reflow behavior, non-obscuring narrow action controls, collection provenance and deduplication, quiz isolation, endpoint-bound tokens, exact-origin loopback authentication, wrong-token and wrong-origin rejection, JSON-only API posts, defensive response headers, visible-caption and public-YouTube routing, stable video identity, executable service-worker action authorization, expiry and changed-page rejection, source-bound one-use stream reservations, reply-before-teardown behavior, live audio health/progress, explicit zero-segment failure, transcript binding, audio chunk limits, timestamp mapping, and WAV encoding.
 
 ## Market-Informed Roadmap
 

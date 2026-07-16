@@ -19,13 +19,18 @@ process.env.ALLOWED_EXTENSION_ORIGINS = "chrome-extension://abcdefghijklmnopabcd
 const {
   assertAuthorizedRequest,
   fitJourneyContext,
+  getArtifactCacheKey,
   getAllowedRequestOrigin,
+  getDesiredVisualNodeCount,
+  getQuizTokenBudget,
   isTrustedLoopbackExtensionRequest,
   normalizeAutomaticTranscript,
   normalizeQuestion,
   normalizePublicYouTubeUrl,
+  reidentifyQuizArtifact,
   resolveCollectionSource,
-  resolveVideoSegment
+  resolveVideoSegment,
+  withResponseCache
 } = require("../server.js");
 
 test("allows tokenless auth only for the exact configured extension origin on loopback", () => {
@@ -85,8 +90,9 @@ test("normalizes safe unique question ids, choices, and balanced answer position
   };
   const first = normalizeQuestion(question, source, 0);
   const third = normalizeQuestion(question, source, 2);
-  assert.equal(first.id, "q-001");
-  assert.equal(third.id, "q-003");
+  assert.match(first.id, /^quiz-[0-9a-f-]+-q-001$/);
+  assert.match(third.id, /^quiz-[0-9a-f-]+-q-003$/);
+  assert.notEqual(first.id, third.id);
   assert.equal(first.choices.indexOf("Correct"), 0);
   assert.equal(third.choices.indexOf("Correct"), 2);
   assert.throws(
@@ -130,6 +136,93 @@ test("journey context fitting stays within the paid prompt budget", () => {
   const fitted = fitJourneyContext(chapters, 96 * 1024);
   assert.ok(Buffer.byteLength(JSON.stringify(fitted), "utf8") <= 96 * 1024);
   assert.ok(fitted.reduce((total, chapter) => total + chapter.sessions.length, 0) < 24 * 8);
+});
+
+test("journey context fitting globally evicts the oldest sessions from unsorted chapters", () => {
+  const chapters = [
+    {
+      id: "chapter-later-first",
+      sessions: [
+        { id: "newest", generatedAt: "2026-06-01T00:00:00.000Z", payload: "n".repeat(240) },
+        { id: "oldest", generatedAt: "2026-01-01T00:00:00.000Z", payload: "o".repeat(240) }
+      ]
+    },
+    {
+      id: "chapter-earlier-second",
+      sessions: [
+        { id: "second-oldest", generatedAt: "2026-02-01T00:00:00.000Z", payload: "s".repeat(240) },
+        { id: "middle", generatedAt: "2026-05-01T00:00:00.000Z", payload: "m".repeat(240) }
+      ]
+    }
+  ];
+  const expected = [
+    { ...chapters[0], sessions: [chapters[0].sessions[0]] },
+    { ...chapters[1], sessions: [chapters[1].sessions[1]] }
+  ];
+
+  const fitted = fitJourneyContext(chapters, Buffer.byteLength(JSON.stringify(expected), "utf8"));
+
+  assert.deepEqual(
+    fitted.map((chapter) => chapter.sessions.map((session) => session.id)),
+    [["newest"], ["middle"]]
+  );
+  assert.deepEqual(
+    chapters.map((chapter) => chapter.sessions.map((session) => session.id)),
+    [["newest", "oldest"], ["second-oldest", "middle"]]
+  );
+});
+
+test("private response caching coalesces identical work, clones results, and never caches failures", async () => {
+  const key = getArtifactCacheKey("quiz-cache-test", {
+    rawText: "Photosynthesis stores energy in glucose.",
+    sourceFingerprint: "cache-source",
+    noteId: "note-cache",
+    questionCount: 5,
+    difficulty: "normal",
+    quizStyle: "mixed"
+  });
+  let calls = 0;
+  const [first, second] = await Promise.all([
+    withResponseCache(key, async () => ({ nested: { value: ++calls } })),
+    withResponseCache(key, async () => ({ nested: { value: ++calls } }))
+  ]);
+  assert.equal(calls, 1);
+  first.nested.value = 99;
+  assert.equal(second.nested.value, 1);
+  const third = await withResponseCache(key, async () => ({ nested: { value: ++calls } }));
+  assert.equal(third.nested.value, 1);
+  assert.equal(calls, 1);
+
+  const failureKey = `${key}-failure`;
+  await assert.rejects(withResponseCache(failureKey, async () => {
+    throw new Error("provider failed");
+  }), /provider failed/);
+  const recovered = await withResponseCache(failureKey, async () => ({ ok: true }));
+  assert.equal(recovered.ok, true);
+});
+
+test("cache keys and generation budgets change with raw text and settings", () => {
+  const base = {
+    rawText: "Short saved source",
+    sourceFingerprint: "fp",
+    noteId: "note",
+    questionCount: 5,
+    difficulty: "normal",
+    quizStyle: "mixed"
+  };
+  assert.notEqual(getArtifactCacheKey("quiz", base), getArtifactCacheKey("quiz", { ...base, questionCount: 10 }));
+  assert.notEqual(getArtifactCacheKey("quiz", base), getArtifactCacheKey("quiz", { ...base, rawText: `${base.rawText} changed` }));
+  assert.ok(getQuizTokenBudget(5) < getQuizTokenBudget(10));
+  assert.ok(getQuizTokenBudget(10) < getQuizTokenBudget(15));
+  assert.ok(getDesiredVisualNodeCount("x".repeat(1200)) < getDesiredVisualNodeCount("x".repeat(12000)));
+});
+
+test("cached quiz content receives fresh quiz and question identities", () => {
+  const cached = { questions: [{ prompt: "One" }, { prompt: "Two" }] };
+  const first = reidentifyQuizArtifact(cached);
+  const second = reidentifyQuizArtifact(cached);
+  assert.notEqual(first.quizId, second.quizId);
+  assert.equal(new Set([...first.questions, ...second.questions].map((question) => question.id)).size, 4);
 });
 
 test("accepts only canonical public YouTube watch URLs and validates estimated transcript time", () => {
