@@ -14,6 +14,8 @@
     CREATE_CHAPTER: "JOURNEY_CREATE_CHAPTER",
     ADD_SOURCE: "JOURNEY_ADD_SOURCE",
     REMOVE_SOURCE: "JOURNEY_REMOVE_SOURCE",
+    REMOVE_SESSION: "JOURNEY_REMOVE_SESSION",
+    RENAME_SESSION: "JOURNEY_RENAME_SESSION",
     UPSERT_SESSION: "JOURNEY_UPSERT_SESSION",
     CLEAR_LEARNING_MEMORY: "JOURNEY_CLEAR_LEARNING_MEMORY",
     SAVE_SUMMARY: "JOURNEY_SAVE_SUMMARY",
@@ -126,6 +128,29 @@
         const removed = Boolean(chapter?.sources?.some((source) => source.id === sourceId));
         next = Journey.removeSource(journey, chapterId, sourceId, now);
         result = { chapterId, sourceId, removed };
+        break;
+      }
+      case MESSAGE_TYPES.REMOVE_SESSION: {
+        const chapterId = String(payload.chapterId || "").trim();
+        const sessionId = String(payload.sessionId || "").trim();
+        if (!chapterId || !sessionId) {
+          throw new JourneyOperationError("INVALID_SESSION", "Removing a note requires its chapter and note ids.");
+        }
+        const removedOutcome = Journey.removeSession(journey, chapterId, sessionId, now);
+        next = removedOutcome.journey;
+        result = { removed: removedOutcome.removed, removedConceptCount: removedOutcome.removedConceptCount };
+        break;
+      }
+      case MESSAGE_TYPES.RENAME_SESSION: {
+        const chapterId = String(payload.chapterId || "").trim();
+        const sessionId = String(payload.sessionId || "").trim();
+        const title = String(payload.title || "").trim();
+        if (!chapterId || !sessionId || !title) {
+          throw new JourneyOperationError("INVALID_SESSION", "Renaming a note requires its chapter id, note id, and a new title.");
+        }
+        const renamedOutcome = Journey.renameSession(journey, chapterId, sessionId, title, now);
+        next = renamedOutcome.journey;
+        result = { renamed: renamedOutcome.renamed };
         break;
       }
       case MESSAGE_TYPES.UPSERT_SESSION: {

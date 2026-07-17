@@ -5,6 +5,7 @@
   const MAX_CHAPTERS = 24;
   const MAX_SOURCES_PER_CHAPTER = 8;
   const MAX_SESSIONS_PER_CHAPTER = 30;
+  const MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER = 8;
   const MAX_SOURCE_TEXT = 14000;
   const MAX_TRANSCRIPT_SEGMENTS = 500;
   const MAX_TRANSCRIPT_TEXT = 24000;
@@ -642,6 +643,167 @@
     return [...new Set(tokens.filter((token) => token.length >= 4))].slice(0, limit);
   }
 
+  const CLASSIFY_BOILERPLATE_LINE = /^(skip to (main )?content|accept (all )?cookies?|cookie (settings|policy|notice)|all rights reserved|privacy policy|terms of (service|use)|table of contents|copyright\b.*|page \d+( of \d+)?|\d+)$/i;
+
+  function buildClassificationExcerpt(text, maxLength = 3000) {
+    const rawLines = String(text || "").split(/\n+/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+    const lineCounts = new Map();
+    rawLines.forEach((line) => lineCounts.set(line, (lineCounts.get(line) || 0) + 1));
+    const seenRepeated = new Set();
+    const keptLines = rawLines.filter((line) => {
+      if (CLASSIFY_BOILERPLATE_LINE.test(line)) return false;
+      if ((lineCounts.get(line) || 0) >= 3) {
+        if (seenRepeated.has(line)) return false;
+        seenRepeated.add(line);
+      }
+      return true;
+    });
+    const cleaned = keptLines.join(" ").replace(/\s+/g, " ").trim();
+    if (cleaned.length <= maxLength) return cleaned;
+    const headLength = Math.ceil(maxLength * 0.5);
+    const sliceLength = Math.floor(maxLength * 0.25);
+    const midStart = Math.floor(cleaned.length * 0.45);
+    const lateStart = Math.floor(cleaned.length * 0.75);
+    return [
+      cleaned.slice(0, headLength),
+      cleaned.slice(midStart, midStart + sliceLength),
+      cleaned.slice(lateStart, lateStart + sliceLength)
+    ].join(" … ");
+  }
+
+  function buildImportTokenCounts(excerpt) {
+    const counts = new Map();
+    (String(excerpt || "").toLowerCase().match(/[\p{L}\p{N}]+/gu) || [])
+      .filter((token) => token.length >= 4)
+      .slice(0, 600)
+      .forEach((token) => counts.set(token, (counts.get(token) || 0) + 1));
+    return counts;
+  }
+
+  function importTokenSimilarity(first, second, ignored) {
+    let shared = 0;
+    let firstTotal = 0;
+    let secondTotal = 0;
+    first.forEach((count, token) => {
+      if (ignored.has(token)) return;
+      firstTotal += count;
+      if (second.has(token)) shared += Math.min(count, second.get(token));
+    });
+    second.forEach((count, token) => {
+      if (!ignored.has(token)) secondTotal += count;
+    });
+    const denominator = Math.min(firstTotal, secondTotal);
+    return denominator > 0 ? shared / denominator : 0;
+  }
+
+  function clusterImportExcerpts(files, options = {}) {
+    const threshold = Number.isFinite(Number(options.threshold)) ? Number(options.threshold) : 0.18;
+    const entries = (Array.isArray(files) ? files : [])
+      .map((file) => ({
+        fileId: cleanText(file?.fileId, 100),
+        counts: buildImportTokenCounts(file?.excerpt)
+      }))
+      .filter((entry) => entry.fileId);
+    const presence = new Map();
+    entries.forEach((entry) => {
+      [...entry.counts.keys()].forEach((token) => presence.set(token, (presence.get(token) || 0) + 1));
+    });
+    const boilerplate = new Set([...presence.entries()]
+      .filter(([, count]) => entries.length >= 3 && count >= entries.length * 0.7)
+      .map(([token]) => token));
+
+    const clusters = entries.map((entry) => ({ fileIds: [entry.fileId], members: [entry] }));
+    const clusterSimilarity = (firstCluster, secondCluster) => {
+      let best = 0;
+      firstCluster.members.forEach((first) => secondCluster.members.forEach((second) => {
+        best = Math.max(best, importTokenSimilarity(first.counts, second.counts, boilerplate));
+      }));
+      return best;
+    };
+    let merged = true;
+    while (merged && clusters.length > 1) {
+      merged = false;
+      let bestPair = null;
+      for (let firstIndex = 0; firstIndex < clusters.length; firstIndex += 1) {
+        for (let secondIndex = firstIndex + 1; secondIndex < clusters.length; secondIndex += 1) {
+          const similarity = clusterSimilarity(clusters[firstIndex], clusters[secondIndex]);
+          if (!bestPair || similarity > bestPair.similarity) {
+            bestPair = { firstIndex, secondIndex, similarity };
+          }
+        }
+      }
+      if (bestPair && bestPair.similarity >= threshold) {
+        const absorbed = clusters.splice(bestPair.secondIndex, 1)[0];
+        clusters[bestPair.firstIndex].fileIds.push(...absorbed.fileIds);
+        clusters[bestPair.firstIndex].members.push(...absorbed.members);
+        merged = true;
+      }
+    }
+
+    return clusters.map((cluster) => {
+      const totals = new Map();
+      cluster.members.forEach((member) => member.counts.forEach((count, token) => {
+        if (!boilerplate.has(token)) totals.set(token, (totals.get(token) || 0) + count);
+      }));
+      const ranked = [...totals.entries()]
+        .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]));
+      const codePattern = /^[a-z]{2,4}\d{4}$/;
+      const codeCounts = new Map();
+      cluster.members.forEach((member) => {
+        const seen = new Set();
+        member.counts.forEach((count, token) => {
+          if (codePattern.test(token) && !seen.has(token)) {
+            seen.add(token);
+            codeCounts.set(token, (codeCounts.get(token) || 0) + 1);
+          }
+        });
+      });
+      const unitCode = [...codeCounts.entries()]
+        .filter(([, count]) => count >= Math.ceil(cluster.members.length / 2))
+        .sort((first, second) => second[1] - first[1])[0]?.[0] || "";
+      const topicWords = ranked
+        .filter(([token]) => !codePattern.test(token))
+        .slice(0, 3)
+        .map(([token]) => token.charAt(0).toUpperCase() + token.slice(1));
+      const title = [unitCode ? unitCode.toUpperCase() : "", ...topicWords]
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 60);
+      return {
+        fileIds: cluster.fileIds,
+        keywords: ranked.slice(0, 12).map(([token]) => token),
+        title: title || "New Chapter"
+      };
+    });
+  }
+
+  function buildChapterClassificationHints(value, options = {}) {
+    const journey = normalizeJourney(value);
+    const maxKeywords = Math.max(3, Math.min(12, Math.round(Number(options.maxKeywords) || 10)));
+    return journey.chapters.map((chapter) => {
+      const titleTokens = new Set(classifySourceTokens(chapter.title));
+      const counts = new Map();
+      const addTokens = (text, weight) => {
+        classifySourceTokens(String(text || "").slice(0, 2000)).forEach((token) => {
+          if (titleTokens.has(token)) return;
+          counts.set(token, (counts.get(token) || 0) + weight);
+        });
+      };
+      chapter.sources.forEach((source) => {
+        addTokens(source.title, 3);
+        addTokens(source.text, 1);
+      });
+      chapter.sessions.forEach((session) => addTokens(session.title, 2));
+      const keywords = [...counts.entries()]
+        .sort((first, second) => second[1] - first[1] || first[0].localeCompare(second[0]))
+        .slice(0, maxKeywords)
+        .map(([token]) => token);
+      return { title: chapter.title, keywords };
+    });
+  }
+
   function classifySourcesLocally(files, value) {
     if (!Array.isArray(files)) return [];
     const journey = value && typeof value === "object" && !Array.isArray(value)
@@ -650,50 +812,57 @@
     const existingTitles = journey.chapters.map((chapter) => chapter.title);
     const chapterMatches = journey.chapters.map((chapter) => ({
       chapter,
-      tokens: new Set(classifySourceTokens([
-        chapter.title,
-        ...chapter.sources.map((source) => source.title)
-      ].join(" ")))
+      titleTokens: new Set(classifySourceTokens(chapter.title)),
+      sourceTitleTokens: new Set(classifySourceTokens(
+        chapter.sources.map((source) => source.title).join(" ")
+      )),
+      textTokens: new Set(classifySourceTokens([
+        ...chapter.sources.map((source) => String(source.text || "").slice(0, 2000)),
+        ...chapter.sessions.map((session) => session.title)
+      ].join(" "), 80))
     }));
 
-    return files.map((file) => {
-      const fileId = cleanText(file?.fileId, 100);
-      const title = cleanText(file?.title, 180);
-      const excerpt = cleanText(file?.excerpt, 2000);
-      const fileTokens = classifySourceTokens(`${title} ${excerpt}`, 40);
+    const assignmentsByFileId = new Map();
+    const readableFiles = files.filter((file) => !file?.skipped);
+    clusterImportExcerpts(readableFiles).forEach((cluster) => {
       let bestMatch = null;
       chapterMatches.forEach((candidate) => {
-        const score = fileTokens.filter((token) => candidate.tokens.has(token)).length;
-        if (!bestMatch || score > bestMatch.score) bestMatch = { ...candidate, score };
+        let score = 0;
+        cluster.keywords.forEach((token) => {
+          if (candidate.titleTokens.has(token)) score += 3;
+          else if (candidate.sourceTitleTokens.has(token)) score += 2;
+          else if (candidate.textTokens.has(token)) score += 1;
+        });
+        if (!bestMatch || score > bestMatch.score) bestMatch = { chapter: candidate.chapter, score };
       });
-      if (bestMatch?.score >= 2) {
-        return {
+      if (bestMatch?.score >= 4) {
+        cluster.fileIds.forEach((fileId) => assignmentsByFileId.set(fileId, {
           fileId,
           chapterTitle: bestMatch.chapter.title,
           isNewChapter: false,
           confidence: 0.4,
           reason: `Local match: shared terms with ${bestMatch.chapter.title}`
-        };
+        }));
+        return;
       }
-
-      const titleWords = title
-        .replace(/\.[^.]+$/, "")
-        .replace(/[\d_]+/g, " ")
-        .replace(/[^\p{L}\s]+/gu, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .split(" ")
-        .filter(Boolean)
-        .slice(0, 3)
-        .join(" ");
-      return {
+      const chapterTitle = normalizeChapterTitleProposal(cluster.title, existingTitles);
+      const clusterSize = cluster.fileIds.length;
+      const confidence = Math.min(0.5, 0.3 + 0.04 * (clusterSize - 1));
+      const reason = clusterSize > 1
+        ? `Grouped with ${clusterSize - 1} related ${clusterSize === 2 ? "file" : "files"} by shared content`
+        : "No close match — named from the file's content";
+      cluster.fileIds.forEach((fileId) => assignmentsByFileId.set(fileId, {
         fileId,
-        chapterTitle: normalizeChapterTitleProposal(titleWords, existingTitles),
+        chapterTitle,
         isNewChapter: true,
-        confidence: 0.3,
-        reason: "No close match — named from the file title"
-      };
+        confidence,
+        reason
+      }));
     });
+
+    return files
+      .map((file) => assignmentsByFileId.get(cleanText(file?.fileId, 100)))
+      .filter(Boolean);
   }
 
   function uniqueText(value, limit, maxLength) {
@@ -775,6 +944,8 @@
       sourceDuplicate: Boolean(value.sourceDuplicate),
       sourceUpdated: Boolean(value.sourceUpdated),
       removed: Boolean(value.removed),
+      removedConceptCount: Math.max(0, Math.round(Number(value.removedConceptCount) || 0)),
+      renamed: Boolean(value.renamed),
       recordedAttemptCount: Math.max(0, Math.round(Number(value.recordedAttemptCount) || 0)),
       duplicateAttemptCount: Math.max(0, Math.round(Number(value.duplicateAttemptCount) || 0)),
       clearedAttemptCount: Math.max(0, Math.round(Number(value.clearedAttemptCount) || 0)),
@@ -972,6 +1143,44 @@
     }
     touchJourney(journey, now);
     return journey;
+  }
+
+  function removeSession(value, chapterId, sessionId, now = Date.now()) {
+    const journey = normalizeJourney(value);
+    const chapter = findChapter(journey, chapterId);
+    const safeSessionId = cleanText(sessionId, 100);
+    if (!chapter || !safeSessionId) return { journey, removed: false, removedConceptCount: 0 };
+    const nextSessions = chapter.sessions.filter((session) => session.id !== safeSessionId);
+    if (nextSessions.length === chapter.sessions.length) {
+      return { journey, removed: false, removedConceptCount: 0 };
+    }
+    chapter.sessions = nextSessions;
+    chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
+    const memory = normalizeLearningMemory(journey.learningMemory);
+    const keptConcepts = memory.concepts.filter((concept) => concept.noteId !== safeSessionId);
+    const removedConceptCount = memory.concepts.length - keptConcepts.length;
+    journey.learningMemory = {
+      ...memory,
+      concepts: keptConcepts,
+      attempts: memory.attempts.filter((attempt) => attempt.noteId !== safeSessionId)
+    };
+    touchJourney(journey, now);
+    return { journey, removed: true, removedConceptCount };
+  }
+
+  function renameSession(value, chapterId, sessionId, title, now = Date.now()) {
+    const journey = normalizeJourney(value);
+    const chapter = findChapter(journey, chapterId);
+    const safeSessionId = cleanText(sessionId, 100);
+    const safeTitle = cleanText(title, 180);
+    const session = chapter?.sessions.find((item) => item.id === safeSessionId);
+    if (!session || !safeTitle || session.title === safeTitle) {
+      return { journey, renamed: false };
+    }
+    session.title = safeTitle;
+    chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
+    touchJourney(journey, now);
+    return { journey, renamed: true };
   }
 
   function recordSession(value, chapterIdOrTitle, session, now = Date.now()) {
@@ -1359,6 +1568,33 @@
     };
   }
 
+  function getHourglassSandState(value, shape = "progress") {
+    const numericValue = Number(value);
+    const hasValue = value !== null
+      && value !== undefined
+      && String(value).trim() !== ""
+      && Number.isFinite(numericValue);
+    if (!hasValue) {
+      return {
+        hasValue: false,
+        percent: 0,
+        sourceFill: 0,
+        destinationFill: 0,
+        isFlowing: false
+      };
+    }
+    const percent = Math.max(0, Math.min(100, Math.round(numericValue)));
+    const sourceMultiplier = shape === "average" ? 0.78 : 0.84;
+    const destinationMultiplier = shape === "average" ? 0.92 : 0.96;
+    return {
+      hasValue: true,
+      percent,
+      sourceFill: Math.round((100 - percent) * sourceMultiplier),
+      destinationFill: Math.round(percent * destinationMultiplier),
+      isFlowing: percent > 0 && percent < 100
+    };
+  }
+
   function buildHabitProfile(value, focusHistory = [], now = Date.now()) {
     const journey = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const events = Array.isArray(journey.events) ? journey.events : [];
@@ -1466,6 +1702,10 @@
     const nowTimestamp = dateTimestamp(now) ?? 0;
     const generatedAt = normalizeIsoDate(now, 0);
     const habit = buildHabitProfile(journey, focusHistory, now);
+    const savedNoteIds = Array.isArray(options.savedNoteIds)
+      ? new Set(options.savedNoteIds.map((id) => cleanText(id, 100)).filter(Boolean))
+      : null;
+    const noteMissingFor = (noteId) => (savedNoteIds ? !savedNoteIds.has(noteId) : false);
     const streakNote = habit.currentStreakDays >= 2
       ? `Day ${habit.currentStreakDays} streak — one quiz today keeps it alive.`
       : "";
@@ -1478,6 +1718,7 @@
         steps: [{
           id: "onboard-1",
           kind: "advance",
+          intent: "onboard",
           title: "Create your first visual note",
           reason: "Save a page, note, or video to plant your first tree.",
           noteId: "",
@@ -1511,6 +1752,8 @@
       steps.push({
         id: `repair-${concept.conceptId}`,
         kind: "recovery",
+        intent: "recovery",
+        noteMissing: noteMissingFor(concept.noteId),
         title: `5-minute recovery quiz: ${concept.conceptLabel}`,
         reason,
         noteId: concept.noteId,
@@ -1539,6 +1782,7 @@
       steps.push({
         id: "advance-new-chapter",
         kind: "advance",
+        intent: "new-chapter",
         title: "Start a new chapter",
         reason: "Every chapter has reached the completed threshold.",
         noteId: "",
@@ -1555,19 +1799,24 @@
       ));
       let title = `Continue ${advanceChapter.title} with a new source or note`;
       let reason = "You are mid-chapter with no urgent repairs.";
+      let intent = "continue";
       if (status === "review") {
         title = `Review ${advanceChapter.title} and retake its quiz`;
         reason = "Your last score there was below 65%.";
+        intent = "review-retake";
       } else if (status === "planned") {
         title = `Add your first source to ${advanceChapter.title}`;
         reason = "This chapter is planned but has no saved material yet.";
+        intent = "add-source";
       } else if (status === "current" && !scoredSessions.length) {
         title = `Take your first quiz in ${advanceChapter.title}`;
         reason = "Activity only becomes mastery evidence after a submitted quiz.";
+        intent = "first-quiz";
       }
       steps.push({
         id: `advance-${advanceChapter.id}`,
         kind: "advance",
+        intent,
         title,
         reason,
         noteId: "",
@@ -1591,6 +1840,8 @@
         steps.push({
           id: `stretch-${stretch.concept.conceptId}`,
           kind: "stretch",
+          intent: "stretch",
+          noteMissing: noteMissingFor(stretch.concept.noteId),
           title: `Quick self-test: ${stretch.concept.conceptLabel}`,
           reason: `Mastered ${daysSinceAttempt} days ago — a quick test keeps it strong.`,
           noteId: stretch.concept.noteId,
@@ -1635,6 +1886,110 @@
         seenNoteIds.add(noteId);
         return true;
       });
+  }
+
+  function artifactTimelineIdentity(artifact) {
+    const binding = artifact?.sourceBinding && typeof artifact.sourceBinding === "object"
+      ? artifact.sourceBinding
+      : {};
+    const artifactId = cleanText(artifact?.noteId || artifact?.id, 100);
+    const sourceType = cleanText(
+      artifact?.sourceType || binding.sourceType || binding.type,
+      40
+    ) || "webpage";
+    const hasVisualNote = Boolean(
+      artifact?.hasVisualNote
+      || artifact?.itemKind === "note"
+      || artifact?.visualLesson?.visualModel
+    );
+    if (!hasVisualNote) return `artifact:${artifactId}`;
+
+    if (sourceType === "collection") {
+      const compositionRevision = cleanText(
+        artifact?.compositionRevisionHash
+        || binding.compositionRevisionHash
+        || artifact?.sourceRevisionHash
+        || binding.sourceRevisionHash
+        || artifact?.sourceFingerprint
+        || binding.fingerprint,
+        120
+      );
+      if (compositionRevision) return `collection:${compositionRevision}`;
+    }
+
+    const sourceFingerprint = cleanText(artifact?.sourceFingerprint || binding.fingerprint, 120);
+    const sourceUrl = canonicalUrl(artifact?.sourceUrl || binding.url, sourceType);
+    if (sourceFingerprint) return `${sourceType}:${sourceUrl}:${sourceFingerprint}`;
+
+    const sourceId = cleanText(artifact?.sourceId || binding.sourceId, 100);
+    if (sourceId) return `${sourceType}:source:${sourceId}`;
+    return `note:${artifactId}`;
+  }
+
+  function getChapterArtifactTimeline(chapter, artifacts, maxItems = MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER) {
+    const sessions = Array.isArray(chapter?.sessions)
+      ? chapter.sessions.filter((session) => session && typeof session === "object" && cleanText(session.id, 100))
+      : [];
+    const sessionIds = new Set(sessions.map((session) => cleanText(session.id, 100)));
+    const savedDetails = new Map();
+
+    (Array.isArray(artifacts) ? artifacts : []).forEach((artifact) => {
+      if (!artifactBelongsToCollectionChapter(artifact, chapter, sessionIds)) return;
+      const artifactId = cleanText(artifact?.id, 100);
+      const noteId = cleanText(artifact?.noteId, 100);
+      if (artifactId) savedDetails.set(artifactId, artifact);
+      if (noteId) savedDetails.set(noteId, artifact);
+    });
+
+    const requestedMaximum = Number(maxItems);
+    const maximum = Number.isFinite(requestedMaximum)
+      ? Math.max(1, Math.min(MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER, Math.floor(requestedMaximum)))
+      : MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER;
+    const seen = new Set();
+
+    return sessions
+      .map((session) => {
+        const details = savedDetails.get(cleanText(session.id, 100))
+          || savedDetails.get(cleanText(session.noteId, 100));
+        if (!details) return session;
+        return {
+          ...details,
+          ...session,
+          noteId: cleanText(details.noteId || session.noteId || session.id, 100),
+          sourceBinding: details.sourceBinding || session.sourceBinding,
+          visualLesson: details.visualLesson || session.visualLesson,
+          compositionRevisionHash: details.compositionRevisionHash || session.compositionRevisionHash
+        };
+      })
+      .sort((first, second) => sessionActivityTime(second) - sessionActivityTime(first)
+        || cleanText(first.id, 100).localeCompare(cleanText(second.id, 100)))
+      .filter((artifact) => {
+        const identity = artifactTimelineIdentity(artifact);
+        if (!identity || seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      })
+      .slice(0, maximum);
+  }
+
+  function chapterTimelineTime(chapter) {
+    const sessionTimes = (Array.isArray(chapter?.sessions) ? chapter.sessions : [])
+      .map((session) => sessionActivityTime(session));
+    const sourceTimes = (Array.isArray(chapter?.sources) ? chapter.sources : [])
+      .map((source) => dateTimestamp(source?.capturedAt || source?.updatedAt || source?.createdAt) ?? 0);
+    const learningActivityTimes = [...sessionTimes, ...sourceTimes].filter((time) => time > 0);
+    if (learningActivityTimes.length) return Math.max(...learningActivityTimes);
+    return Math.max(
+      dateTimestamp(chapter?.createdAt) ?? 0,
+      dateTimestamp(chapter?.updatedAt) ?? 0
+    );
+  }
+
+  function orderChaptersByTimeline(chapters) {
+    return (Array.isArray(chapters) ? chapters : [])
+      .map((chapter, index) => ({ chapter, index, activityTime: chapterTimelineTime(chapter) }))
+      .sort((first, second) => second.activityTime - first.activityTime || first.index - second.index)
+      .map(({ chapter }) => chapter);
   }
 
   function sourceSnapshotsFromVisualArtifact(artifact) {
@@ -2139,6 +2494,7 @@
     MAX_CHAPTERS,
     MAX_SOURCES_PER_CHAPTER,
     MAX_SESSIONS_PER_CHAPTER,
+    MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER,
     MAX_APPLIED_OPERATIONS,
     MAX_LEARNING_ATTEMPTS,
     createLearningMemory,
@@ -2156,8 +2512,13 @@
     addSource,
     normalizeChapterTitleProposal,
     planBulkFiling,
+    buildClassificationExcerpt,
+    clusterImportExcerpts,
+    buildChapterClassificationHints,
     classifySourcesLocally,
     removeSource,
+    removeSession,
+    renameSession,
     recordSession,
     recordQuestionAttempts,
     rankWeakConcepts,
@@ -2166,9 +2527,13 @@
     clearLearningMemory,
     getChapterStatus,
     getMetrics,
+    getHourglassSandState,
     buildHabitProfile,
     buildStudyPlan,
     getChapterVisualNoteArtifacts,
+    getChapterArtifactTimeline,
+    chapterTimelineTime,
+    orderChaptersByTimeline,
     buildChapterCollectionPayload,
     buildCollectionPayload,
     buildCollectionText,

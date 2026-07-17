@@ -609,6 +609,135 @@ test("preserves distinct webpage revisions while deduplicating exact recaptures"
   assert.equal(chapter.sessions.find((session) => session.id === "note-first").visualConceptCount, 3);
 });
 
+test("removes a session and prunes only that note's learning memory", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Session cleanup", "2026-07-11T00:00:00Z"),
+    chapters: [{
+      id: "chapter-sessions",
+      title: "Cell transport",
+      createdAt: "2026-07-11T00:00:00Z",
+      updatedAt: "2026-07-11T02:00:00Z",
+      sources: [],
+      sessions: [{
+        id: "note-remove",
+        itemKind: "note",
+        title: "Remove this note",
+        generatedAt: "2026-07-11T01:00:00Z"
+      }, {
+        id: "note-keep",
+        itemKind: "note",
+        title: "Keep this note",
+        generatedAt: "2026-07-11T02:00:00Z"
+      }]
+    }],
+    learningMemory: {
+      concepts: [{
+        noteId: "note-remove",
+        conceptId: "removed-concept",
+        conceptLabel: "Removed concept",
+        timesTested: 1,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-11T03:00:00Z"
+      }, {
+        noteId: "note-keep",
+        conceptId: "kept-concept",
+        conceptLabel: "Kept concept",
+        timesTested: 1,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-11T03:05:00Z"
+      }],
+      attempts: [
+        questionAttempt(1, {
+          attemptId: "attempt-remove",
+          noteId: "note-remove",
+          primaryConceptId: "removed-concept"
+        }),
+        questionAttempt(2, {
+          attemptId: "attempt-keep",
+          noteId: "note-keep",
+          primaryConceptId: "kept-concept"
+        })
+      ],
+      recordedAttemptIds: ["attempt-remove", "attempt-keep"]
+    }
+  });
+  const revisionBefore = journey.revision;
+  const outcome = Journey.removeSession(
+    journey,
+    "chapter-sessions",
+    "note-remove",
+    "2026-07-11T04:00:00Z"
+  );
+
+  assert.equal(outcome.removed, true);
+  assert.equal(outcome.removedConceptCount, 1);
+  assert.deepEqual(outcome.journey.chapters[0].sessions.map((session) => session.id), ["note-keep"]);
+  assert.deepEqual(outcome.journey.learningMemory.concepts.map((concept) => concept.noteId), ["note-keep"]);
+  assert.deepEqual(outcome.journey.learningMemory.attempts.map((attempt) => attempt.noteId), ["note-keep"]);
+  assert.equal(outcome.journey.revision, revisionBefore + 1);
+  assert.equal(outcome.journey.updatedAt, "2026-07-11T04:00:00.000Z");
+  assert.equal(journey.chapters[0].sessions.length, 2, "the pure adapter must not mutate its input Journey");
+
+  const unknown = Journey.removeSession(journey, "chapter-sessions", "note-unknown", "2026-07-11T05:00:00Z");
+  assert.equal(unknown.removed, false);
+  assert.equal(unknown.removedConceptCount, 0);
+  assert.equal(unknown.journey.revision, revisionBefore);
+});
+
+test("renames a session and ignores unchanged or empty titles", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Session rename", "2026-07-11T00:00:00Z"),
+    chapters: [{
+      id: "chapter-rename",
+      title: "Genetics",
+      createdAt: "2026-07-11T00:00:00Z",
+      updatedAt: "2026-07-11T01:00:00Z",
+      sources: [],
+      sessions: [{
+        id: "note-rename",
+        itemKind: "note",
+        title: "Original title",
+        generatedAt: "2026-07-11T01:00:00Z"
+      }]
+    }]
+  });
+  const revisionBefore = journey.revision;
+  const renamed = Journey.renameSession(
+    journey,
+    "chapter-rename",
+    "note-rename",
+    "  Updated   genetics note  ",
+    "2026-07-11T02:00:00Z"
+  );
+
+  assert.equal(renamed.renamed, true);
+  assert.equal(renamed.journey.chapters[0].sessions[0].title, "Updated genetics note");
+  assert.equal(renamed.journey.revision, revisionBefore + 1);
+  assert.equal(renamed.journey.updatedAt, "2026-07-11T02:00:00.000Z");
+  assert.equal(journey.chapters[0].sessions[0].title, "Original title");
+
+  const same = Journey.renameSession(
+    renamed.journey,
+    "chapter-rename",
+    "note-rename",
+    "Updated genetics note",
+    "2026-07-11T03:00:00Z"
+  );
+  const empty = Journey.renameSession(
+    journey,
+    "chapter-rename",
+    "note-rename",
+    "   ",
+    "2026-07-11T03:00:00Z"
+  );
+  assert.equal(same.renamed, false);
+  assert.equal(same.journey.revision, renamed.journey.revision);
+  assert.equal(empty.renamed, false);
+  assert.equal(empty.journey.revision, revisionBefore);
+});
+
 test("builds a chapter collection from every visual note source revision", () => {
   const chapter = {
     id: "chapter-revisions",
@@ -1052,6 +1181,7 @@ test("returns the single onboarding step when a study plan has no chapters", () 
   assert.deepEqual(plan.steps, [{
     id: "onboard-1",
     kind: "advance",
+    intent: "onboard",
     title: "Create your first visual note",
     reason: "Save a page, note, or video to plant your first tree.",
     noteId: "",
@@ -1092,9 +1222,16 @@ test("starts a study plan with an evidence-based weak-concept recovery", () => {
       }]
     }
   });
-  const plan = Journey.buildStudyPlan(journey, [], { now: "2026-07-16T10:00:00.000Z" });
+  const now = "2026-07-16T10:00:00.000Z";
+  const plan = Journey.buildStudyPlan(journey, [], { now });
+  const missingPlan = Journey.buildStudyPlan(journey, [], { now, savedNoteIds: [] });
+  const presentPlan = Journey.buildStudyPlan(journey, [], { now, savedNoteIds: ["note-recovery"] });
 
   assert.equal(plan.steps[0].kind, "recovery");
+  assert.equal(plan.steps[0].intent, "recovery");
+  assert.equal(plan.steps[0].noteMissing, false);
+  assert.equal(missingPlan.steps[0].noteMissing, true);
+  assert.equal(presentPlan.steps[0].noteMissing, false);
   assert.equal(plan.steps[0].reason, "You missed this 2 of 3 times.");
   assert.equal(plan.steps[0].chapterId, "chapter-recovery");
 });
@@ -1174,14 +1311,32 @@ test("uses chapter status to phrase review and first-quiz advance steps", () => 
     ...Journey.createJourney("First quiz wording", "2026-07-10T00:00:00.000Z"),
     chapters: [{ ...baseChapter, sessions: [] }]
   });
+  const continueJourney = Journey.normalizeJourney({
+    ...Journey.createJourney("Continue wording", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      ...baseChapter,
+      sessions: [{
+        id: "quiz-forces-passing",
+        itemKind: "quiz",
+        score: 72,
+        generatedAt: "2026-07-15T09:00:00.000Z",
+        submittedAt: "2026-07-15T09:30:00.000Z"
+      }]
+    }]
+  });
   const now = "2026-07-16T10:00:00.000Z";
   const reviewStep = Journey.buildStudyPlan(reviewJourney, [], { now }).steps[0];
   const firstQuizStep = Journey.buildStudyPlan(firstQuizJourney, [], { now }).steps[0];
+  const continueStep = Journey.buildStudyPlan(continueJourney, [], { now }).steps[0];
 
+  assert.equal(reviewStep.intent, "review-retake");
   assert.equal(reviewStep.title, "Review Forces and retake its quiz");
   assert.equal(reviewStep.reason, "Your last score there was below 65%.");
+  assert.equal(firstQuizStep.intent, "first-quiz");
   assert.equal(firstQuizStep.title, "Take your first quiz in Forces");
   assert.equal(firstQuizStep.reason, "Activity only becomes mastery evidence after a submitted quiz.");
+  assert.equal(continueStep.intent, "continue");
+  assert.equal(continueStep.title, "Continue Forces with a new source or note");
 });
 
 test("uses the clarified advance wording for an empty planned chapter", () => {
@@ -1201,9 +1356,36 @@ test("uses the clarified advance wording for an empty planned chapter", () => {
   }).steps[0];
 
   assert.equal(advance.kind, "advance");
+  assert.equal(advance.intent, "add-source");
   assert.equal(advance.title, "Add your first source to Organic chemistry");
   assert.equal(advance.reason, "This chapter is planned but has no saved material yet.");
   assert.equal(advance.chapterId, "chapter-planned");
+});
+
+test("uses the new-chapter intent when every existing chapter is completed", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Completed chapters", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-completed",
+      title: "Mechanics",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T09:30:00.000Z",
+      sources: [],
+      sessions: [{
+        id: "quiz-mechanics",
+        itemKind: "quiz",
+        score: 90,
+        generatedAt: "2026-07-15T09:00:00.000Z",
+        submittedAt: "2026-07-15T09:30:00.000Z"
+      }]
+    }]
+  });
+  const advance = Journey.buildStudyPlan(journey, [], {
+    now: "2026-07-16T10:00:00.000Z"
+  }).steps[0];
+
+  assert.equal(advance.id, "advance-new-chapter");
+  assert.equal(advance.intent, "new-chapter");
 });
 
 test("adds the weakest unused stable concept as a stretch step when there is room", () => {
@@ -1255,12 +1437,15 @@ test("adds the weakest unused stable concept as a stretch step when there is roo
     }
   });
   const plan = Journey.buildStudyPlan(journey, [{ elapsedMinutes: 30 }], {
-    now: "2026-07-16T10:00:00.000Z"
+    now: "2026-07-16T10:00:00.000Z",
+    savedNoteIds: []
   });
   const stretch = plan.steps.find((step) => step.kind === "stretch");
   const repairIds = new Set(plan.steps.filter((step) => step.kind === "recovery").map((step) => step.conceptId));
 
   assert.equal(stretch.conceptId, "stable-low");
+  assert.equal(stretch.intent, "stretch");
+  assert.equal(stretch.noteMissing, true);
   assert.equal(stretch.chapterId, "chapter-stretch");
   assert.equal(repairIds.has(stretch.conceptId), false);
 });
@@ -1689,17 +1874,237 @@ test("locally classifies shared Java terms into the first matching chapter", () 
   });
 });
 
-test("locally names a new chapter from the first three cleaned filename words", () => {
+test("locally names a new chapter from excerpt content instead of imported file labels", () => {
   const [assignment] = Journey.classifySourcesLocally([{
     fileId: "pasta-file",
-    title: "italian_pasta_recipes_2024.pdf",
-    excerpt: "Boil water and prepare a tomato sauce."
+    fileName: "astronomy-observations.pdf",
+    title: "Astronomy Notes.pdf",
+    excerpt: "Pasta pasta pasta tomato tomato sauce."
   }], Journey.createJourney("Recipes", "2026-07-16T00:00:00Z"));
 
-  assert.equal(assignment.chapterTitle, "Italian Pasta Recipes");
+  assert.equal(assignment.chapterTitle, "Pasta Tomato Sauce");
   assert.equal(assignment.isNewChapter, true);
   assert.equal(assignment.confidence, 0.3);
-  assert.equal(assignment.reason, "No close match — named from the file title");
+  assert.equal(assignment.reason, "No close match — named from the file's content");
+});
+
+function contentClusterFiles() {
+  return [{
+    fileId: "recursion-a",
+    fileName: "astronomy-observations.pdf",
+    title: "Ocean Poetry",
+    excerpt: "XYZ2094 course handbook assessment lecture recursion recursion recursion stack stack stack algorithms."
+  }, {
+    fileId: "recursion-b",
+    fileName: "recipe-notes.pdf",
+    title: "Kitchen Songs",
+    excerpt: "XYZ2094 course handbook assessment lecture recursion recursion recursion stack stack sorting sorting."
+  }, {
+    fileId: "database-a",
+    fileName: "galaxy-guide.pdf",
+    title: "Astronomy Archive",
+    excerpt: "XYZ2094 course handbook assessment lecture database database database query query query."
+  }, {
+    fileId: "database-b",
+    fileName: "ocean-essay.pdf",
+    title: "Poetry Collection",
+    excerpt: "XYZ2094 course handbook assessment lecture database database database query query analytics analytics."
+  }];
+}
+
+test("clusters import excerpts by content while ignoring boilerplate and file labels", () => {
+  const clusters = Journey.clusterImportExcerpts(contentClusterFiles());
+
+  assert.equal(clusters.length, 2);
+  const recursion = clusters.find((cluster) => cluster.fileIds.includes("recursion-a"));
+  const database = clusters.find((cluster) => cluster.fileIds.includes("database-a"));
+  assert.deepEqual(recursion.fileIds, ["recursion-a", "recursion-b"]);
+  assert.equal(recursion.title, "XYZ2094 Recursion Stack Sorting");
+  assert.deepEqual(recursion.keywords.slice(0, 3), ["recursion", "stack", "sorting"]);
+  assert.deepEqual(database.fileIds, ["database-a", "database-b"]);
+  assert.equal(database.title, "XYZ2094 Database Query Analytics");
+  assert.doesNotMatch(
+    clusters.map((cluster) => [cluster.title, ...cluster.keywords].join(" ")).join(" "),
+    /astronomy|ocean|poetry|kitchen|recipe|galaxy/i
+  );
+});
+
+test("locally keeps each content cluster together when the journey is empty", () => {
+  const assignments = Journey.classifySourcesLocally(
+    contentClusterFiles(),
+    Journey.createJourney("Empty import", "2026-07-17T00:00:00Z")
+  );
+  const byFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
+
+  assert.equal(byFileId.get("recursion-a").chapterTitle, "XYZ2094 Recursion Stack Sorting");
+  assert.equal(byFileId.get("recursion-a").chapterTitle, byFileId.get("recursion-b").chapterTitle);
+  assert.equal(byFileId.get("database-a").chapterTitle, "XYZ2094 Database Query Analytics");
+  assert.equal(byFileId.get("database-a").chapterTitle, byFileId.get("database-b").chapterTitle);
+  assignments.forEach((assignment) => {
+    assert.equal(assignment.isNewChapter, true);
+    assert.ok(Math.abs(assignment.confidence - 0.34) < 0.0001);
+    assert.equal(assignment.reason, "Grouped with 1 related file by shared content");
+  });
+});
+
+test("locally maps one content cluster to an existing chapter and names the other", () => {
+  const journey = Journey.createJourney("Cluster match", "2026-07-17T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-algorithms",
+    title: "Algorithm Practice",
+    createdAt: "2026-07-17T00:00:00Z",
+    updatedAt: "2026-07-17T00:00:00Z",
+    sources: [{
+      id: "source-algorithms",
+      title: "Recursion Stack Sorting",
+      text: "",
+      fingerprint: "algorithm-source"
+    }],
+    sessions: []
+  }];
+
+  const assignments = Journey.classifySourcesLocally(contentClusterFiles(), journey);
+  const byFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
+  ["recursion-a", "recursion-b"].forEach((fileId) => {
+    assert.deepEqual(byFileId.get(fileId), {
+      fileId,
+      chapterTitle: "Algorithm Practice",
+      isNewChapter: false,
+      confidence: 0.4,
+      reason: "Local match: shared terms with Algorithm Practice"
+    });
+  });
+  ["database-a", "database-b"].forEach((fileId) => {
+    const assignment = byFileId.get(fileId);
+    assert.equal(assignment.chapterTitle, "XYZ2094 Database Query Analytics");
+    assert.equal(assignment.isNewChapter, true);
+    assert.ok(Math.abs(assignment.confidence - 0.34) < 0.0001);
+    assert.equal(assignment.reason, "Grouped with 1 related file by shared content");
+  });
+});
+
+test("builds classification excerpts without boilerplate or repeated PDF headers", () => {
+  const excerpt = Journey.buildClassificationExcerpt([
+    "Skip to main content",
+    "Repeated PDF header",
+    "Repeated PDF header",
+    "Repeated PDF header",
+    "Repeated PDF header",
+    "Repeated PDF header",
+    "Mitochondria transfer energy through the electron transport chain."
+  ].join("\n"));
+
+  assert.doesNotMatch(excerpt, /skip to main content/i);
+  assert.equal((excerpt.match(/Repeated PDF header/g) || []).length, 1);
+  assert.match(excerpt, /Mitochondria transfer energy/i);
+});
+
+test("keeps short classification excerpts intact", () => {
+  assert.equal(
+    Journey.buildClassificationExcerpt("Short source text."),
+    "Short source text."
+  );
+});
+
+test("samples the head, middle, and late regions of long classification excerpts", () => {
+  const longText = [
+    "HEAD_MARKER " + "a".repeat(5300),
+    "b".repeat(100) + " MIDDLE_MARKER " + "b".repeat(3400),
+    "c".repeat(200) + " LATE_MARKER " + "c".repeat(2800)
+  ].join("\n");
+  const excerpt = Journey.buildClassificationExcerpt(longText);
+
+  assert.ok(excerpt.length <= 3010);
+  assert.match(excerpt, /HEAD_MARKER/);
+  assert.match(excerpt, /MIDDLE_MARKER/);
+  assert.match(excerpt, /LATE_MARKER/);
+});
+
+test("builds bounded topical chapter hints from saved source content", () => {
+  const journey = Journey.createJourney("Hints", "2026-07-17T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-neuroscience",
+    title: "Neuroscience",
+    createdAt: "2026-07-17T00:00:00Z",
+    updatedAt: "2026-07-17T00:00:00Z",
+    sources: [{
+      id: "source-neuroscience",
+      title: "Astrocyte Neurotransmitter Signaling",
+      text: "Astrocyte neurotransmitter signaling supports synaptic plasticity.",
+      fingerprint: "neuroscience-source"
+    }],
+    sessions: [{
+      id: "session-neuroscience",
+      title: "Synaptic Plasticity Review"
+    }]
+  }];
+
+  const [hint] = Journey.buildChapterClassificationHints(journey, { maxKeywords: 3 });
+  assert.equal(hint.title, "Neuroscience");
+  assert.equal(hint.keywords.length, 3);
+  assert.ok(hint.keywords.includes("astrocyte"));
+  assert.equal(hint.keywords.includes("neuroscience"), false);
+});
+
+test("locally matches terms found only in a chapter source's text", () => {
+  const journey = Journey.createJourney("Source text matching", "2026-07-17T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-cell",
+    title: "Cell Biology",
+    createdAt: "2026-07-17T00:00:00Z",
+    updatedAt: "2026-07-17T00:00:00Z",
+    sources: [{
+      id: "source-cell",
+      title: "Initial Reference",
+      text: "Mitochondrial electron transport drives oxidative phosphorylation.",
+      fingerprint: "cell-source"
+    }],
+    sessions: []
+  }];
+
+  const [assignment] = Journey.classifySourcesLocally([{
+    fileId: "cell-file",
+    fileName: "A4-1.pdf",
+    title: "Unrelated handout",
+    excerpt: "Mitochondrial electron transport and oxidative phosphorylation are tightly connected."
+  }], journey);
+
+  assert.deepEqual(assignment, {
+    fileId: "cell-file",
+    chapterTitle: "Cell Biology",
+    isNewChapter: false,
+    confidence: 0.4,
+    reason: "Local match: shared terms with Cell Biology"
+  });
+});
+
+test("does not match a chapter from only one excerpt word that matches its title", () => {
+  const journey = Journey.createJourney("Tiered matching", "2026-07-17T00:00:00Z");
+  journey.chapters = [{
+    id: "chapter-astronomy",
+    title: "Astronomy",
+    createdAt: "2026-07-17T00:00:00Z",
+    updatedAt: "2026-07-17T00:00:00Z",
+    sources: [{
+      id: "source-astronomy",
+      title: "Reference Handout",
+      text: "Galaxies orbit through distant space.",
+      fingerprint: "astronomy-source"
+    }],
+    sessions: []
+  }];
+
+  const [assignment] = Journey.classifySourcesLocally([{
+    fileId: "astronomy-file",
+    fileName: "cell-biology.pdf",
+    title: "Cell Biology notes.pdf",
+    excerpt: "Astronomy pasta pasta pasta tomato tomato sauce."
+  }], journey);
+
+  assert.equal(assignment.isNewChapter, true);
+  assert.equal(assignment.chapterTitle, "Pasta Tomato Astronomy");
+  assert.equal(assignment.confidence, 0.3);
+  assert.equal(assignment.reason, "No close match — named from the file's content");
 });
 
 test("smart import pure helpers tolerate garbage inputs", () => {
@@ -1718,4 +2123,100 @@ test("smart import pure helpers tolerate garbage inputs", () => {
   assert.deepEqual(Journey.classifySourcesLocally(null, null), []);
   assert.equal(Journey.normalizeChapterTitleProposal(null, null), "New Chapter");
   assert.doesNotThrow(() => Journey.classifySourcesLocally([null], null));
+});
+
+test("orders learning history by latest activity and shows only eight unique artifacts", () => {
+  const uniqueSessions = Array.from({ length: 9 }, (_, index) => ({
+    id: `note-${index + 1}`,
+    title: `Visual note ${index + 1}`,
+    itemKind: "note",
+    hasVisualNote: true,
+    sourceType: "webpage",
+    sourceFingerprint: `fingerprint-${index + 1}`,
+    sourceUrl: `https://study.example/lesson-${index + 1}`,
+    generatedAt: `2026-07-${String(index + 1).padStart(2, "0")}T09:00:00.000Z`
+  }));
+  const chapter = {
+    id: "timeline-chapter",
+    title: "Timeline chapter",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    updatedAt: "2026-07-01T00:00:00.000Z",
+    sources: [],
+    sessions: [
+      ...uniqueSessions,
+      {
+        id: "duplicate-older",
+        title: "Older duplicate",
+        itemKind: "note",
+        hasVisualNote: true,
+        sourceType: "webpage",
+        sourceFingerprint: "same-source",
+        sourceUrl: "https://study.example/duplicate",
+        generatedAt: "2026-07-08T08:00:00.000Z"
+      },
+      {
+        id: "duplicate-newer",
+        title: "Newest duplicate",
+        itemKind: "note",
+        hasVisualNote: true,
+        sourceType: "webpage",
+        sourceFingerprint: "same-source",
+        sourceUrl: "https://study.example/duplicate",
+        generatedAt: "2026-07-12T08:00:00.000Z"
+      }
+    ]
+  };
+
+  const artifacts = Journey.getChapterArtifactTimeline(chapter, []);
+
+  assert.equal(Journey.MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER, 8);
+  assert.deepEqual(artifacts.map((artifact) => artifact.id), [
+    "duplicate-newer",
+    "note-9",
+    "note-8",
+    "note-7",
+    "note-6",
+    "note-5",
+    "note-4",
+    "note-3"
+  ]);
+  assert.deepEqual(
+    Journey.orderChaptersByTimeline([
+      { id: "older", createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-01T00:00:00.000Z", sources: [], sessions: [] },
+      { id: "middle", createdAt: "2026-07-01T00:00:00.000Z", updatedAt: "2026-07-10T00:00:00.000Z", sources: [], sessions: [] },
+      chapter
+    ]).map((item) => item.id),
+    ["timeline-chapter", "middle", "older"]
+  );
+});
+
+test("maps metric values into a physical animated hourglass transfer", () => {
+  assert.deepEqual(Journey.getHourglassSandState(10, "progress"), {
+    hasValue: true,
+    percent: 10,
+    sourceFill: 76,
+    destinationFill: 10,
+    isFlowing: true
+  });
+  assert.deepEqual(Journey.getHourglassSandState(100, "progress"), {
+    hasValue: true,
+    percent: 100,
+    sourceFill: 0,
+    destinationFill: 96,
+    isFlowing: false
+  });
+  assert.deepEqual(Journey.getHourglassSandState(100, "average"), {
+    hasValue: true,
+    percent: 100,
+    sourceFill: 0,
+    destinationFill: 92,
+    isFlowing: false
+  });
+  assert.deepEqual(Journey.getHourglassSandState(null, "average"), {
+    hasValue: false,
+    percent: 0,
+    sourceFill: 0,
+    destinationFill: 0,
+    isFlowing: false
+  });
 });

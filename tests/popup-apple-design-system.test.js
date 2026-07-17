@@ -70,13 +70,12 @@ test("rendered semantic colors meet normal-text contrast targets", () => {
   assert.doesNotMatch(script, /#ffb4ad/);
 });
 
-test("five compact study destinations use symbols and complete tab semantics", () => {
-  assert.equal((html.match(/role="tab"/g) || []).length, 5);
-  assert.equal((html.match(/role="tabpanel"/g) || []).length, 5);
+test("four compact study destinations use symbols and complete tab semantics", () => {
+  assert.equal((html.match(/role="tab"/g) || []).length, 4);
+  assert.equal((html.match(/role="tabpanel"/g) || []).length, 4);
   assert.match(html, /<nav class="tabs"[^>]*role="tablist"/);
   const tabNames = {
-    pageTab: "Page",
-    notesTab: "Notes",
+    pageTab: "Create",
     journeyTab: "Journey",
     focusTab: "Focus",
     libraryTab: "Library"
@@ -85,7 +84,7 @@ test("five compact study destinations use symbols and complete tab semantics", (
     assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="${name}"`));
     assert.match(html, new RegExp(`id="${id}"[\\s\\S]{0,180}class="tab-icon"`));
   }
-  assert.match(styles, /\.tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
   assert.match(styles, /\.tab\s*\{[\s\S]*min-height:\s*52px/);
 });
 
@@ -139,13 +138,14 @@ test("Page actions use one grouped-card hierarchy and both creation panels keep 
   assert.match(baseStyles, /\.action-group \.action-group__tertiary\s*\{[\s\S]*?color:\s*var\(--ui-label-secondary\);/);
 });
 
-test("Page source composer matches the selected visual reference with four responsive illustrated actions", () => {
+test("Page source composer matches the selected visual reference with five responsive illustrated actions", () => {
   const pageView = viewSource("pageView", "notesView");
   assert.match(pageView, /class="panel page-composer"/);
   assert.match(pageView, /class="action-group page-action-grid"/);
-  assert.equal((pageView.match(/<button\b[^>]*class="[^"]*\bpage-action-card\b[^"]*"/g) || []).length, 4);
+  assert.equal((pageView.match(/<button\b[^>]*class="[^"]*\bpage-action-card\b[^"]*"/g) || []).length, 5);
   assert.match(pageView, /id="studyPageButtonTitle"[^>]*>From Current Page</);
   assert.match(pageView, />From Video</);
+  assert.match(pageView, />Paste Notes</);
   assert.match(pageView, />Import Files</);
   assert.match(pageView, />Save Source Only</);
   assert.match(pageView, /<summary>Timestamped transcript<\/summary>/);
@@ -189,7 +189,7 @@ test("narrow panels cannot create a second tab row or an overlaying action dock"
   assert.match(narrowStyles, /\.artifact-action-bar\s*\{[\s\S]*position:\s*static/);
   const mediumStart = styles.indexOf("@media (max-width: 640px)");
   const mediumStyles = styles.slice(mediumStart, narrowStart);
-  assert.match(mediumStyles, /\.tabs\s*\{[\s\S]*repeat\(5, minmax\(0, 1fr\)\)/);
+  assert.match(mediumStyles, /\.tabs\s*\{[\s\S]*repeat\(4, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(mediumStyles, /repeat\(3/);
   assert.match(styles, /\.topbar\s*\{[\s\S]*position:\s*relative/);
   assert.match(styles, /\.tabs\s*\{[\s\S]*position:\s*sticky;[\s\S]*top:\s*0/);

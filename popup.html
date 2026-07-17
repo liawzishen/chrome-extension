@@ -57,13 +57,9 @@
       </section>
 
       <nav class="tabs" aria-label="Study modes" role="tablist">
-        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-label="Page" aria-selected="true" tabindex="0" type="button">
+        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-label="Create" aria-selected="true" tabindex="0" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4V20.5H6z"></path><path d="M14 3.5v4h4M9 12h6M9 16h6"></path></svg>
-          <span>Page</span>
-        </button>
-        <button id="notesTab" class="tab" data-view="notesView" role="tab" aria-label="Notes" aria-selected="false" tabindex="-1" type="button">
-          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5h10a2 2 0 0 1 2 2v13H7a2 2 0 0 1-2-2z"></path><path d="M8.5 9h5M8.5 13h5M17 7.5l2-2 1.5 1.5-3.5 3.5"></path></svg>
-          <span>Notes</span>
+          <span>Create</span>
         </button>
         <button id="journeyTab" class="tab" data-view="journeyView" role="tab" aria-label="Journey" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2z"></path><path d="M9 4v14M15 6v14"></path></svg>
@@ -120,6 +116,15 @@
                 </span>
               </button>
             </div>
+            <div class="action-group__item">
+              <button id="pasteNotesButton" class="secondary action-group__row page-action-card" type="button">
+                <img class="page-action-card__image" src="assets/page-actions/save-source.png" alt="" aria-hidden="true">
+                <span class="page-action-card__copy">
+                  <strong class="page-action-card__title">Paste Notes</strong>
+                  <span class="page-action-card__description">Paste lecture notes or a textbook section to build an interactive note.</span>
+                </span>
+              </button>
+            </div>
             <div id="documentImportControls" class="smart-import-launch action-group__item">
               <button id="bulkImportButton" class="secondary document-open-button action-group__row page-action-card" type="button">
                 <img class="page-action-card__image" src="assets/page-actions/import-files.png" alt="" aria-hidden="true">
@@ -162,8 +167,9 @@
         </div>
       </section>
 
-      <section id="notesView" class="view" role="tabpanel" aria-labelledby="notesTab">
+      <section id="notesView" class="view" role="region" aria-label="Paste study material">
         <div class="panel">
+          <button id="backToCreateButton" class="text-button" type="button">← Back to Create</button>
           <div class="input-heading">
             <div>
               <span class="eyebrow">Turn reading into an experience</span>
@@ -197,7 +203,7 @@
         <div class="panel journey-panel">
           <div class="journey-heading">
             <div>
-              <span class="eyebrow">Learning forest</span>
+              <span class="eyebrow">Learning timeline</span>
               <h2 id="journeyTitle">My Learning Journey</h2>
             </div>
             <div class="journey-heading__actions">
@@ -206,7 +212,7 @@
             </div>
           </div>
           <div id="journeyMetrics" class="journey-metrics"></div>
-          <div id="journeyRoute" class="journey-route" aria-label="Chapter learning trail"></div>
+          <div id="journeyRoute" class="journey-route" aria-label="Chapter timeline, newest activity first"></div>
           <div id="journeyChapterDetail" class="journey-chapter-detail"></div>
           <div class="journey-summary-controls">
             <label for="journeyRange">Summarize</label>

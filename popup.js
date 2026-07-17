@@ -99,6 +99,8 @@ const elements = {
   cancelVideoCaptureButton: document.getElementById("cancelVideoCaptureButton"),
   confirmVideoCaptureButton: document.getElementById("confirmVideoCaptureButton"),
   studyNotesButton: document.getElementById("studyNotesButton"),
+  pasteNotesButton: document.getElementById("pasteNotesButton"),
+  backToCreateButton: document.getElementById("backToCreateButton"),
   demoNoteButton: document.getElementById("demoNoteButton"),
   pageQuestionCount: document.getElementById("pageQuestionCount"),
   pageDifficulty: document.getElementById("pageDifficulty"),
@@ -216,6 +218,8 @@ function init() {
   elements.stopVideoCaptureButton?.addEventListener("click", handleStopVideoCapture);
   elements.buildCapturedVideoButton?.addEventListener("click", handleBuildCapturedVideoLesson);
   elements.studyNotesButton.addEventListener("click", handleStudyNotes);
+  elements.pasteNotesButton?.addEventListener("click", () => switchView("notesView"));
+  elements.backToCreateButton?.addEventListener("click", () => switchView("pageView"));
   elements.demoNoteButton?.addEventListener("click", handleDemoNote);
   elements.submitQuizButton.addEventListener("click", handleSubmitQuiz);
   elements.startRecoveryQuizButton?.addEventListener("click", handleGenerateRecoveryQuiz);
@@ -430,8 +434,9 @@ async function loadPanelState() {
   setQuizDifficulty(saved.difficulty || "normal", { save: false });
   if (elements.pageQuestionCount?.querySelector(`option[value="${cssEscape(saved.questionCount || "")}"]`)) elements.pageQuestionCount.value = saved.questionCount;
   if (elements.pageQuizStyle?.querySelector(`option[value="${cssEscape(saved.quizStyle || "")}"]`)) elements.pageQuizStyle.value = saved.quizStyle;
-  const initialView = saved.activeView && document.getElementById(saved.activeView)
-    ? saved.activeView
+  const restoredView = saved.activeView === "notesView" ? "pageView" : saved.activeView;
+  const initialView = restoredView && document.getElementById(restoredView)
+    ? restoredView
     : "pageView";
   if (initialView) {
     switchView(initialView, { skipViewLoad: true, skipSave: true });
@@ -490,6 +495,7 @@ function handleQuizDifficultyKeydown(event) {
 }
 
 function updateStudyModeSelection(viewId = "") {
+  if (viewId === "notesView") viewId = "pageView";
   elements.tabs.forEach((tab, index) => {
     const selected = tab.dataset.view === viewId;
     tab.classList.toggle("active", selected);
@@ -536,7 +542,8 @@ function switchView(viewId, options = {}) {
   } else if (!options.skipViewLoad && viewId === "pageView") {
     void detectActiveSource();
   }
-  if (!options.skipSave) void savePanelState({ activeView: viewId });
+  const persistedView = viewId === "notesView" ? "pageView" : viewId;
+  if (!options.skipSave) void savePanelState({ activeView: persistedView });
 }
 
 async function handleStudyPage() {
@@ -716,33 +723,6 @@ async function readImportedDocument(file) {
   return extractDocumentSource(file);
 }
 
-async function activateSingleFileImport(file) {
-  showStatus(`Reading ${file.name} locally...`);
-  try {
-    const documentSource = await readImportedDocument(file);
-    state.importedDocument = documentSource;
-    state.detectedSource = {
-      type: documentSource.documentType,
-      hasVideo: false,
-      title: documentSource.title,
-      url: "",
-      imported: true,
-      pageCount: documentSource.pageCount || 0
-    };
-    elements.activeSourceIcon.textContent = documentSource.documentType === "pdf" ? "PDF" : "H";
-    if (elements.activeSourceLabel) elements.activeSourceLabel.textContent = "Selected local file";
-    elements.activeSourceTitle.textContent = documentSource.title;
-    elements.activeSourceMeta.textContent = documentSource.documentType === "pdf"
-      ? `${documentSource.pageCount} ${documentSource.pageCount === 1 ? "page" : "pages"} · ready to create a visual note`
-      : "HTML document · ready to create a visual note";
-    setStudyPageActionCopy("From Imported File", `${file.name} is ready to turn into a visual note.`);
-    showStatus(`${file.name} is ready. Only its bounded extracted text will be used when you create the note.`);
-  } catch (error) {
-    state.importedDocument = null;
-    showStatus(error?.message || "This document could not be opened safely.", true);
-  }
-}
-
 async function extractDocumentSource(file) {
   const Reader = globalThis.ExamCramDocumentReader;
   if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
@@ -806,16 +786,6 @@ async function handleBulkImportSelected(event) {
     return;
   }
 
-  if (selectedFiles.length === 1) {
-    if (elements.bulkImportButton) elements.bulkImportButton.disabled = true;
-    try {
-      await activateSingleFileImport(selectedFiles[0]);
-    } finally {
-      if (elements.bulkImportButton) elements.bulkImportButton.disabled = false;
-    }
-    return;
-  }
-
   state.pendingImport = null;
   if (elements.bulkImportButton) elements.bulkImportButton.disabled = true;
   try {
@@ -830,7 +800,7 @@ async function handleBulkImportSelected(event) {
           fileId,
           fileName: String(file.name || source.title || "Local document").slice(0, 180),
           title: source.title || file.name,
-          excerpt: String(source.text || "").slice(0, 2000),
+          excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
           source,
           skipped: false
         });
@@ -905,8 +875,9 @@ async function classifyImportSourcesWithBackend(files, journey) {
     method: "POST",
     headers: getBackendHeaders(settings, endpoint),
     body: JSON.stringify({
-      files: files.map(({ fileId, title, excerpt }) => ({ fileId, title, excerpt })),
-      existingChapters: journey.chapters.map((chapter) => chapter.title)
+      files: files.map(({ fileId, excerpt }) => ({ fileId, excerpt })),
+      existingChapters: journey.chapters.map((chapter) => chapter.title),
+      chapterHints: globalThis.ExamCramJourney.buildChapterClassificationHints(journey)
     })
   });
   const payload = await response.json().catch(() => ({}));
@@ -974,8 +945,10 @@ function refreshImportDuplicateAssignments(pending, journey) {
 function renderImportReview() {
   const pending = state.pendingImport;
   const existing = document.querySelector(".smart-import");
+  const composer = elements.documentImportControls?.closest(".page-composer");
   if (!pending) {
     existing?.remove();
+    composer?.classList.remove("page-composer--reviewing");
     elements.documentImportControls?.classList.remove("hidden");
     return;
   }
@@ -990,49 +963,77 @@ function renderImportReview() {
     file: fileByFileId.get(row.fileId),
     assignment: assignmentByFileId.get(row.fileId)
   }));
-  const checkRows = reviewRows.filter(({ row }) => row.confidence < 0.5 || row.blocked || row.skipped);
-  const readyRows = reviewRows.filter(({ row }) => row.confidence >= 0.5 && !row.blocked && !row.skipped);
+  const stats = getImportReviewStats(pending.plan);
 
   const section = document.createElement("section");
   section.className = "smart-import";
   section.setAttribute("aria-label", "Review imported files");
   const header = document.createElement("header");
   header.className = "smart-import__header";
-  header.append(
-    createElement("span", "REVIEW IMPORT", "smart-import__eyebrow"),
-    createElement("p", buildImportPlanSummary(pending.plan, pending.files.length), "smart-import__summary")
+  const title = document.createElement("h2");
+  title.className = "smart-import__title";
+  title.append(
+    document.createTextNode("Review & Confirm Import "),
+    createElement(
+      "span",
+      `(${pending.files.length} ${pending.files.length === 1 ? "file" : "files"})`,
+      "smart-import__title-count"
+    )
   );
+  header.append(title);
   if (pending.usedLocalClassification) {
-    header.append(createElement(
+    const notice = createElement(
       "p",
       "Local topic matching was used because the AI sorter was unavailable.",
       "smart-import__notice"
-    ));
+    );
+    notice.setAttribute("role", "status");
+    header.append(notice);
   }
-  section.append(header);
-  if (checkRows.length) section.append(renderImportReviewGroup("Check these", checkRows, pending, true));
-  if (readyRows.length) section.append(renderImportReviewGroup("Ready", readyRows, pending, false));
+  const columnHeadings = document.createElement("div");
+  columnHeadings.className = "smart-import__column-headings";
+  columnHeadings.setAttribute("aria-hidden", "true");
+  columnHeadings.append(
+    createElement("span", "Folder"),
+    createElement("span", "Status")
+  );
+  const groups = document.createElement("div");
+  groups.className = "smart-import__groups";
+  groupImportReviewEntries(reviewRows).forEach((cluster) => {
+    groups.append(renderImportReviewFolderGroup(cluster, pending));
+  });
+  section.append(header, columnHeadings, groups);
 
   const footer = document.createElement("footer");
   footer.className = "smart-import__footer";
+  const footerSummary = createElement(
+    "p",
+    buildImportReviewFooterCopy(stats),
+    "smart-import__footer-summary"
+  );
+  footerSummary.setAttribute("role", "status");
+  const footerActions = document.createElement("div");
+  footerActions.className = "smart-import__footer-actions";
   const cancel = document.createElement("button");
   cancel.type = "button";
-  cancel.className = "text-button";
+  cancel.className = "secondary compact-button";
   cancel.textContent = "Cancel";
   cancel.addEventListener("click", cancelImportReview);
   const confirm = document.createElement("button");
   confirm.type = "button";
   confirm.className = "primary smart-import__confirm";
-  confirm.textContent = "Confirm import";
+  confirm.textContent = "Confirm Import";
   confirm.disabled = pending.plan.blockedCount > 0;
   confirm.addEventListener("click", handleConfirmImport);
-  footer.append(cancel, confirm);
+  footerActions.append(confirm, cancel);
+  footer.append(footerSummary, footerActions);
   section.append(footer);
 
   elements.documentImportControls?.classList.add("hidden");
+  composer?.classList.add("page-composer--reviewing");
   if (existing) existing.replaceWith(section);
-  else if (elements.documentImportControls?.closest(".action-group")) {
-    elements.documentImportControls.closest(".action-group").after(section);
+  else if (composer?.querySelector(".input-heading")) {
+    composer.querySelector(".input-heading").after(section);
   } else {
     elements.documentImportControls?.before(section);
   }
@@ -1044,36 +1045,99 @@ function buildImportPlanSummary(plan, fileCount) {
     if (row.skipped || row.blocked || !row.finalChapterTitle) return;
     counts.set(row.finalChapterTitle, (counts.get(row.finalChapterTitle) || 0) + 1);
   });
-  const targets = [...counts.entries()].map(([title, count]) => `${title} (${count})`).join(", ")
-    || "reassignment needed";
+  const destinationCount = counts.size;
   const chapterCount = plan.newChapterTitles.length;
-  return `${fileCount} ${fileCount === 1 ? "file" : "files"} -> ${targets}. ${chapterCount} new ${chapterCount === 1 ? "chapter" : "chapters"}.`;
+  const destinationCopy = destinationCount
+    ? `grouped into ${destinationCount} ${destinationCount === 1 ? "chapter destination" : "chapter destinations"}`
+    : "waiting for a valid chapter destination";
+  const chapterCopy = chapterCount
+    ? ` ${chapterCount} new ${chapterCount === 1 ? "chapter" : "chapters"} will be created when you confirm.`
+    : "";
+  return `${fileCount} ${fileCount === 1 ? "file is" : "files are"} ${destinationCopy}. Nothing is saved until you confirm.${chapterCopy}`;
 }
 
-function renderImportReviewGroup(title, entries, pending, needsCheck) {
-  const group = document.createElement("div");
-  group.className = `smart-import__group${needsCheck ? " smart-import__group--check" : ""}`;
-  group.append(createElement("h3", title, "smart-import__group-title"));
-  entries.forEach((entry) => group.append(renderImportReviewRow(entry, pending)));
+function getImportReviewStats(plan) {
+  const rows = Array.isArray(plan?.rows) ? plan.rows : [];
+  return rows.reduce((stats, row) => {
+    if (row?.skipped) stats.skipped += 1;
+    else if (row?.blocked || Number(row?.confidence) < 0.5) stats.review += 1;
+    else stats.ready += 1;
+    return stats;
+  }, { ready: 0, review: 0, skipped: 0 });
+}
+
+function buildImportReviewFooterCopy(stats) {
+  if (stats.review) {
+    return `${stats.review} ${stats.review === 1 ? "file needs" : "files need"} review before import.`;
+  }
+  if (stats.ready) {
+    return `${stats.ready} ${stats.ready === 1 ? "file is" : "files are"} ready to import.`;
+  }
+  return "No files are ready to import.";
+}
+
+function groupImportReviewEntries(entries) {
+  const groups = new Map();
+  entries.forEach((entry) => {
+    const skipped = Boolean(entry.row?.skipped);
+    const chapterTitle = skipped
+      ? "Skipped files"
+      : String(entry.row?.finalChapterTitle || entry.assignment?.chapterTitle || "").trim()
+        || "Choose a chapter";
+    const key = skipped
+      ? "skipped"
+      : `${entry.row?.blocked ? "blocked:" : ""}${chapterTitle.toLowerCase()}`;
+    const group = groups.get(key) || {
+      chapterTitle,
+      entries: [],
+      createsChapter: false,
+      blocked: false,
+      skipped
+    };
+    group.entries.push(entry);
+    group.createsChapter ||= Boolean(entry.row?.willCreateChapter);
+    group.blocked ||= Boolean(entry.row?.blocked);
+    groups.set(key, group);
+  });
+  return [...groups.values()];
+}
+
+function renderImportReviewFolderGroup(cluster, pending) {
+  const group = document.createElement("section");
+  group.className = `smart-import__cluster${cluster.blocked ? " smart-import__cluster--blocked" : ""}${cluster.skipped ? " smart-import__cluster--skipped" : ""}`;
+  const heading = document.createElement("header");
+  heading.className = "smart-import__cluster-header";
+  heading.append(createElement(
+    "strong",
+    `${cluster.chapterTitle} (${cluster.entries.length} ${cluster.entries.length === 1 ? "file" : "files"})`,
+    "smart-import__cluster-title"
+  ));
+  group.append(heading);
+  cluster.entries.forEach((entry) => group.append(renderImportReviewRow(entry, pending)));
   return group;
 }
 
 function renderImportReviewRow(entry, pending) {
   const { row, file, assignment, index } = entry;
   const article = document.createElement("article");
-  article.className = `smart-import__row${row.skipped ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}`;
+  const needsReview = !row.skipped && (row.confidence < 0.5 || row.blocked);
+  article.className = `smart-import__row${row.skipped ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}${needsReview ? " smart-import__row--review" : ""}`;
+  if (assignment?.reason) article.title = assignment.reason;
   const heading = document.createElement("div");
   heading.className = "smart-import__row-heading";
-  heading.append(createElement("strong", file?.fileName || file?.title || row.fileId, "smart-import__file-title"));
+  heading.append(
+    createElement("span", getImportFileTypeLabel(file), "smart-import__file-type"),
+    createElement("strong", file?.fileName || file?.title || row.fileId, "smart-import__file-title")
+  );
   const badges = document.createElement("div");
   badges.className = "smart-import__badges";
-  if (row.willCreateChapter) badges.append(createElement("span", "NEW", "smart-import__new-badge"));
-  if (!row.skipped) {
-    const confidenceLabel = row.confidence >= 0.75 ? "High" : row.confidence >= 0.5 ? "Medium" : "Low";
+  if (needsReview) {
+    const confidenceLabel = row.blocked ? "Needs reassignment" : "Low match";
+    const confidenceTone = row.blocked ? "blocked" : "low";
     const confidence = createElement(
       "span",
       confidenceLabel,
-      `smart-import__confidence smart-import__confidence--${confidenceLabel.toLowerCase()}`
+      `smart-import__confidence smart-import__confidence--${confidenceTone}`
     );
     confidence.setAttribute("aria-label", `${confidenceLabel} classification confidence`);
     badges.append(confidence);
@@ -1090,6 +1154,8 @@ function renderImportReviewRow(entry, pending) {
     return article;
   }
   if (assignment?.reason) article.append(createElement("p", assignment.reason, "smart-import__reason"));
+  const previewText = String(file?.excerpt || "").slice(0, 140);
+  if (previewText) article.append(createElement("p", `${previewText}…`, "smart-import__preview"));
   if (row.blocked) {
     article.append(createElement(
       "p",
@@ -1102,7 +1168,7 @@ function renderImportReviewRow(entry, pending) {
   const label = document.createElement("label");
   label.className = "smart-import__select-label";
   label.htmlFor = selectId;
-  label.textContent = "Chapter";
+  label.textContent = "Move to chapter";
   const select = document.createElement("select");
   select.id = selectId;
   select.className = "smart-import__select";
@@ -1149,14 +1215,30 @@ function renderImportReviewRow(entry, pending) {
     pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
     renderImportReview();
   });
-  article.append(label, select);
+  const move = document.createElement("button");
+  move.type = "button";
+  move.className = "secondary compact-button smart-import__move";
+  move.textContent = "Move";
+  move.setAttribute("aria-label", `Move ${file?.fileName || file?.title || row.fileId}`);
+  move.addEventListener("click", () => select.focus());
+  const actions = document.createElement("div");
+  actions.className = "smart-import__row-actions";
+  actions.append(label, move, select);
+  article.append(actions);
   return article;
+}
+
+function getImportFileTypeLabel(file) {
+  const filename = String(file?.fileName || file?.title || "");
+  const extension = filename.split(".").pop()?.replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return extension || "FILE";
 }
 
 function cancelImportReview() {
   state.pendingImport = null;
   state.pendingImportChapterFileId = "";
   document.querySelector(".smart-import")?.remove();
+  elements.documentImportControls?.closest(".page-composer")?.classList.remove("page-composer--reviewing");
   elements.documentImportControls?.classList.remove("hidden");
   if (elements.newChapterDialog?.open) elements.newChapterDialog.close("cancel");
   showStatus("Import cancelled. Nothing was saved.");
@@ -1229,6 +1311,7 @@ async function handleConfirmImport() {
 
     state.pendingImport = null;
     document.querySelector(".smart-import")?.remove();
+    elements.documentImportControls?.closest(".page-composer")?.classList.remove("page-composer--reviewing");
     elements.documentImportControls?.classList.remove("hidden");
     await renderJourney().catch(() => {});
     showStatus(statusParts.join(" "));
@@ -1289,7 +1372,7 @@ async function startImportNoteQueue(chapterIds) {
     if (!getConfiguredApiEndpoint(settings)) {
       rows.forEach((row) => {
         row.status = "later";
-        row.message = "Generate later with Build lesson";
+        row.message = "Source saved. Generate the note later with Build chapter visual note";
       });
       queue.running = false;
       renderImportNoteQueue(queue);
@@ -1304,6 +1387,7 @@ async function startImportNoteQueue(chapterIds) {
           item.status = "later";
           item.message = "Generate later with Build lesson";
         });
+        showStatus("All imported sources are saved in their chapters. Generate each chapter's visual note later with Build chapter visual note.");
         break;
       }
     }
@@ -1327,7 +1411,8 @@ async function runImportNoteQueueRow(queue, row) {
   try {
     const artifact = await handleBuildChapterLesson(row.chapterId, {
       rethrow: true,
-      requireAiBackend: true
+      requireAiBackend: true,
+      quietStatus: true
     });
     if (!artifact) throw new Error("Visual note generation was interrupted.");
     row.status = "done";
@@ -8218,9 +8303,10 @@ async function recordLearningItem(item, chapterIdOrTitle, source = null, questio
 
 async function renderJourney() {
   if (!elements.journeyRoute || !globalThis.ExamCramJourney) return;
-  const [journey, storedFocus] = await Promise.all([
+  const [journey, storedFocus, savedItems] = await Promise.all([
     getJourney(),
-    getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({}))
+    getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
+    getStorage(STORAGE_KEYS.sessions, []).catch(() => [])
   ]);
   const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
   elements.journeyTitle.textContent = journey.title;
@@ -8228,12 +8314,48 @@ async function renderJourney() {
     elements.journeyRange.value = journey.summary.range;
   }
   const metrics = globalThis.ExamCramJourney.getMetrics(journey, focusHistory);
-  const plan = globalThis.ExamCramJourney.buildStudyPlan(journey, focusHistory, { now: Date.now() });
+  const savedNoteIds = (Array.isArray(savedItems) ? savedItems : []).map((item) => item?.id);
+  const plan = globalThis.ExamCramJourney.buildStudyPlan(journey, focusHistory, { now: Date.now(), savedNoteIds });
   renderTodayPlan(plan);
+  const timelineChapters = globalThis.ExamCramJourney.orderChaptersByTimeline(journey.chapters);
+  const progressTone = getJourneyPerformanceTone(metrics.progressPercent, "progress");
+  const averageTone = getJourneyPerformanceTone(metrics.averageScore, "average");
+  const progressSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.progressPercent, "progress");
+  const averageSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.averageScore, "average");
+  const focusTone = {
+    key: "focus",
+    label: metrics.focusMinutes ? "Focused time logged" : "Ready for a focus block",
+    color: "#5b5fe8",
+    wash: "#eef0ff",
+    imageFilter: "none"
+  };
   elements.journeyMetrics.replaceChildren(
-    renderJourneyMetric("Progress", `${metrics.progressPercent}%`),
-    renderJourneyMetric("Average", metrics.averageScore == null ? "—" : `${metrics.averageScore}%`),
-    renderJourneyMetric("Focus", `${metrics.focusMinutes}m`)
+    renderJourneyMetric({
+      kind: "progress",
+      label: "Progress",
+      value: `${metrics.progressPercent}%`,
+      detail: progressTone.label,
+      tone: progressTone,
+      sandState: progressSandState,
+      asset: "assets/journey/hourglass-progress-glass-shell.png"
+    }),
+    renderJourneyMetric({
+      kind: "average",
+      label: "Average",
+      value: metrics.averageScore == null ? "—" : `${metrics.averageScore}%`,
+      detail: averageTone.label,
+      tone: averageTone,
+      sandState: averageSandState,
+      asset: "assets/journey/hourglass-average-vertical-glass-shell.png"
+    }),
+    renderJourneyMetric({
+      kind: "focus",
+      label: "Focus",
+      value: `${metrics.focusMinutes}m`,
+      detail: focusTone.label,
+      tone: focusTone,
+      asset: "assets/journey/hourglass-focus-clean-v2.png"
+    })
   );
 
   if (!journey.chapters.length) {
@@ -8256,18 +8378,28 @@ async function renderJourney() {
   }
 
   if (!state.selectedChapter.id || !globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id)) {
-    const current = journey.chapters.filter((chapter) => globalThis.ExamCramJourney.getChapterStatus(chapter) !== "completed").at(-1);
-    selectChapterAcrossControls((current || journey.chapters[journey.chapters.length - 1]).id);
+    const current = timelineChapters.find((chapter) => globalThis.ExamCramJourney.getChapterStatus(chapter) !== "completed");
+    selectChapterAcrossControls((current || timelineChapters[0]).id);
   }
 
-  const nodes = journey.chapters.map((chapter, index) => {
+  const timelineHeading = document.createElement("div");
+  timelineHeading.className = "journey-timeline-heading";
+  timelineHeading.append(
+    createElement("strong", "Chapter timeline"),
+    createElement("span", "Latest activity first")
+  );
+
+  const nodes = timelineChapters.map((chapter, index) => {
     const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
+    const isSelected = chapter.id === state.selectedChapter.id;
+    const activityTime = globalThis.ExamCramJourney.chapterTimelineTime(chapter);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "journey-node";
     button.dataset.status = status;
-    button.setAttribute("aria-pressed", String(chapter.id === state.selectedChapter.id));
-    const date = createElement("span", formatJourneyDay(chapter.updatedAt));
+    button.setAttribute("aria-pressed", String(isSelected));
+    if (isSelected) button.setAttribute("aria-current", "step");
+    const date = createElement("span", activityTime ? formatJourneyDay(activityTime) : "No activity yet");
     const copy = document.createElement("span");
     copy.className = "journey-node-copy";
     copy.append(createElement("strong", chapter.title), date);
@@ -8283,8 +8415,12 @@ async function renderJourney() {
     });
     return button;
   });
-  elements.journeyRoute.replaceChildren(...nodes);
-  renderJourneyChapterDetail(journey, globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id));
+  elements.journeyRoute.replaceChildren(timelineHeading, ...nodes);
+  renderJourneyChapterDetail(
+    journey,
+    globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id),
+    savedItems
+  );
   if (journey.summary) renderJourneySummary(journey.summary);
 }
 
@@ -8312,6 +8448,9 @@ function renderTodayPlan(plan) {
       createElement("strong", step.title || "Study next", "today-plan__title"),
       createElement("p", step.reason || "", "today-plan__reason")
     );
+    if (step.noteMissing) {
+      copy.append(createElement("p", "The saved note behind this quiz is no longer in your Library — Go opens its chapter so you can rebuild it.", "today-plan__reason"));
+    }
     const controls = document.createElement("div");
     controls.className = "today-plan__controls";
     const estimatedMinutes = Math.max(1, Math.round(Number(step.estimatedMinutes) || 5));
@@ -8319,7 +8458,7 @@ function renderTodayPlan(plan) {
     const action = document.createElement("button");
     action.type = "button";
     action.className = "secondary compact-button today-plan__action";
-    const canStartQuiz = ["recovery", "stretch"].includes(step.kind) && step.noteId && step.conceptId;
+    const canStartQuiz = ["recovery", "stretch"].includes(step.kind) && step.noteId && step.conceptId && !step.noteMissing;
     action.textContent = canStartQuiz ? "Start quiz" : "Go";
     if (canStartQuiz) {
       action.addEventListener("click", async () => {
@@ -8331,9 +8470,24 @@ function renderTodayPlan(plan) {
         }
       });
     } else {
-      action.addEventListener("click", () => {
-        if (step.chapterId) selectChapterAcrossControls(step.chapterId);
-        switchView("notesView");
+      action.addEventListener("click", async () => {
+        action.disabled = true;
+        try {
+          if (["first-quiz", "review-retake"].includes(step.intent)) {
+            await openTodayPlanChapterArtifact(step);
+          } else if (step.noteMissing && step.chapterId) {
+            const opened = await openTodayPlanChapterArtifact(step, { openCreateOnMissing: false });
+            if (!opened) {
+              await renderJourney();
+              showStatus("The saved note behind this step is no longer in your Library, and this chapter has no saved replacement note yet. Build one from its sources to restore the quiz.", true);
+            }
+          } else {
+            if (step.chapterId) selectChapterAcrossControls(step.chapterId);
+            switchView("notesView");
+          }
+        } finally {
+          action.disabled = false;
+        }
       });
     }
     controls.append(action);
@@ -8343,14 +8497,49 @@ function renderTodayPlan(plan) {
   section.append(list);
 
   const existing = elements.journeyMetrics.parentElement?.querySelector(".today-plan");
-  if (existing) existing.replaceWith(section);
-  else elements.journeyMetrics.before(section);
+  existing?.remove();
+  elements.journeyChapterDetail.after(section);
+}
+
+async function openTodayPlanChapterArtifact(step, options = {}) {
+  const [journey, savedItems] = await Promise.all([
+    getJourney(),
+    getStorage(STORAGE_KEYS.sessions, [])
+  ]);
+  const chapter = globalThis.ExamCramJourney.findChapter(journey, step.chapterId);
+  const sessionIds = new Set((chapter?.sessions || [])
+    .map((session) => String(session?.id || "").trim())
+    .filter(Boolean));
+  const newestFirst = (Array.isArray(savedItems) ? savedItems : [])
+    .filter((artifact) => {
+      const artifactId = String(artifact?.id || "").trim();
+      const boundChapterId = String(artifact?.journeyChapterId || artifact?.sourceBinding?.chapterId || "").trim();
+      return boundChapterId ? boundChapterId === chapter?.id : sessionIds.has(artifactId);
+    })
+    .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
+      - globalThis.ExamCramJourney.sessionActivityTime(first));
+  const target = newestFirst.find((artifact) => artifact?.questions?.length)
+    || newestFirst[0];
+  if (step.chapterId) selectChapterAcrossControls(step.chapterId);
+  if (target) {
+    const artifact = await openJourneyArtifact(target.id);
+    if (artifact) return true;
+  }
+  if (options.openCreateOnMissing !== false) {
+    switchView("notesView");
+    showStatus(`No saved note in ${chapter?.title || "this chapter"} yet. Create one here, then generate its quiz from the note page.`);
+  }
+  return false;
 }
 
 async function startTodayPlanQuiz(step) {
   try {
     const artifact = await openJourneyArtifact(step.noteId);
-    if (!artifact) return;
+    if (!artifact) {
+      if (step.chapterId) selectChapterAcrossControls(step.chapterId);
+      await renderJourney();
+      return;
+    }
     const activeArtifact = state.currentSession?.id === artifact.id
       ? state.currentSession
       : state.currentArtifact?.id === artifact.id ? state.currentArtifact : artifact;
@@ -8388,26 +8577,155 @@ async function startTodayPlanQuiz(step) {
   }
 }
 
-function renderJourneyMetric(label, value) {
-  const card = document.createElement("div");
-  card.className = "journey-metric";
-  card.append(createElement("span", label), createElement("strong", value));
+function getJourneyPerformanceTone(value, artworkBase) {
+  const numericValue = value == null || value === "" ? null : Number(value);
+  const condition = Number.isFinite(numericValue)
+    ? numericValue >= 85
+      ? { key: "mastery", label: "Strong mastery", color: "#2877d4", wash: "#ebf4ff" }
+      : numericValue >= 70
+        ? { key: "on-track", label: "On track", color: "#1b9c73", wash: "#e8faf1" }
+        : numericValue >= 40
+          ? { key: "building", label: "Building momentum", color: "#c68208", wash: "#fff5df" }
+          : { key: "attention", label: "Needs attention", color: "#e35e49", wash: "#fff0ed" }
+    : { key: "unscored", label: "No score yet", color: "#748197", wash: "#f1f4f8" };
+  const artworkTones = {
+    progress: {
+      sandColor: "#f36b4f",
+      imageFilter: condition.key === "unscored"
+        ? "saturate(.45) contrast(1.08)"
+        : "none"
+    },
+    average: {
+      sandColor: "#e8ac27",
+      imageFilter: condition.key === "unscored"
+        ? "saturate(.52) contrast(1.08)"
+        : "none"
+    }
+  };
+  return {
+    ...condition,
+    ...(artworkTones[artworkBase] || { sandColor: condition.color, imageFilter: "none" })
+  };
+}
+
+function createJourneySandReservoir(position, fillPercent) {
+  const reservoir = document.createElement("span");
+  reservoir.className = `journey-hourglass__reservoir journey-hourglass__reservoir--${position}`;
+  const sand = document.createElement("span");
+  sand.className = "journey-hourglass__sand";
+  sand.style.setProperty("--journey-sand-fill", `${fillPercent}%`);
+  reservoir.append(sand);
+  return reservoir;
+}
+
+function createJourneySandHourglass({ kind, asset, sandState, tone }) {
+  const hourglass = document.createElement("div");
+  hourglass.className = `journey-hourglass journey-hourglass--${kind}`;
+  hourglass.setAttribute("aria-hidden", "true");
+  const hasSandData = Boolean(sandState?.hasValue);
+  const isFlowing = Boolean(sandState?.isFlowing);
+  const isWaiting = !hasSandData && kind === "average";
+  hourglass.classList.toggle("has-sand-data", hasSandData);
+  hourglass.classList.toggle("is-flowing", isFlowing);
+  hourglass.classList.toggle("is-waiting", isWaiting);
+  hourglass.style.setProperty("--journey-sand-color", tone.sandColor || tone.color);
+  hourglass.style.setProperty(
+    "--journey-sand-opacity",
+    hasSandData ? String(Math.min(0.96, 0.58 + (sandState.percent / 100) * 0.38)) : isWaiting ? "0.28" : "0"
+  );
+  hourglass.style.setProperty(
+    "--journey-stream-opacity",
+    isFlowing ? String(0.24 + (Math.min(sandState.percent, 100 - sandState.percent) / 100) * 0.5) : "0"
+  );
+
+  const sourceName = kind === "average" ? "top" : "source";
+  const destinationName = kind === "average" ? "bottom" : "destination";
+  hourglass.append(
+    createJourneySandReservoir(sourceName, isWaiting ? 18 : sandState.sourceFill),
+    createJourneySandReservoir(destinationName, sandState.destinationFill)
+  );
+
+  const stream = document.createElement("span");
+  stream.className = "journey-hourglass__stream";
+  const shell = document.createElement("img");
+  shell.className = "journey-hourglass__shell";
+  shell.src = asset;
+  shell.alt = "";
+  shell.decoding = "async";
+  shell.draggable = false;
+  hourglass.append(stream, shell);
+
+  const revealSand = () => hourglass.classList.add("is-filled");
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(revealSand);
+  else revealSand();
+  return hourglass;
+}
+
+function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asset }) {
+  const card = document.createElement("section");
+  card.className = `journey-metric journey-metric--${kind}`;
+  card.dataset.tone = tone.key;
+  card.style.setProperty("--journey-metric-color", tone.color);
+  card.style.setProperty("--journey-metric-wash", tone.wash);
+  card.style.setProperty("--journey-metric-image-filter", tone.imageFilter);
+  card.setAttribute("aria-label", `${label}: ${value}. ${detail}.`);
+
+  const copy = document.createElement("div");
+  copy.className = "journey-metric__copy";
+  copy.append(createElement("span", label, "journey-metric__label"));
+  if (kind !== "focus") copy.append(createElement("strong", value, "journey-metric__value"));
+  copy.append(createElement("small", detail, "journey-metric__detail"));
+
+  const visual = document.createElement("div");
+  visual.className = `journey-metric__visual journey-metric__visual--${kind}`;
+  if (kind === "progress" || kind === "average") {
+    visual.append(createJourneySandHourglass({ kind, asset, sandState, tone }));
+  } else {
+    const artwork = document.createElement("img");
+    artwork.className = "journey-metric__art";
+    artwork.src = asset;
+    artwork.alt = "";
+    artwork.decoding = "async";
+    artwork.draggable = false;
+    visual.append(artwork);
+    const focusValue = createElement("strong", value, "journey-metric__focus-value");
+    focusValue.setAttribute("aria-hidden", "true");
+    visual.append(focusValue);
+  }
+
+  card.append(copy, visual);
   return card;
 }
 
-function renderJourneyChapterDetail(journey, chapter) {
+function renderJourneyChapterDetail(journey, chapter, savedItems = []) {
   if (!chapter) {
     elements.journeyChapterDetail.replaceChildren();
     return;
   }
   const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
-  const scored = chapter.sessions.find((session) => Number.isFinite(session.score));
+  const visibleArtifacts = globalThis.ExamCramJourney.getChapterArtifactTimeline(chapter, savedItems);
+  const latestScored = [...chapter.sessions]
+    .filter((session) => Number.isFinite(session.score))
+    .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
+      - globalThis.ExamCramJourney.sessionActivityTime(first))[0];
   const heading = document.createElement("div");
   heading.append(
     createElement("strong", chapter.title),
     createElement("p", `${formatJourneyStatus(status)} · ${chapter.sources.length} ${chapter.sources.length === 1 ? "source" : "sources"} · ${chapter.sessions.length} learning ${chapter.sessions.length === 1 ? "session" : "sessions"}`, "hint")
   );
-  if (scored) heading.append(createElement("p", `Latest submitted score: ${scored.score}%`, "hint"));
+  heading.replaceChildren(
+    createElement("strong", chapter.title),
+    createElement(
+      "p",
+      [
+        formatJourneyStatus(status),
+        `${chapter.sources.length} ${chapter.sources.length === 1 ? "source" : "sources"}`,
+        `${visibleArtifacts.length} latest unique ${visibleArtifacts.length === 1 ? "artifact" : "artifacts"}`
+      ].join(" \u00b7 "),
+      "hint"
+    )
+  );
+  if (latestScored) heading.append(createElement("p", `Latest submitted score: ${latestScored.score}%`, "hint"));
   const lastSource = journey.lastStudySource?.chapterId === chapter.id
     ? journey.lastStudySource
     : null;
@@ -8449,14 +8767,19 @@ function renderJourneyChapterDetail(journey, chapter) {
 
   const artifacts = document.createElement("div");
   artifacts.className = "journey-source-list journey-artifact-list";
-  artifacts.append(createElement("strong", "Saved learning artifacts"));
+  const artifactHeading = document.createElement("div");
+  artifactHeading.className = "journey-section-heading";
+  artifactHeading.append(
+    createElement("strong", "Saved learning artifacts"),
+    createElement("span", "Newest unique first")
+  );
+  artifacts.append(artifactHeading);
   if (!chapter.sessions.length) {
     artifacts.append(createElement("p", "No saved visual notes or quizzes in this chapter yet.", "hint"));
+  } else if (!visibleArtifacts.length) {
+    artifacts.append(createElement("p", "No distinct saved artifacts are available for this chapter yet.", "hint"));
   } else {
-    [...chapter.sessions]
-      .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
-        - globalThis.ExamCramJourney.sessionActivityTime(first))
-      .forEach((session) => {
+    visibleArtifacts.forEach((session) => {
         const row = document.createElement("div");
         row.className = "journey-source-row journey-artifact-row";
         const sourceLabel = session.sourceTitle || getHostnameLabel(session.sourceUrl) || "Saved study material";
@@ -8465,7 +8788,11 @@ function renderJourneyChapterDetail(journey, chapter) {
         const meta = document.createElement("span");
         meta.className = "journey-artifact-meta";
         meta.append(
-          createElement("span", formatDate(session.generatedAt), "journey-artifact-date"),
+          createElement(
+            "span",
+            formatDate(globalThis.ExamCramJourney.sessionActivityTime(session) || session.generatedAt),
+            "journey-artifact-date"
+          ),
           createElement("span", `From ${sourceLabel}`, "journey-artifact-source")
         );
         copy.append(
@@ -8479,9 +8806,51 @@ function renderJourneyChapterDetail(journey, chapter) {
         open.textContent = "Open note";
         open.setAttribute("aria-label", `Open saved learning artifact ${session.title}`);
         open.addEventListener("click", () => void openJourneyArtifact(session.id));
-        row.append(copy, open);
+
+        const rowActions = document.createElement("div");
+        rowActions.className = "journey-artifact-actions";
+
+        const rename = document.createElement("button");
+        rename.type = "button";
+        rename.className = "text-button";
+        rename.textContent = "Rename";
+        rename.setAttribute("aria-label", `Rename ${session.title}`);
+        rename.addEventListener("click", () => startJourneyArtifactRename(row, chapter, session));
+
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "text-button journey-artifact-remove";
+        remove.textContent = "Remove";
+        remove.setAttribute("aria-label", `Remove ${session.title} from ${chapter.title}`);
+        remove.addEventListener("click", async () => {
+          if (remove.dataset.confirming !== "true") {
+            remove.dataset.confirming = "true";
+            remove.textContent = "Confirm remove";
+            setTimeout(() => {
+              remove.dataset.confirming = "false";
+              remove.textContent = "Remove";
+            }, 4000);
+            return;
+          }
+          remove.disabled = true;
+          try {
+            await removeJourneyArtifact(chapter, session);
+          } finally {
+            remove.disabled = false;
+          }
+        });
+
+        rowActions.append(open, rename, remove);
+        row.append(copy, rowActions);
         artifacts.append(row);
       });
+    if (chapter.sessions.length > visibleArtifacts.length) {
+      artifacts.append(createElement(
+        "p",
+        `Showing the ${visibleArtifacts.length} newest unique artifacts. Older saves remain in Library.`,
+        "hint journey-artifact-limit"
+      ));
+    }
   }
 
   const actions = document.createElement("div");
@@ -8509,6 +8878,63 @@ function getHostnameLabel(value) {
   } catch {
     return "";
   }
+}
+
+async function removeJourneyArtifact(chapter, session) {
+  await mutateJourney("JOURNEY_REMOVE_SESSION", { chapterId: chapter.id, sessionId: session.id });
+  const savedItems = await getStorage(STORAGE_KEYS.sessions, []);
+  await setStorage(STORAGE_KEYS.sessions, (Array.isArray(savedItems) ? savedItems : [])
+    .filter((item) => item?.id !== session.id));
+  const draft = await getStorage(STORAGE_KEYS.sessionDraft, null);
+  const draftArtifact = draft?.artifact || draft?.session;
+  if (draftArtifact?.id === session.id) {
+    await removeStorage(STORAGE_KEYS.sessionDraft);
+    if (state.currentArtifact?.id === session.id || state.currentSession?.id === session.id) closeSession();
+  }
+  showStatus(`Removed "${session.title}" from ${chapter.title}, your Library, and its learning memory.`);
+  await renderJourney();
+}
+
+function startJourneyArtifactRename(row, chapter, session) {
+  if (row.querySelector(".journey-artifact-rename-form")) return;
+  const form = document.createElement("form");
+  form.className = "journey-artifact-rename-form";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.required = true;
+  input.maxLength = 180;
+  input.value = session.title;
+  input.setAttribute("aria-label", `New title for ${session.title}`);
+  const save = document.createElement("button");
+  save.type = "submit";
+  save.className = "secondary compact-button";
+  save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "text-button";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => form.remove());
+  form.append(input, save, cancel);
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const title = input.value.trim();
+    if (!title || title === session.title) { form.remove(); return; }
+    save.disabled = true;
+    try {
+      await mutateJourney("JOURNEY_RENAME_SESSION", { chapterId: chapter.id, sessionId: session.id, title });
+      const savedItems = await getStorage(STORAGE_KEYS.sessions, []);
+      await setStorage(STORAGE_KEYS.sessions, (Array.isArray(savedItems) ? savedItems : [])
+        .map((item) => (item?.id === session.id ? { ...item, title } : item)));
+      showStatus("Note title updated.");
+      await renderJourney();
+    } catch (error) {
+      showStatus(error?.message || "The note could not be renamed.", true);
+      save.disabled = false;
+    }
+  });
+  row.append(form);
+  input.focus();
+  input.select();
 }
 
 async function openJourneyArtifact(artifactId, options = {}) {
@@ -8584,7 +9010,7 @@ async function handleBuildChapterLesson(chapterId, options = {}) {
   } catch (error) {
     if (generationToken === state.generationToken) {
       failProgress("Chapter lesson failed.");
-      showStatus(error.message, true);
+      if (!options.quietStatus) showStatus(error.message, true);
     }
     if (options.rethrow) throw error;
     return null;
@@ -8993,7 +9419,7 @@ async function handleQuickFocusToggle() {
 async function handleClearLibrary() {
   await setStorage(STORAGE_KEYS.sessions, []);
   renderLibrary();
-  showStatus("Library cleared.");
+  showStatus("Library cleared. Today's Plan recovery steps will offer chapter review until you rebuild their notes.");
 }
 
 async function handleClearLearningMemory() {

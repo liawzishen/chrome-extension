@@ -474,3 +474,102 @@ test("clears learning memory through the worker while preserving all Journey evi
   assert.equal(retry.result.clearedAttemptCount, 1);
   assert.equal(retry.result.clearedConceptCount, 1);
 });
+
+test("removes a session through the worker and replays the result idempotently", () => {
+  let journey = Journey.recordSession(
+    Journey.createJourney("Worker remove", "2026-07-15T00:00:00Z"),
+    "Photosynthesis",
+    {
+      id: "worker-note",
+      title: "Photosynthesis note",
+      itemKind: "note",
+      generatedAt: "2026-07-15T01:00:00Z"
+    },
+    "2026-07-15T01:00:00Z"
+  ).journey;
+  journey = Journey.recordSession(journey, journey.chapters[0].id, {
+    id: "worker-note-kept",
+    title: "Respiration note",
+    itemKind: "note",
+    generatedAt: "2026-07-15T01:15:00Z"
+  }, "2026-07-15T01:15:00Z").journey;
+  journey = Journey.recordQuestionAttempts(journey, [workerAttempt(1)], {
+    noteId: "worker-note",
+    score: 100,
+    submittedAt: "2026-07-15T02:00:00Z"
+  }).journey;
+  const chapterId = journey.chapters[0].id;
+
+  assert.throws(() => Worker.reduceJourneyOperation(journey, operation(
+    Worker.MESSAGE_TYPES.REMOVE_SESSION,
+    "op:remove-session-invalid",
+    journey.revision,
+    { chapterId }
+  )), (error) => error.code === "INVALID_SESSION");
+
+  const request = operation(
+    Worker.MESSAGE_TYPES.REMOVE_SESSION,
+    "op:remove-session",
+    journey.revision,
+    { chapterId, sessionId: "worker-note" }
+  );
+  const removed = Worker.reduceJourneyOperation(journey, request, "2026-07-15T03:00:00Z");
+
+  assert.deepEqual(removed.result, {
+    removed: true,
+    removedConceptCount: 1,
+    revision: removed.journey.revision
+  });
+  assert.deepEqual(
+    removed.journey.chapters[0].sessions.map((session) => session.id),
+    ["worker-note-kept"]
+  );
+  assert.equal(removed.journey.learningMemory.concepts.length, 0);
+  assert.equal(removed.journey.learningMemory.attempts.length, 0);
+
+  const retry = Worker.reduceJourneyOperation(removed.journey, request, "2026-07-15T03:05:00Z");
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.changed, false);
+  assert.equal(retry.result.removed, true);
+  assert.equal(retry.result.removedConceptCount, 1);
+  assert.deepEqual(retry.journey.chapters[0].sessions, removed.journey.chapters[0].sessions);
+});
+
+test("renames a session through the worker and replays the result idempotently", () => {
+  const journey = Journey.recordSession(
+    Journey.createJourney("Worker rename", "2026-07-15T00:00:00Z"),
+    "Cell biology",
+    {
+      id: "worker-note",
+      title: "Original note title",
+      itemKind: "note",
+      generatedAt: "2026-07-15T01:00:00Z"
+    },
+    "2026-07-15T01:00:00Z"
+  ).journey;
+  const chapterId = journey.chapters[0].id;
+
+  assert.throws(() => Worker.reduceJourneyOperation(journey, operation(
+    Worker.MESSAGE_TYPES.RENAME_SESSION,
+    "op:rename-session-invalid",
+    journey.revision,
+    { chapterId, sessionId: "worker-note", title: "   " }
+  )), (error) => error.code === "INVALID_SESSION");
+
+  const request = operation(
+    Worker.MESSAGE_TYPES.RENAME_SESSION,
+    "op:rename-session",
+    journey.revision,
+    { chapterId, sessionId: "worker-note", title: "Cell membranes" }
+  );
+  const renamed = Worker.reduceJourneyOperation(journey, request, "2026-07-15T02:00:00Z");
+
+  assert.equal(renamed.result.renamed, true);
+  assert.equal(renamed.journey.chapters[0].sessions[0].title, "Cell membranes");
+
+  const retry = Worker.reduceJourneyOperation(renamed.journey, request, "2026-07-15T02:05:00Z");
+  assert.equal(retry.duplicate, true);
+  assert.equal(retry.changed, false);
+  assert.equal(retry.result.renamed, true);
+  assert.equal(retry.journey.chapters[0].sessions[0].title, "Cell membranes");
+});

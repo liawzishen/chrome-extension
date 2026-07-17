@@ -15,8 +15,8 @@ test("offers one local HTML/PDF picker without requiring file URL permission", (
   assert.match(html, /id="bulkImportInput"[^>]*type="file"[^>]*multiple[^>]*accept="[^"]*\.html[^"]*\.pdf/);
   assert.match(html, /Upload PDFs or documents to auto-sort into chapters\./);
   assert.match(popup, /state\.importedDocument \|\| await extractCurrentPage\(\)/);
-  assert.match(popup, /Only its bounded extracted text will be used when you create the note/);
-  assert.match(popup, /setStudyPageActionCopy\("From Imported File", `\$\{file\.name\} is ready to turn into a visual note\.`\)/);
+  assert.doesNotMatch(popup, /activateSingleFileImport/);
+  assert.match(popup, /async function handleBulkImportSelected\(event\)[\s\S]*?readImportedDocument\(file\)/);
   assert.match(popup, /state\.importedDocument = null;\s*const refreshed = await detectActiveSource\(\)/);
 });
 

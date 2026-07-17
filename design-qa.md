@@ -1,47 +1,44 @@
-# Page redesign design QA
+# Import review design QA
 
-- Source visual truth: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-2a86ada3-c97e-4ef2-9ecb-9c6afa30cbab.png`
-- Implementation screenshot: `C:\Users\Dell\Documents\google_plugin\design-qa-page-bottom.png`
-- Full-view comparison: `C:\Users\Dell\Documents\google_plugin\design-qa-comparison.png`
-- Focused action-card comparison: `C:\Users\Dell\Documents\google_plugin\design-qa-actions-comparison.png`
-- Narrow-layout evidence: `C:\Users\Dell\Documents\google_plugin\design-qa-page-320.png`
-- Desktop viewport: 1280 × 720; Page composer rendered at 728 × 690
-- Responsive viewport: 320 × 900
-- State: Page tab active, existing chapter selected, transcript disclosure closed
+- Source visual truth: `C:\Users\Dell\Pictures\Screenshots\Screenshot 2026-07-17 130140.png`
+- Prototype capture: `C:\Users\Dell\AppData\Local\Temp\import-review-final-alignment.png`
+- Full same-viewport comparison: `C:\Users\Dell\AppData\Local\Temp\import-review-final-comparison.png`
+- Focused header/table comparison: `C:\Users\Dell\AppData\Local\Temp\import-review-focused-comparison.png`
+- Review viewport: 812 x 557 px.
+- Prototype state: two local import fixtures (one readable file and one skipped unreadable file). The supplied reference contains seven files, so row density and the inline count intentionally differ with the data set.
 
-## Findings
+**Scope**
 
-- No actionable P0, P1, or P2 differences remain.
-- P3: the generated illustrations have slightly smoother strokes and a little less internal detail than the source artwork. Their subjects, palettes, scale, and visual weight now match the reference closely enough for the card hierarchy.
-- P3: the implementation uses the product's semantic secondary-surface token in the chapter card, which is marginally cooler than the reference gray.
+- The import review is rebuilt as the reference's full-surface Folder/Status table, replacing the oversized modal card and summary blocks.
+- Folder-group headers, indented file entries, compact `Move` controls, native chapter selectors, low-match treatment, and a fixed confirmation footer retain the existing import-planning behavior.
 
-## Required fidelity surfaces
+**Iteration Log**
 
-- Fonts and typography: the system UI stack, heading hierarchy, 19px action titles, body sizing, line heights, and wrapping follow the reference. The intro remains one line at the desktop comparison width and all mobile copy wraps without clipping.
-- Spacing and layout rhythm: the 728 × 690 implementation panel closely tracks the 744 × 697 reference crop. The chapter-first hierarchy, two-column 333 × 132 action cards, 16px grid gaps, transcript row, separator, and footer align with the source. At 320px the grid becomes one column with no horizontal overflow.
-- Colors and visual tokens: white surfaces, neutral separators, black labels, and gray chapter fill map to the existing semantic design tokens. No gradients or new hardcoded visual system were introduced.
-- Image quality and asset fidelity: all four visible card illustrations are generated raster assets stored in the project. They load at their native 1254 × 1254 resolution and are rendered with crisp downscaling; no emoji, CSS drawings, placeholder boxes, or handcrafted SVG stand-ins are used.
-- Copy and content: headings, chapter guidance, four action names and descriptions, transcript label, and footer explanation match the supplied reference. The selected chapter text differs only because the preview contains existing local chapter state.
+- Iteration 1 found a P1 fidelity issue: the review used a rounded overlay with stacked summary cards and nested row cards, while the source uses a flat table hierarchy.
+- Iteration 2 replaces that hierarchy with a flush panel, compact group/file rows, aligned `Folder` and `Status` headings, a pale-mint `Confirm Import` action followed by neutral `Cancel`, and source-like spacing. The final comparison captures above were reviewed side by side.
 
-## Comparison history
+**Fidelity Review**
 
-1. Initial comparison found two P2 mismatches: the intro wrapped at desktop width, and the four illustrations were visibly underscaled. The intro width cap was removed; action illustrations were enlarged; action title weight and size were strengthened.
-2. The revised full and focused comparisons show aligned hierarchy, proportions, wrapping, card density, and illustration weight. No P0/P1/P2 differences remain.
+- Typography and copy: the title, inline file count, column labels, chapter name, file label, and action text use the source hierarchy and wording.
+- Layout and spacing: the header, separator, indented child rows, destination controls, and bottom action bar align to the same narrow desktop viewport; the footer begins at the source-equivalent bottom edge.
+- Colors and borders: the panel stays light and flat, table rules remain subtle, the review row is softly neutral, confirmation is pale mint, and cancellation is restrained gray.
+- Assets: the product has no matching folder/file icon asset. A compact existing file-type label remains instead of adding a fake icon. This is a non-blocking P3 follow-up.
 
-## Interaction and responsive verification
+**Interaction and Responsive Checks**
 
-- Four action assets loaded successfully.
-- The transcript disclosure opens correctly; a reload restores its closed default state.
-- The New chapter dialog opens and cancels without changing chapter data.
-- At 320px, document width equals viewport width, every action card fits its own width, and no overflow offenders were found.
-- Browser console warnings and errors: none.
+- Changing `document-frame-child.html` to `Trees` immediately re-planned the group header and selected destination; the core reassignment control remains functional.
+- At 360 x 640 px, the review panel fills the viewport with no horizontal overflow, its chapter selector remains 250 px wide, and the footer stays visible.
+- Browser console errors: none (`[]`).
 
-## Implementation checklist
+**Findings**
 
-- [x] Chapter setup precedes source selection.
-- [x] Four illustrated action cards preserve their existing handlers.
-- [x] Transcript and footer treatments match the reference.
-- [x] Desktop and 320px layouts are visually verified.
-- [x] Accessibility and keyboard semantics remain intact.
+- No actionable P0, P1, or P2 issues remain.
+- P3: real folder/file icons and the denser seven-file source state would make the fixture comparison even closer; neither blocks the production flow or visual hierarchy.
+
+**Validation**
+
+- `node --test tests/popup-journey-responsive.test.js` — passed (24 tests).
+- `npm test` — passed (368 tests).
+- `npm run check` — passed.
 
 final result: passed
