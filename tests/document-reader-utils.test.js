@@ -153,6 +153,26 @@ test("merges main-frame, child-frame, and shadow-derived chunks with stable boun
   assert.equal(Reader.assessReadableContent(merged.text, "html").readable, true);
 });
 
+test("drops Wikipedia-style navigation and fundraising chrome before local study generation", () => {
+  const article = "Photosynthesis converts light energy into chemical energy stored in glucose inside chloroplasts.";
+  const boilerplate = [
+    "Jump to content",
+    "From Wikipedia, the free encyclopedia",
+    "Wiki Loves Earth: Upload photos to help win exciting prizes!",
+    "Home · About · Help · Contact"
+  ];
+
+  for (const line of boilerplate) assert.equal(Reader.isExtractedBoilerplate(line), true, line);
+  assert.equal(Reader.isExtractedBoilerplate(article), false);
+
+  const merged = Reader.mergeFrameSnapshots([{
+    frameId: 0,
+    result: { title: "Photosynthesis", url: "https://example.test/wiki", chunks: [...boilerplate, article] }
+  }]);
+  assert.match(merged.text, /Photosynthesis converts light energy/i);
+  assert.doesNotMatch(merged.text, /Jump to content|From Wikipedia|Wiki Loves Earth|Upload photos|Home .* Help/i);
+});
+
 test("adversarial PDF text items stop at the output budget instead of building an unbounded line", async () => {
   const bytes = new TextEncoder().encode("%PDF-1.7\n");
   let yielded = 0;

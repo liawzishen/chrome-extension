@@ -143,6 +143,19 @@
       .slice(0, maxLength);
   }
 
+  function isExtractedBoilerplate(value) {
+    const text = normalizeExtractedText(value, 1000)
+      .toLocaleLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return true;
+    return /^(?:skip|jump) to (?:main )?content\.?$/i.test(text)
+      || /^from wikipedia,? the free encyclopedia\.?$/i.test(text)
+      || /(?:wiki loves earth|upload photos(?: to help)? .*win (?:exciting )?prizes|fundraising banner|donate now)/i.test(text)
+      || /^(?:navigation|contents|main menu|site notice|privacy policy|terms of use)$/i.test(text)
+      || (/^(?:home|about|help|contact|log ?in|sign ?in)(?:\s*[|\u00b7\u203a>]\s*(?:home|about|help|contact|log ?in|sign ?in))+$/i.test(text));
+  }
+
   function assessReadableContent(value, documentType = "html") {
     const text = normalizeExtractedText(value);
     const meaningful = text.match(/[\p{L}\p{N}]/gu) || [];
@@ -205,7 +218,7 @@
         for (const candidate of candidates) {
           if (frameCharacters >= 16000) break;
           const chunk = normalizeExtractedText(String(candidate || "").slice(0, 6000), Math.min(6000, 16000 - frameCharacters));
-          if (!chunk) continue;
+          if (!chunk || isExtractedBoilerplate(chunk)) continue;
           chunks.push(chunk);
           frameCharacters += chunk.length + 1;
         }
@@ -259,17 +272,18 @@
       "script", "style", "noscript", "svg", "canvas", "iframe", "nav", "header", "footer", "aside", "form",
       "button", "input", "textarea", "select", "[role='navigation']", "[role='banner']", "[role='contentinfo']",
       "[aria-hidden='true']", "[hidden]", "[inert]", ".MathJax_Preview", ".MathJax", ".MJX_Assistive_MathML", "mjx-assistive-mml",
-      ".katex-mathml", "annotation", "semantics annotation"
+      ".katex-mathml", "annotation", "semantics annotation", ".mw-jump-link", ".mw-indicators", ".mw-footer", ".siteNotice",
+      "#siteNotice", ".mw-dismissable-notice", ".ambox", ".notice", ".banner", ".fundraising", ".donate-banner"
     ].join(",");
 
-    const source = document.querySelector("article,main,[role='main'],.post-content,.entry-content,.article-content,.content,#content") || document.body;
+    const source = document.querySelector("#mw-content-text .mw-parser-output,.mw-parser-output,article,main,[role='main'],.post-content,.entry-content,.article-content,.content,#content") || document.body;
     const chunks = [];
     const seen = new Set();
     let outputCharacters = 0;
     const add = (value, prefix = "") => {
       if (chunks.length >= MAX_HTML_CHUNKS || outputCharacters >= MAX_EXTRACTED_TEXT) return;
       const text = normalizeExtractedText(String(value || "").slice(0, 6000), 4000).replace(/\n+/g, " ");
-      if (text.length < 20) return;
+      if (text.length < 20 || isExtractedBoilerplate(text)) return;
       const key = text.toLowerCase();
       if (seen.has(key)) return;
       seen.add(key);
@@ -446,6 +460,7 @@
     looksLikeBinary,
     classifyFetchedDocument,
     normalizeExtractedText,
+    isExtractedBoilerplate,
     assessReadableContent,
     assertReadableContent,
     mergeFrameSnapshots,

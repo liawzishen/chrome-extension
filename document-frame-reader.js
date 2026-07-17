@@ -10,6 +10,10 @@
     "BUTTON", "INPUT", "TEXTAREA", "SELECT", "OPTION", "TEMPLATE"
   ]);
   const studyTags = new Set(["H1", "H2", "H3", "H4", "P", "LI", "DT", "DD", "BLOCKQUOTE", "FIGCAPTION", "TD", "TH", "PRE", "CODE"]);
+  const boilerplateSelector = [
+    "[role='navigation']", "[role='banner']", "[role='contentinfo']", ".mw-jump-link", ".mw-indicators", ".mw-footer",
+    ".siteNotice", "#siteNotice", ".mw-dismissable-notice", ".ambox", ".notice", ".banner", ".fundraising", ".donate-banner"
+  ].join(",");
   const chunks = [];
   const seen = new Set();
   let inspectedNodes = 0;
@@ -27,10 +31,20 @@
     .replace(/\s+/g, " ")
     .trim();
 
+  const isBoilerplateText = (value) => {
+    const text = cleanText(value).toLocaleLowerCase();
+    if (!text) return true;
+    return /^(?:skip|jump) to (?:main )?content\.?$/i.test(text)
+      || /^from wikipedia,? the free encyclopedia\.?$/i.test(text)
+      || /(?:wiki loves earth|upload photos(?: to help)? .*win (?:exciting )?prizes|fundraising banner|donate now)/i.test(text)
+      || /^(?:navigation|contents|main menu|site notice|privacy policy|terms of use)$/i.test(text)
+      || (/^(?:home|about|help|contact|log ?in|sign ?in)(?:\s*[|\u00b7\u203a>]\s*(?:home|about|help|contact|log ?in|sign ?in))+$/i.test(text));
+  };
+
   const addChunk = (rawValue, prefix = "") => {
     if (chunks.length >= MAX_CHUNKS || outputCharacters >= MAX_TEXT) return;
     const text = cleanText(rawValue);
-    if ((text.match(/[\p{L}\p{N}]/gu) || []).length < 8) return;
+    if ((text.match(/[\p{L}\p{N}]/gu) || []).length < 8 || isBoilerplateText(text)) return;
     const key = text.toLocaleLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -46,7 +60,14 @@
     return style.display === "none" || style.visibility === "hidden" || style.contentVisibility === "hidden";
   };
 
-  const root = document.body || document.documentElement;
+  const isBoilerplateElement = (element) => {
+    if (element.matches?.(boilerplateSelector)) return true;
+    return element.tagName === "A" && isBoilerplateText(element.innerText || element.textContent);
+  };
+
+  const root = document.querySelector("#mw-content-text .mw-parser-output,.mw-parser-output,article,main,[role='main'],.post-content,.entry-content,.article-content,.content,#content")
+    || document.body
+    || document.documentElement;
   const stack = root ? [root] : [];
   while (stack.length && inspectedNodes < MAX_NODES && performance.now() <= deadline && outputCharacters < MAX_TEXT) {
     const element = stack.pop();
@@ -56,7 +77,7 @@
       continue;
     }
     if (!(element instanceof Element)) continue;
-    if (blockedTags.has(element.tagName) || isHidden(element)) continue;
+    if (blockedTags.has(element.tagName) || isHidden(element) || isBoilerplateElement(element)) continue;
 
     const shadowChildren = element.shadowRoot?.mode === "open" ? [...element.shadowRoot.children] : [];
     if (shadowChildren.length) shadowRoots += 1;

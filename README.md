@@ -16,6 +16,20 @@ read across pages and videos
 
 This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; Exam-Cram is optimizing for traceability, active learning, persistence, and a clear next study action.
 
+## OpenAI Build Week Submission Evidence
+
+Exam-Cram Assistant is prepared for the **Education** track. The primary `/feedback` Codex Session ID for the thread with the most recorded core implementation work is:
+
+`019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f` — **Fix quiz generation grounding**
+
+The repository’s [hackathon submission narrative](hackathon/README.md#openai-build-week-submission-evidence) explains how Codex and GPT-5.6 contributed to the build. The detailed [submission evidence record](feedback/HACKATHON_SUBMISSION_EVIDENCE.md) maps the official requirements to the primary session, supporting session exports, and dated commits.
+
+The [builder-led collaboration report](hackathon/CODEX_COLLABORATION.md) explains the professional working model: the builder authored the product direction and materials, while Codex GPT-5.6 supported repository analysis, implementation, review, and verification.
+
+The shipped extension does not claim GPT-5.6 as a runtime dependency; the hackathon evidence is the Codex/GPT-5.6 build workflow and submitted primary session ID.
+
+A separate [design-test conversation](feedback/2026-07-16-design-test-review-md-files-and-implement.md) caught a workspace mismatch before implementation: the brief targeted Chrome-extension popup files while the open `design_test` workspace was a Vite app. It identified this repository as the intended extension target, preserving the design brief’s correct implementation context.
+
 ## Current Capabilities
 
 | Runtime fact | Current value |

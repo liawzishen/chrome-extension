@@ -157,6 +157,26 @@ test("keeps strict grounding for generation while saved-content rendering degrad
   });
 });
 
+test("omits repeated local main-idea text from key facts and examples", () => {
+  const repeated = "Particles move from high concentration to low concentration.";
+  const result = CheatSheet.normalizeCheatSheet({ rows: [{
+    topic: "Diffusion",
+    mainIdea: repeated,
+    keyFacts: repeated,
+    example: repeated,
+    sourceAnchor: repeated
+  }] }, {
+    title: "Diffusion",
+    sourceType: "notes",
+    rawText: repeated,
+    visualModel: { nodes: [makeNode()] }
+  });
+
+  assert.equal(result.rows[0].mainIdea, repeated);
+  assert.equal(result.rows[0].keyFacts, "");
+  assert.equal(result.rows[0].example, "");
+});
+
 test("retains collection source identity and public citation URL", () => {
   const result = CheatSheet.normalizeCheatSheet({ rows: [{
     topic: "Selective permeability",

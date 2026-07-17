@@ -34,8 +34,8 @@ function createLocalQuizHarness() {
   return vm.runInNewContext(`(() => {
     ${sourceBetween("const STOP_WORDS = new Set([", "const state = {")}
     ${sourceBetween("const QUIZ_GROUNDING_STOP_WORDS = new Set([", "function validateGeneratedQuiz(")}
-    ${sourceBetween("function normalizeText(text)", "function hasChromeTabs()")}
-    return { normalizeText, getSentences, getImportantTerms, buildSummary, buildConceptQuestions, hasWholeWord, assertQuizGroundedInSource };
+    ${sourceBetween("function isLocalBoilerplateText(value)", "function hasChromeTabs()")}
+    return { normalizeText, getSentences, getImportantTerms, buildSummary, buildConceptQuestions, hasWholeWord, makeConceptLabel, assertQuizGroundedInSource };
   })()`, {
     crypto: { randomUUID: crypto.randomUUID }
   });
@@ -65,6 +65,33 @@ test("the local Photosynthesis demo returns exactly five source-grounded questio
       }
     }
   }
+});
+
+test("the local fallback excludes Wikipedia chrome from its source sentences and choices", () => {
+  const harness = createLocalQuizHarness();
+  const sourceWithChrome = [
+    "Jump to content",
+    "From Wikipedia, the free encyclopedia",
+    "Wiki Loves Earth: Upload photos to help win exciting prizes!",
+    photosynthesisSource
+  ].join("\n");
+  const cleaned = harness.normalizeText(sourceWithChrome);
+  const sentences = harness.getSentences(cleaned);
+  const summary = harness.buildSummary(sentences, harness.getImportantTerms(cleaned));
+  const questions = harness.buildConceptQuestions(cleaned, sentences, summary, 5, "normal", "mixed");
+
+  assert.doesNotMatch(cleaned, /Jump to content|From Wikipedia|Wiki Loves Earth|Upload photos|win exciting prizes/i);
+  assert.ok(sentences.every((sentence) => !/upload|win|wikipedia|jump to content/i.test(sentence)));
+  assert.doesNotMatch(JSON.stringify(questions), /upload|win exciting prizes|wikipedia|jump to content/i);
+  harness.assertQuizGroundedInSource({ questions }, photosynthesisSource, "The local quiz backup");
+});
+
+test("local concept labels collapse repeated phrase fragments", () => {
+  const harness = createLocalQuizHarness();
+  assert.equal(
+    harness.makeConceptLabel("Light dependent reactions light dependent reactions convert energy."),
+    "Light Dependent Reactions Convert"
+  );
 });
 
 test("the quiz service boundary rejects partial and ungrounded responses", async () => {

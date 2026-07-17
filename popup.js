@@ -40,6 +40,7 @@ const state = {
   sourceRefreshTimer: null,
   sourceDetectionSequence: 0,
   sourceDetectionError: "",
+  sourceVisibilityNeedsToolbar: false,
   importedDocument: null,
   pendingImport: null,
   pendingImportChapterFileId: "",
@@ -341,7 +342,7 @@ async function handleRefreshSource() {
     const refreshed = await detectActiveSource();
     showStatus(refreshed
       ? "Current page refreshed. Your pinned note is unchanged."
-      : state.sourceDetectionError || "The current page changed while it was being checked. Refresh again when it finishes loading.", !refreshed);
+      : state.sourceDetectionError || "The current page changed while it was being checked. Refresh again when it finishes loading.", !refreshed && !state.sourceVisibilityNeedsToolbar);
   } finally {
     if (elements.refreshSourceButton) elements.refreshSourceButton.disabled = false;
   }
@@ -1514,6 +1515,7 @@ async function detectActiveSource() {
   }
   const detectionSequence = ++state.sourceDetectionSequence;
   state.sourceDetectionError = "";
+  state.sourceVisibilityNeedsToolbar = false;
   if (!hasChromeTabs() || !hasChromeScripting()) {
     state.sourceDetectionError = "";
     state.detectedSource = { type: "preview", hasVideo: false };
@@ -1562,6 +1564,7 @@ async function detectActiveSource() {
     reconcileTranscriptBinding(nextSource);
     state.detectedSource = nextSource;
     state.sourceDetectionError = "";
+    state.sourceVisibilityNeedsToolbar = false;
     elements.activeSourceIcon.textContent = identity ? "V" : descriptor.kind === "pdf" ? "PDF" : "P";
     elements.activeSourceTitle.textContent = state.detectedSource.title;
     elements.activeSourceMeta.textContent = identity
@@ -1581,12 +1584,19 @@ async function detectActiveSource() {
     return true;
   } catch (error) {
     if (detectionSequence !== state.sourceDetectionSequence) return false;
-    state.sourceDetectionError = error?.message || "Could not inspect this tab.";
+    const activeUrlIsHidden = error?.code === "UNSUPPORTED_DOCUMENT_URL" && !String(tab?.url || "").trim();
+    const toolbarGuidance = "Exam-Cram cannot see this page yet. Click the Exam-Cram toolbar icon while this tab is active, then return to the panel.";
+    state.sourceDetectionError = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
+    state.sourceVisibilityNeedsToolbar = activeUrlIsHidden;
     reconcileTranscriptBinding(null);
     state.detectedSource = null;
     elements.activeSourceIcon.textContent = "!";
-    elements.activeSourceTitle.textContent = "Source unavailable";
-    elements.activeSourceMeta.textContent = error.message || "Could not inspect this tab.";
+    elements.activeSourceTitle.textContent = activeUrlIsHidden ? "Open this page from the Exam-Cram toolbar" : "Source unavailable";
+    elements.activeSourceMeta.textContent = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
+    if (activeUrlIsHidden) {
+      elements.accessBanner?.classList.add("hidden");
+      setStudyPageActionCopy("Open from the toolbar", "Click the Exam-Cram toolbar icon on this tab to grant one-time page access.");
+    }
     const permissionProblem = /cannot access|cannot read|host permission|permission/i.test(error?.message || "");
     const hostname = (() => {
       try {
@@ -3939,11 +3949,39 @@ function generateLocalStudySession({ title, sourceType, sourceUrl, rawText, ques
   };
 }
 function buildLocalVisualLesson(text, summary, terms) {
-  const labels = summary.slice(0, 4).map((item) => ({
-    id: makeNodeId(item),
-    label: makeConceptLabel(item),
-    detail: simplifyStatement(item)
-  }));
+  const sourceSentences = getSentences(text);
+  const usedNodeIds = new Set();
+  const labels = summary.slice(0, 4).map((item, index) => {
+    const label = makeConceptLabel(item) || `Idea ${index + 1}`;
+    const labelWords = getWords(label);
+    const sourceText = sourceSentences.find((sentence) => (
+      labelWords.some((word) => hasWholeWord(sentence, word))
+    )) || item;
+    const example = sourceSentences.find((sentence) => (
+      sentence !== sourceText
+      && labelWords.some((word) => hasWholeWord(sentence, word))
+      && !sameVisualText(sentence, sourceText)
+    )) || "";
+    const relatedTerm = terms.find((term) => !labelWords.includes(term));
+    const baseId = makeNodeId(label);
+    let id = baseId;
+    let suffix = 2;
+    while (usedNodeIds.has(id)) {
+      id = `${baseId}-${suffix}`.slice(0, 36);
+      suffix += 1;
+    }
+    usedNodeIds.add(id);
+    return {
+      id,
+      label,
+      detail: simplifyStatement(item),
+      why: relatedTerm
+        ? `Use ${label} to explain its relationship with ${toTitleCase(relatedTerm)} in this source.`
+        : `Use ${label} to explain the source's central relationship.`,
+      example,
+      sourceText
+    };
+  });
   const lower = text.toLowerCase();
   const blocks = [buildLocalInteractiveDemo(text, summary), {
     type: "concept_map",
@@ -4051,8 +4089,39 @@ function buildLocalInteractiveDemo(text, summary) {
 function makeNodeId(value) {
   return makeConceptLabel(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24) || crypto.randomUUID().slice(0, 8);
 }
+
+function isLocalBoilerplateText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  if (!text) return true;
+  return /^(?:skip|jump) to (?:main )?content\.?$/i.test(text)
+    || /^from wikipedia,? the free encyclopedia\.?$/i.test(text)
+    || /(?:wiki loves earth|upload photos(?: to help)? .*win (?:exciting )?prizes|fundraising banner|donate now)/i.test(text)
+    || /^(?:navigation|contents|main menu|site notice|privacy policy|terms of use)$/i.test(text)
+    || (/^(?:home|about|help|contact|log ?in|sign ?in)(?:\s*[|\u00b7\u203a>]\s*(?:home|about|help|contact|log ?in|sign ?in))+$/i.test(text));
+}
+
+function stripLocalBoilerplate(value) {
+  return String(value || "")
+    .replace(/(?:^|\n)\s*(?:(?:skip|jump) to (?:main )?content|from wikipedia,? the free encyclopedia)\.?\s*(?=\n|$)/gim, "\n")
+    .replace(/wiki loves earth:[^\r\n]{0,500}(?:\r?\n|$)/gim, " ")
+    .split(/\r?\n/)
+    .filter((line) => !isLocalBoilerplateText(line))
+    .join("\n");
+}
+
+function isLocalStudySentence(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length < 45 || text.length > 260 || isLocalBoilerplateText(text)) return false;
+  if (/\b(?:upload|win|click|subscribe|donate|sign up|log in|read more)\b/i.test(text)) return false;
+  if ((text.match(/[|>\u00b7\u203a]/g) || []).length >= 2) return false;
+  const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}'-]*/gu) || [];
+  if (words.length < 8) return false;
+  return /\b(?:is|are|was|were|becomes|become|means|refers|uses|use|used|moves|move|causes|cause|produces|produce|requires|require|includes|include|contains|contain|describes|describe|explains|explain|supports|support|converts|convert|forms|form|allows|allow|occurs|occur|happens|happen|changes|change|results|result|shows|show|supplies|supply|stores|store|releases|release|limits|limit|slows|slow)\b/i.test(text)
+    || words.length >= 12;
+}
+
 function normalizeText(text) {
-  return text
+  return stripLocalBoilerplate(String(text || ""))
     .replace(/\s+/g, " ")
     .replace(/\[[0-9]+\]/g, "")
     .trim()
@@ -4063,7 +4132,7 @@ function getSentences(text) {
   return text
     .split(/(?<=[.!?])\s+/)
     .map((sentence) => sentence.trim())
-    .filter((sentence) => sentence.length >= 45 && sentence.length <= 260)
+    .filter(isLocalStudySentence)
     .slice(0, 80);
 }
 
@@ -4440,8 +4509,28 @@ function simplifyStatement(sentence) {
     .slice(0, 150);
 }
 
+function dedupeRepeatedConceptWords(words) {
+  const result = [];
+  for (const word of words) {
+    if (result.at(-1) === word) continue;
+    result.push(word);
+  }
+  for (let start = 0; start < result.length; start += 1) {
+    for (let length = 1; start + length * 2 <= result.length; length += 1) {
+      const first = result.slice(start, start + length).join("|");
+      const second = result.slice(start + length, start + length * 2).join("|");
+      if (first === second) {
+        result.splice(start + length, length);
+        start = -1;
+        break;
+      }
+    }
+  }
+  return result;
+}
+
 function makeConceptLabel(sentence) {
-  const words = getWords(sentence).filter((word) => word.length > 3).slice(0, 4);
+  const words = dedupeRepeatedConceptWords(getWords(sentence).filter((word) => word.length > 3)).slice(0, 4);
   return words.length ? words.map(toTitleCase).join(" ") : "Key Concept";
 }
 function shuffle(items) {
@@ -5080,13 +5169,17 @@ function normalizeVisualModelForRender(value, summary = []) {
     idMap.set(visualId(rawId, index, "node"), id);
     const detail = visualText(source.detail || source.description || source.definition, "Review how this idea connects to the lesson.");
     const sourceText = visualText(source.sourceText || source.source || source.sourceAnchor || source.sourceExcerpt || detail, detail, 320);
+    const suppliedExample = visualText(source.example || source.application, "", 180);
+    const example = suppliedExample && !sameVisualText(suppliedExample, detail) && !sameVisualText(suppliedExample, sourceText)
+      ? suppliedExample
+      : "";
     return {
       id,
       label: visualText(source.label || source.name, `Concept ${index + 1}`, 70),
       symbol: visualText(source.symbol || source.icon, "", 12),
       detail,
       why: visualText(source.why || source.whyItMatters || source.role || model.objective, "It helps explain the relationship shown in the visual."),
-      example: visualText(source.example || source.application || sourceText, detail),
+      example,
       sourceText,
       sourceAnchor: sourceText,
       role: visualText(source.role || source.type, "concept", 40),
@@ -5294,9 +5387,10 @@ function synthesizeVisualModel(lesson = {}, summary = []) {
       id: node.id || `concept-${index + 1}`,
       label: node.label || `Concept ${index + 1}`,
       detail: node.detail || conceptBlock.intro,
-      why: conceptBlock.intro,
-      example: node.detail,
-      sourceText: node.detail
+      why: node.why || conceptBlock.intro,
+      example: node.example || "",
+      sourceText: node.sourceText || node.detail,
+      role: node.role || ""
     }));
     edges = Array.isArray(conceptBlock.edges) ? conceptBlock.edges : [];
   } else if (Array.isArray(processBlock?.steps) && processBlock.steps.length) {
@@ -5396,6 +5490,19 @@ function connectedVisualNodeIds(nodeId, edges) {
 function visualText(value, fallback = "", maxLength = 280) {
   const text = String(value ?? fallback ?? "").replace(/\s+/g, " ").trim();
   return text.slice(0, maxLength);
+}
+
+function sameVisualText(first, second) {
+  const normalize = (value) => visualText(value, "", 600)
+    .toLocaleLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const left = normalize(first);
+  const right = normalize(second);
+  return Boolean(left && right && (left === right || (left.length >= 28 && right.length >= 28 && (left.includes(right) || right.includes(left)))));
 }
 
 function visualId(value, index = 0, prefix = "item") {
@@ -6271,11 +6378,16 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
 
   const content = document.createElement("div");
   content.className = "vin-detail-content";
-  content.append(
-    renderVisualDetailField("What it means", node.detail),
-    renderVisualDetailField("Why it matters", node.why),
-    renderVisualDetailField("Example", node.example)
-  );
+  const visibleDetails = [];
+  const appendDistinctDetail = (label, value) => {
+    const text = visualText(value, "", 320);
+    if (!text || visibleDetails.some((previous) => sameVisualText(previous, text))) return;
+    visibleDetails.push(text);
+    content.append(renderVisualDetailField(label, text));
+  };
+  appendDistinctDetail("What it means", node.detail);
+  appendDistinctDetail("Why it matters", node.why);
+  appendDistinctDetail("Example", node.example);
   const relationships = (model?.edges || [])
     .filter((edge) => edge.from === node.id || edge.to === node.id)
     .map((edge) => {
@@ -6294,7 +6406,7 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
     relationshipField.append(list);
     content.append(relationshipField);
   }
-  if (node.sourceText) {
+  if (node.sourceText && !visibleDetails.some((previous) => sameVisualText(previous, node.sourceText))) {
     const source = document.createElement("blockquote");
     source.className = "vin-source-excerpt";
     source.append(
@@ -6982,6 +7094,7 @@ function formatSessionSource(session) {
 
 function renderArtifactSourceBanner(item) {
   if (!elements.artifactSourceBanner) return;
+  elements.artifactSourceBanner.classList.toggle("is-ai-fallback", Boolean(item?.usedLocalFallback));
   const binding = item?.sourceBinding || {};
   const sourceType = binding.sourceType || item?.sourceType || "notes";
   const sourceUrl = binding.url || item?.sourceUrl || "";
@@ -7011,6 +7124,114 @@ function renderArtifactSourceBanner(item) {
     createElement("strong", `This note is from ${sourceName}`),
     createElement("span", `${sourceMeta} · Saved to ${chapter}. Switching pages will not replace this source.`)
   );
+  renderAiFallbackBanner(item);
+}
+
+function renderAiFallbackBanner(item) {
+  if (!elements.artifactSourceBanner || !item?.usedLocalFallback) return;
+  const fallback = document.createElement("div");
+  fallback.className = "artifact-source-fallback";
+  fallback.append(
+    createElement("strong", "AI backend unavailable \u2014 showing local outline", "artifact-source-fallback__title"),
+    createElement("span", sanitizeAiFallbackReason(item.generationError), "artifact-source-fallback__reason")
+  );
+  const retry = document.createElement("button");
+  retry.type = "button";
+  retry.className = "secondary compact-button artifact-source-fallback__retry";
+  retry.textContent = "Retry with AI";
+  retry.addEventListener("click", () => void retryNoteWithAi(item, retry));
+  fallback.append(retry);
+  elements.artifactSourceBanner.append(fallback);
+}
+
+function sanitizeAiFallbackReason(value) {
+  const raw = String(value || "").replace(/\s+/g, " ").trim();
+  if (!raw) return "The AI backend did not return a usable note.";
+  if (/provider[_\s-]*unavailable|gemini.*(?:unavailable|failed)|invalid argument/i.test(raw)) {
+    return "Gemini could not complete this request.";
+  }
+  if (/failed to fetch|load failed|network|connection refused|econnrefused|timeout/i.test(raw)) {
+    return "The configured AI backend could not be reached.";
+  }
+  if (/api key|access token|unauthori[sz]ed|forbidden/i.test(raw)) {
+    return "The configured AI backend could not authenticate the request.";
+  }
+  if (/backend[_\s-]*error|validation|ground(?:ing)?/i.test(raw)) {
+    return "The AI backend could not validate the generated note.";
+  }
+  const safe = raw
+    .replace(/https?:\/\/\S+/gi, "backend endpoint")
+    .replace(/(?:api[_ -]?key|token|authorization)\s*[:=]\s*\S+/gi, "credential removed")
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .slice(0, 180);
+  return safe || "The AI backend did not return a usable note.";
+}
+
+function buildAiRetryStudyInput(item) {
+  const binding = item?.sourceBinding && typeof item.sourceBinding === "object" ? item.sourceBinding : {};
+  const rawText = String(binding.rawText || "").trim();
+  if (!rawText) throw new Error("This saved local outline does not retain enough source text to retry with AI. Create a fresh note from the source.");
+  return {
+    title: binding.title || item.title || "Study note",
+    sourceType: binding.sourceType || binding.type || item.sourceType || "notes",
+    sourceUrl: binding.url || item.sourceUrl || "",
+    sourceTabId: Number.isInteger(binding.tabId) ? binding.tabId : null,
+    sourceId: binding.sourceId || item.sourceId || "",
+    sourceFingerprint: binding.fingerprint || item.sourceFingerprint || makeContentFingerprint(rawText),
+    rawText,
+    documentType: binding.documentType || item.documentType || "",
+    pageCount: Math.max(0, Number(binding.pageCount || item.pageCount) || 0),
+    videoMediaId: binding.mediaId || item.videoMediaId || "",
+    transcriptFingerprint: binding.transcriptFingerprint || item.transcriptFingerprint || "",
+    timestampConfidence: binding.timestampConfidence || item.timestampConfidence || "",
+    transcriptProvenance: binding.transcriptProvenance || item.transcriptProvenance || "",
+    sourceSnapshot: binding.sourceSnapshot || item.sourceSnapshot || null,
+    videoSegments: Array.isArray(binding.videoSegments) ? binding.videoSegments : [],
+    collectionSources: Array.isArray(binding.collectionSources) ? binding.collectionSources : (Array.isArray(item.sources) ? item.sources : []),
+    chapterId: binding.chapterId || item.journeyChapterId || "",
+    chapterTitle: binding.chapterTitle || item.journeyChapterTitle || "Current chapter",
+    sourceRevisionHash: binding.sourceRevisionHash || item.sourceRevisionHash || "",
+    compositionRevisionHash: binding.compositionRevisionHash || item.compositionRevisionHash || "",
+    visualNoteCount: binding.visualNoteCount || 0,
+    sourceSnapshotCount: binding.sourceSnapshotCount || 0
+  };
+}
+
+async function retryNoteWithAi(item, trigger) {
+  const settings = await getStorage(STORAGE_KEYS.settings, {});
+  if (!getConfiguredApiEndpoint(settings)) {
+    showStatus("Configure and start the AI backend before retrying this local outline.", true);
+    return;
+  }
+  const generationToken = ++state.generationToken;
+  trigger.disabled = true;
+  setBusy(true, "Retrying note generation with AI...");
+  startProgress("Retrying AI note generation...", 12);
+  try {
+    const artifact = await createAndRecordStudyArtifact({
+      ...buildAiRetryStudyInput(item),
+      generationToken
+    });
+    if (generationToken !== state.generationToken || !artifact) return;
+    if (artifact.usedLocalFallback) {
+      finishProgress("Local outline still active.");
+      showStatus(`AI generation is still unavailable. ${sanitizeAiFallbackReason(artifact.generationError)}`, true);
+    } else {
+      finishProgress("AI visual note ready.");
+      showStatus("AI visual note created from the saved source.");
+    }
+  } catch (error) {
+    if (generationToken === state.generationToken) {
+      failProgress("AI retry failed.");
+      showStatus(error?.message || "Could not retry this note with AI.", true);
+    }
+  } finally {
+    if (generationToken === state.generationToken) {
+      setBusy(false);
+      trigger.disabled = false;
+    }
+  }
 }
 
 function isRenderableQuizArtifact(artifact) {
@@ -8354,7 +8575,8 @@ async function renderJourney() {
       value: `${metrics.focusMinutes}m`,
       detail: focusTone.label,
       tone: focusTone,
-      asset: "assets/journey/hourglass-focus-clean-v2.png"
+      asset: "assets/journey/hourglass-focus-clean-v2.png",
+      hasMetricValue: metrics.focusMinutes > 0
     })
   );
 
@@ -8661,9 +8883,16 @@ function createJourneySandHourglass({ kind, asset, sandState, tone }) {
   return hourglass;
 }
 
-function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asset }) {
+function getJourneyMetricStateClass(kind, tone, hasMetricValue = false) {
+  if (kind === "focus") return hasMetricValue ? "state-performance" : "state-ready";
+  if (tone?.key === "attention") return "state-attention";
+  return tone?.key === "unscored" ? "state-ready" : "state-performance";
+}
+
+function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asset, hasMetricValue = false }) {
   const card = document.createElement("section");
-  card.className = `journey-metric journey-metric--${kind}`;
+  const stateClass = getJourneyMetricStateClass(kind, tone, hasMetricValue);
+  card.className = ["journey-metric", "journey-metric--" + kind, stateClass].join(" ");
   card.dataset.tone = tone.key;
   card.style.setProperty("--journey-metric-color", tone.color);
   card.style.setProperty("--journey-metric-wash", tone.wash);
@@ -8673,11 +8902,12 @@ function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asse
   const copy = document.createElement("div");
   copy.className = "journey-metric__copy";
   copy.append(createElement("span", label, "journey-metric__label"));
-  if (kind !== "focus") copy.append(createElement("strong", value, "journey-metric__value"));
+  copy.append(createElement("strong", value, "journey-metric__value"));
   copy.append(createElement("small", detail, "journey-metric__detail"));
 
   const visual = document.createElement("div");
   visual.className = `journey-metric__visual journey-metric__visual--${kind}`;
+  visual.setAttribute("aria-hidden", "true");
   if (kind === "progress" || kind === "average") {
     visual.append(createJourneySandHourglass({ kind, asset, sandState, tone }));
   } else {
@@ -8688,9 +8918,6 @@ function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asse
     artwork.decoding = "async";
     artwork.draggable = false;
     visual.append(artwork);
-    const focusValue = createElement("strong", value, "journey-metric__focus-value");
-    focusValue.setAttribute("aria-hidden", "true");
-    visual.append(focusValue);
   }
 
   card.append(copy, visual);

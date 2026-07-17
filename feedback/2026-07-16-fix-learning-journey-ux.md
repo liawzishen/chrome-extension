@@ -7,6 +7,14 @@
 - Messages: `46`
 - Included: user messages, assistant messages, and local image paths.
 - Excluded: internal reasoning, tool calls, and tool outputs.
+## Session Evidence
+
+- **Session ID:** `019f6c5e-7392-78f0-9104-5962a6fd237a`
+- **Evidence role:** Supporting UX implementation
+- **Scope:** Learning Journey UX refinement.
+- **Recorded implementation activity:** `49` file-change events across `9` unique file paths.
+- **Build Week use:** retain this export as provenance; submit only the designated primary build Session ID.
+
 
 ---
 
@@ -350,4 +358,3 @@ I’ve isolated the mismatch: the current UI is a modal card with summaries and 
 ## 46. Assistant
 
 The new table structure is in; I’m correcting a small syntax slip and then I’ll validate it against the reference again.
-

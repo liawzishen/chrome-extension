@@ -7,14 +7,22 @@ Markdown exports of every Codex chat currently associated with this project.
 - Excluded: internal reasoning, tool calls, and tool outputs.
 - Order: chats and messages are chronological.
 
+## OpenAI Build Week Submission Evidence
+
+The [submission evidence record](HACKATHON_SUBMISSION_EVIDENCE.md) identifies the primary `/feedback` Session ID required for the Devpost submission, maps all supporting sessions, and lists remaining submission actions.
+
+The index also includes a supporting `design_test` validation conversation. It identified that a design brief targeting `popup.html`, `popup.js`, and `popup.css` was opened in a Vite workspace, then located this extension repository before any incorrect implementation began.
+
+
 ## Chats
 
-| Created | Chat | Messages | Export |
-| --- | --- | ---: | --- |
-| 2026-07-15 | Review | 1 | [2026-07-15-review.md](2026-07-15-review.md) |
-| 2026-07-15 | Fix quiz generation grounding | 95 | [2026-07-15-fix-quiz-generation-grounding.md](2026-07-15-fix-quiz-generation-grounding.md) |
-| 2026-07-16 | Review optimization.md | 39 | [2026-07-16-review-optimization-md.md](2026-07-16-review-optimization-md.md) |
-| 2026-07-16 | Implement from md files | 17 | [2026-07-16-implement-from-md-files.md](2026-07-16-implement-from-md-files.md) |
-| 2026-07-16 | Read md files | 67 | [2026-07-16-read-md-files.md](2026-07-16-read-md-files.md) |
-| 2026-07-16 | Fix learning journey UX | 46 | [2026-07-16-fix-learning-journey-ux.md](2026-07-16-fix-learning-journey-ux.md) |
-| 2026-07-17 | Create chat feedback files | 20 | [2026-07-17-create-chat-feedback-files.md](2026-07-17-create-chat-feedback-files.md) |
+| Created | Session ID | Evidence role | Chat | Messages | Export |
+| --- | --- | --- | --- | ---: | --- |
+| 2026-07-15 | `019f65de-f5de-7de3-bf49-0e8e2fd03bf9` | Review evidence | Review | 1 | [2026-07-15-review.md](2026-07-15-review.md) |
+| 2026-07-15 | `019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f` | Primary build evidence — submit this `/feedback` Session ID | Fix quiz generation grounding | 95 | [2026-07-15-fix-quiz-generation-grounding.md](2026-07-15-fix-quiz-generation-grounding.md) |
+| 2026-07-16 | `019f699b-bcab-7a72-8902-bccb2c0cc8f1` | Supporting optimization evidence | Review optimization.md | 39 | [2026-07-16-review-optimization-md.md](2026-07-16-review-optimization-md.md) |
+| 2026-07-16 | `019f6b1d-de25-76e3-9ff0-3fd5a9c0936e` | Supporting design validation | Design-Test: Review md files and implement | 5 | [2026-07-16-design-test-review-md-files-and-implement.md](2026-07-16-design-test-review-md-files-and-implement.md) |
+| 2026-07-16 | `019f6b22-834e-7a12-8ab6-b611599b776f` | Supporting implementation evidence | Implement from md files | 17 | [2026-07-16-implement-from-md-files.md](2026-07-16-implement-from-md-files.md) |
+| 2026-07-16 | `019f6c01-05a1-73b1-bd6d-5c7f1de88cf5` | Supporting specification implementation | Read md files | 67 | [2026-07-16-read-md-files.md](2026-07-16-read-md-files.md) |
+| 2026-07-16 | `019f6c5e-7392-78f0-9104-5962a6fd237a` | Supporting UX implementation | Fix learning journey UX | 46 | [2026-07-16-fix-learning-journey-ux.md](2026-07-16-fix-learning-journey-ux.md) |
+| 2026-07-17 | `019f6f1e-5e5c-7592-868b-3470785c446f` | Evidence-export session — do not submit as primary | Create chat feedback files | 20 | [2026-07-17-create-chat-feedback-files.md](2026-07-17-create-chat-feedback-files.md) |

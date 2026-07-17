@@ -7,6 +7,14 @@
 - Messages: `95`
 - Included: user messages, assistant messages, and local image paths.
 - Excluded: internal reasoning, tool calls, and tool outputs.
+## Session Evidence
+
+- **Session ID:** `019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f`
+- **Evidence role:** Primary build evidence — submit this `/feedback` Session ID
+- **Scope:** Quiz-generation grounding and source-evidence implementation.
+- **Recorded implementation activity:** `224` file-change events across `41` unique file paths.
+- **Build Week use:** retain this export as provenance; submit only the designated primary build Session ID.
+
 
 ---
 
@@ -1009,4 +1017,3 @@ Verification:
 - Playwright hover, keyboard, touch, pause, and resume checks — passed
 
 No unresolved requirement ambiguity remains; I implemented selected and previewed trees as moving simultaneously, matching your screenshot.
-

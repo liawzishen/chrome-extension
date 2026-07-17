@@ -14,7 +14,8 @@ const {
   normalizeNotes,
   normalizeQuizArtifact,
   prepareQuizArtifactInput,
-  prepareStudyNotesInput
+  prepareStudyNotesInput,
+  stripGeminiUnsupportedSchemaKeywords
 } = require("../server.js");
 
 const videoSegments = [
@@ -903,7 +904,7 @@ test("video visual notes retain grounded timestamp references and never expose q
   assert.equal(quiz.questions[0].sourceRef.segmentId, "seg-0001");
 });
 
-test("video visual nodes reject claims contaminated beyond their exact transcript segment", () => {
+test("video visual nodes repair claims contaminated beyond their exact transcript segment", () => {
   const input = prepareStudyNotesInput({
     sourceType: "video",
     title: "Transport video",
@@ -921,16 +922,49 @@ test("video visual nodes reject claims contaminated beyond their exact transcrip
     example: videoSegments[0].text
   };
 
-  assert.throws(
-    () => normalizeNotes({
-      title: "Transport video",
-      summary: ["Membrane transport follows gradients or uses energy."],
-      visualLesson: { title: "Transport", visualModel },
-      terms: ["Diffusion", "Osmosis", "Active transport"],
-      goals: ["Compare transport mechanisms"]
-    }, input),
-    /visual node claim is not grounded/i
-  );
+  const note = normalizeNotes({
+    title: "Transport video",
+    summary: ["Membrane transport follows gradients or uses energy."],
+    visualLesson: { title: "Transport", visualModel },
+    terms: ["Diffusion", "Osmosis", "Active transport"],
+    goals: ["Compare transport mechanisms"]
+  }, input);
+
+  const repaired = note.visualLesson.visualModel.nodes.find((node) => node.id === "node-1");
+  assert.ok(repaired);
+  assert.equal(repaired.sourceSegmentId, "seg-0001");
+  assert.match(repaired.detail, /diffusion moves particles down a concentration gradient/i);
+  assert.doesNotMatch(JSON.stringify(repaired), /Java int|primitive type/i);
+});
+
+test("cheat-sheet grounding repairs one bad row instead of rejecting the generated note", () => {
+  const input = prepareStudyNotesInput({
+    sourceType: "video",
+    title: "Transport video",
+    sourceUrl: "https://www.youtube.com/watch?v=abcDEF12345",
+    sourceFingerprint: "video-fingerprint",
+    rawText: videoSegments.map((segment) => segment.text).join(" "),
+    videoSegments
+  });
+  const note = normalizeNotes({
+    title: "Transport video",
+    summary: ["Membrane transport follows gradients or uses energy."],
+    visualLesson: { title: "Transport", visualModel: makeVideoVisualModel() },
+    cheatSheet: { rows: [{
+      topic: "Java primitive type",
+      mainIdea: "A Java int stores a whole-number value.",
+      keyFacts: "Primitive types are built into Java.",
+      example: "The value 42 uses int.",
+      sourceSegmentId: "seg-0001",
+      sourceAnchor: videoSegments[0].text
+    }] },
+    terms: ["Diffusion", "Osmosis", "Active transport"],
+    goals: ["Compare transport mechanisms"]
+  }, input);
+
+  assert.ok(note.cheatSheet.rows.length >= 3);
+  assert.doesNotMatch(JSON.stringify(note.cheatSheet), /Java int|primitive type|value 42/i);
+  assert.match(note.cheatSheet.rows[0].mainIdea, /Diffusion moves particles down a concentration gradient/i);
 });
 
 test("collection visual notes and quiz questions retain exact saved source IDs", () => {
@@ -1076,7 +1110,7 @@ test("collection visual notes accept grounded node coverage for every included s
   );
 });
 
-test("collection visual nodes reject claims contaminated beyond their exact saved source", () => {
+test("collection visual nodes repair claims contaminated beyond their exact saved source", () => {
   const input = prepareStudyNotesInput({
     sourceType: "collection",
     title: "Transport collection",
@@ -1123,14 +1157,40 @@ test("collection visual nodes reject claims contaminated beyond their exact save
     }
   ];
 
-  assert.throws(
-    () => normalizeNotes({
-      title: "Transport collection",
-      summary: ["Selective membranes and gradients shape transport."],
-      visualLesson: { title: "Transport", visualModel: makeVisualModel(nodes) },
-      terms: [],
-      goals: []
-    }, input),
-    /visual node claim is not grounded/i
-  );
+  const note = normalizeNotes({
+    title: "Transport collection",
+    summary: ["Selective membranes and gradients shape transport."],
+    visualLesson: { title: "Transport", visualModel: makeVisualModel(nodes) },
+    terms: [],
+    goals: []
+  }, input);
+  const repaired = note.visualLesson.visualModel.nodes.find((node) => node.id === "membrane");
+  assert.ok(repaired);
+  assert.equal(repaired.sourceId, "source-a");
+  assert.match(repaired.detail, /Cell membranes control transport through selective permeability/i);
+  assert.doesNotMatch(JSON.stringify(repaired), /Java int|primitive type/i);
+});
+
+test("strips unsupported item-count keywords from every Gemini schema path only", () => {
+  const findUnsupportedKeyword = (value) => {
+    if (Array.isArray(value)) return value.some(findUnsupportedKeyword);
+    if (!value || typeof value !== "object") return false;
+    return Object.entries(value).some(([key, child]) => (
+      key === "minItems" || key === "maxItems" || findUnsupportedKeyword(child)
+    ));
+  };
+
+  const studyNotesSchema = getResponseSchema("study_notes");
+  assert.equal(findUnsupportedKeyword(studyNotesSchema), true, "provider-neutral schema retains count guidance");
+  for (const schemaName of [
+    "study_notes",
+    "quiz_only",
+    "visual_followup",
+    "journey_summary",
+    "classify_sources",
+    "video_transcript",
+    "quiz_session"
+  ]) {
+    assert.equal(findUnsupportedKeyword(stripGeminiUnsupportedSchemaKeywords(getResponseSchema(schemaName))), false, schemaName);
+  }
 });

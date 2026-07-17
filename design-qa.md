@@ -1,44 +1,64 @@
-# Import review design QA
+# Journey hourglass and chapter timeline QA
 
-- Source visual truth: `C:\Users\Dell\Pictures\Screenshots\Screenshot 2026-07-17 130140.png`
-- Prototype capture: `C:\Users\Dell\AppData\Local\Temp\import-review-final-alignment.png`
-- Full same-viewport comparison: `C:\Users\Dell\AppData\Local\Temp\import-review-final-comparison.png`
-- Focused header/table comparison: `C:\Users\Dell\AppData\Local\Temp\import-review-focused-comparison.png`
-- Review viewport: 812 x 557 px.
-- Prototype state: two local import fixtures (one readable file and one skipped unreadable file). The supplied reference contains seven files, so row density and the inline count intentionally differ with the data set.
+- Source visual truth, average mask defect: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-63a432fb-a5db-4974-95e4-6b55e4025cf0.png`
+- Source visual truth, chapter timeline: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-f1df2799-0319-48be-8af4-153f282baa29.png`
+- Browser-rendered desktop metrics capture: `C:\Users\Dell\AppData\Local\Temp\journey-average-mask-final-desktop.png`
+- Browser-rendered desktop timeline capture: `C:\Users\Dell\AppData\Local\Temp\journey-timeline-final-desktop.png`
+- Browser-rendered mobile timeline capture: `C:\Users\Dell\AppData\Local\Temp\journey-timeline-final-mobile.png`
+- Desktop viewport: `842 x 820`.
+- Mobile viewport: `360 x 640`.
+- Local data state: Progress `0%`, Average unscored, Focus `0m`. The Average reference shows `40%`, so its active sand fill could not be reproduced without changing stored learning data.
 
-**Scope**
+**Comparison Evidence**
 
-- The import review is rebuilt as the reference's full-surface Folder/Status table, replacing the oversized modal card and summary blocks.
-- Folder-group headers, indented file entries, compact `Move` controls, native chapter selectors, low-match treatment, and a fixed confirmation footer retain the existing import-planning behavior.
-
-**Iteration Log**
-
-- Iteration 1 found a P1 fidelity issue: the review used a rounded overlay with stacked summary cards and nested row cards, while the source uses a flat table hierarchy.
-- Iteration 2 replaces that hierarchy with a flush panel, compact group/file rows, aligned `Folder` and `Status` headings, a pale-mint `Confirm Import` action followed by neutral `Cancel`, and source-like spacing. The final comparison captures above were reviewed side by side.
-
-**Fidelity Review**
-
-- Typography and copy: the title, inline file count, column labels, chapter name, file label, and action text use the source hierarchy and wording.
-- Layout and spacing: the header, separator, indented child rows, destination controls, and bottom action bar align to the same narrow desktop viewport; the footer begins at the source-equivalent bottom edge.
-- Colors and borders: the panel stays light and flat, table rules remain subtle, the review row is softly neutral, confirmation is pale mint, and cancellation is restrained gray.
-- Assets: the product has no matching folder/file icon asset. A compact existing file-type label remains instead of adding a fake icon. This is a non-blocking P3 follow-up.
-
-**Interaction and Responsive Checks**
-
-- Changing `document-frame-child.html` to `Trees` immediately re-planned the group header and selected destination; the core reassignment control remains functional.
-- At 360 x 640 px, the review panel fills the viewport with no horizontal overflow, its chapter selector remains 250 px wide, and the footer stays visible.
-- Browser console errors: none (`[]`).
+- The Average source and final desktop metric capture were opened together in one visual comparison input.
+- The timeline source and final desktop and mobile captures were opened together in one visual comparison input.
+- The focused mask inspection confirmed the source PNG corners are fully opaque black and that the rendered top and bottom Average reservoirs now compute to `mask-mode: luminance`.
+- The selected Current chapter row was captured in its active state. It retains one title, one date, and one status chip.
 
 **Findings**
 
-- No actionable P0, P1, or P2 issues remain.
-- P3: real folder/file icons and the denser seven-file source state would make the fixture comparison even closer; neither blocks the production flow or visual hierarchy.
+- [P2 fixed] Average sand escaped the glass chamber.
+  Location: `.journey-hourglass__reservoir` and the Average top and bottom reservoirs in `popup.css`.
+  Evidence: The supplied defect showed two rounded yellow blobs crossing the glass outline. Asset inspection found black source-mask pixels with alpha `255`, so alpha masking exposed the entire reservoir rectangle.
+  Impact: The Average panel looked broken whenever a score produced visible sand.
+  Fix: Use luminance mask mode, move the reservoirs to the measured chamber bounds, remove the sand's independent rounded clipping, and align the stream with the glass neck.
+  Post-fix evidence: The browser-rendered unscored state shows the clean glass shell with no escaped fill; the computed reservoir mask mode is `luminance`. The score-dependent fill behavior remains driven by the existing metric pipeline.
+
+- [P2 fixed] The chapter list did not match the requested active-timeline hierarchy.
+  Location: `.journey-route` and `.journey-node` in `popup.css`.
+  Evidence: The earlier compact numbered rows lacked the full-width soft-blue active surface, generous rail spacing, and clear title/date/status rhythm of the reference.
+  Impact: The current chapter was hard to distinguish in a long learning history.
+  Fix: Use a 52px circular chapter marker on a continuous light rail, 86px desktop rows, a soft-blue selected surface, one right-aligned status chip, and a compact stacked mobile state.
+  Post-fix evidence: `journey-timeline-final-desktop.png` shows the selected Current chapter as one soft-blue row; `journey-timeline-final-mobile.png` shows the state chip below the title/date without overflow.
+
+- [P3] The reference uses document pictograms; the implementation retains existing sequential chapter markers.
+  Location: `.journey-node-orb`.
+  Evidence: The visual hierarchy, rail, selected state, metadata, and status placement match, while the available product assets contain no compatible document icon.
+  Impact: Minor visual difference only; the chapter order is directly legible.
+  Follow-up: Replace the sequence marker with a supplied or product-standard document icon when one becomes available.
+
+**Fidelity Review**
+
+- Fonts and typography: The timeline keeps strong title weight, muted 12px date metadata, and one readable 12px status chip. The metric labels, values, and semantic states keep the existing Journey hierarchy.
+- Spacing and layout rhythm: The desktop timeline uses a consistent 58px rail column, 16px content gap, 86px row cadence, and 22px selected-row radius. Mobile reduces the rail and places the chip on its own second line.
+- Colors and visual tokens: The selected row uses a restrained blue surface and border, current markers use a subtle blue ring, and status colors continue to distinguish progress, review, completion, and planned states without color-only communication.
+- Image quality and asset fidelity: The existing glass, sand textures, and focus image remain the only metric artwork. No replacement asset, CSS drawing, SVG, placeholder, or generated image was introduced.
+- Copy and content: Chapter sort order, labels, activity dates, status wording, selection behavior, saved artifacts, and metric values remain data-driven and unchanged.
+
+**Accessibility and Runtime**
+
+- Chapter rows remain buttons with `aria-pressed`; the selected row retains `aria-current="step"`.
+- The focus-visible outline, touch-sized rows, and mobile status reflow remain available.
+- Decorative metric artwork is still hidden from assistive technologies.
+- At `360px`, document client width and scroll width both measured `345px`; no horizontal overflow occurred.
+- Browser console errors: `[]`.
 
 **Validation**
 
-- `node --test tests/popup-journey-responsive.test.js` — passed (24 tests).
-- `npm test` — passed (368 tests).
-- `npm run check` — passed.
+- `node --test tests\popup-journey-responsive.test.js`: passed, 25 tests.
+- `npm run test`: passed, 369 tests.
+- `npm run check`: passed.
+- `git diff --check`: passed; only pre-existing line-ending warnings were reported.
 
 final result: passed

@@ -7,6 +7,14 @@
 - Messages: `67`
 - Included: user messages, assistant messages, and local image paths.
 - Excluded: internal reasoning, tool calls, and tool outputs.
+## Session Evidence
+
+- **Session ID:** `019f6c01-05a1-73b1-bd6d-5c7f1de88cf5`
+- **Evidence role:** Supporting specification implementation
+- **Scope:** Specification-driven implementation work.
+- **Recorded implementation activity:** `32` file-change events across `12` unique file paths.
+- **Build Week use:** retain this export as provenance; submit only the designated primary build Session ID.
+
 
 ---
 
@@ -512,4 +520,3 @@ Verified:
 - Confirming import showed: “All imported sources are saved in their chapters…” with “Generate later” queue rows.
 
 The live AI-provider import check remains pending because this environment has no `GEMINI_API_KEY`. Manual Build remains unsilenced; in this preview it used the local fallback and successfully created a note.
-

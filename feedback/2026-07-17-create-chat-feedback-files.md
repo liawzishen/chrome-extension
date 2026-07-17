@@ -7,6 +7,14 @@
 - Messages: `20`
 - Included: user messages, assistant messages, and local image paths.
 - Excluded: internal reasoning, tool calls, and tool outputs.
+## Session Evidence
+
+- **Session ID:** `019f6f1e-5e5c-7592-868b-3470785c446f`
+- **Evidence role:** Evidence-export session — do not submit as primary
+- **Scope:** Created the Markdown export and compliance evidence package.
+- **Recorded implementation activity:** `0` file-change events across `0` unique file paths.
+- **Build Week use:** retain this export as provenance; submit only the designated primary build Session ID.
+
 
 ---
 

@@ -6,7 +6,8 @@ const {
   getCheatSheetTargetRowCount,
   hasGroundedClaim,
   inferPdfPage,
-  normalizeCheatSheet
+  normalizeCheatSheet,
+  normalizeCheatSheetForGeneration
 } = require("./cheat-sheet-utils.js");
 
 loadEnv();
@@ -631,7 +632,10 @@ async function generateGeminiText(systemText, userText, maxOutputTokens, schemaN
 
 async function generateGeminiParts(systemText, parts, maxOutputTokens, schemaName) {
   if (!GEMINI_API_KEY) throw createHttpError(500, "Missing GEMINI_API_KEY in .env.");
-  const schema = getResponseSchema(schemaName);
+  // Gemini currently rejects nested minItems/maxItems even though our server-side
+  // normalizers and prompt contracts still enforce those counts. Keep the source
+  // schema intact for other providers and strip only the unsupported transport keys.
+  const schema = stripGeminiUnsupportedSchemaKeywords(getResponseSchema(schemaName));
   const payload = {
     systemInstruction: {
       parts: [{ text: systemText }]
@@ -1411,6 +1415,17 @@ function getResponseSchema(schemaName) {
   return getQuizSchema();
 }
 
+function stripGeminiUnsupportedSchemaKeywords(value) {
+  if (Array.isArray(value)) return value.map(stripGeminiUnsupportedSchemaKeywords);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "minItems" || key === "maxItems") continue;
+    result[key] = stripGeminiUnsupportedSchemaKeywords(child);
+  }
+  return result;
+}
+
 function getVideoTranscriptSchema() {
   return {
     type: "object",
@@ -1855,11 +1870,20 @@ function normalizeNotes(note, input) {
   const summary = normalizeSummary(note.summary, input.rawText);
   const visualLesson = normalizeVisualLesson(note.visualLesson, summary, input);
   const title = String(note.title || input.title || "Study note").slice(0, 140);
-  const cheatSheet = normalizeCheatSheet(note.cheatSheet, {
+  const cheatSheet = normalizeCheatSheetForGeneration(note.cheatSheet, {
     ...input,
     title,
     summary,
-    visualModel: visualLesson.visualModel
+    visualModel: visualLesson.visualModel,
+    onGroundingFailure: ({ index, row, error, action }) => {
+      reportGroundingRepair("cheat-sheet row", index, error, {
+        mainIdea: row?.mainIdea || row?.idea || row?.detail,
+        keyFacts: row?.keyFacts || row?.keyFact || row?.rule,
+        example: row?.example || row?.application,
+        sourceAnchor: row?.sourceAnchor || row?.evidence?.anchor,
+        action
+      });
+    }
   });
   return {
     title,
@@ -2910,15 +2934,61 @@ function getCollectionSourceBlock(rawText, sources, sourceId) {
   return text.slice(start + marker.length, next);
 }
 
+function normalizeGroundingText(value, maxLength = 4000) {
+  return cleanOutputText(value)
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
 function hasEvidenceOverlap(sourceBlock, citedText) {
-  const source = cleanOutputText(sourceBlock).toLocaleLowerCase();
-  const citation = cleanOutputText(citedText).toLocaleLowerCase();
+  const rawSource = cleanOutputText(sourceBlock).toLocaleLowerCase();
+  const rawCitation = cleanOutputText(citedText).toLocaleLowerCase();
+  if (!rawSource || !rawCitation) return false;
+  if (/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(rawSource)) {
+    const fragments = rawCitation.match(/[\u0e00-\u0e7f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+/gu) || [];
+    if (fragments.some((fragment) => rawSource.includes(fragment))) return true;
+  }
+
+  const source = normalizeGroundingText(rawSource, 100000);
+  const citation = normalizeGroundingText(rawCitation, 1200);
   if (!source || !citation) return false;
-  if (citation.length >= 18 && source.includes(citation.slice(0, 240))) return true;
-  const tokens = [...new Set(citation.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length > 3))];
-  if (!tokens.length) return false;
-  const matches = tokens.filter((token) => source.includes(token)).length;
-  return matches >= Math.min(3, tokens.length) && matches / tokens.length >= 0.35;
+  if (citation.length >= 8 && source.includes(citation)) return true;
+  const orderedTerms = citation
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length > 3 && !QUESTION_GROUNDING_STOP_WORDS.has(token));
+  if (!orderedTerms.length) return false;
+  if (orderedTerms.slice(1).some((term, index) => source.includes(`${orderedTerms[index]} ${term}`))) return true;
+  const sourceTerms = new Set(source.split(/[^\p{L}\p{N}]+/u));
+  const terms = [...new Set(orderedTerms)];
+  const matches = terms.filter((token) => sourceTerms.has(token)).length;
+  const requiredMatches = terms.length >= 5 ? 2 : 1;
+  return matches >= requiredMatches && matches / terms.length >= 0.2;
+}
+
+function reportGroundingRepair(itemKind, index, error, values = {}) {
+  const message = String(error?.message || "grounding validation failed");
+  const field = /key facts?/i.test(message)
+    ? "keyFacts"
+    : /main idea/i.test(message)
+      ? "mainIdea"
+      : /example/i.test(message)
+        ? "example"
+        : /citation|anchor/i.test(message)
+          ? "sourceAnchor"
+          : "detail";
+  const value = cleanOutputText(values[field] || values.detail || values.sourceAnchor || "").slice(0, 220);
+  console.warn("[Exam-Cram] Corrected AI grounding issue.", {
+    item: `${itemKind} ${Number(index) + 1}`,
+    field,
+    value,
+    reason: message.slice(0, 260),
+    action: values.action || "repaired or omitted"
+  });
 }
 
 function resolveVideoSegment(segments, requestedId, sourceText) {
@@ -3045,9 +3115,10 @@ function normalizeVisualModel(value, summary = [], sourceContext = {}) {
     const sanitizedKey = sanitizeVisualId(rawId, "");
     if (sanitizedKey && !idMap.has(sanitizedKey)) idMap.set(sanitizedKey, id);
     idMap.set(id, id);
-    const label = cleanOutputText(node.label || `Concept ${index + 1}`).slice(0, 70);
-    const detail = cleanOutputText(node.detail || label).slice(0, 220);
-    const sourceAnchor = cleanOutputText(node.sourceAnchor || detail).slice(0, 180);
+    let label = cleanOutputText(node.label || `Concept ${index + 1}`).slice(0, 70);
+    let detail = cleanOutputText(node.detail || label).slice(0, 220);
+    let sourceAnchor = cleanOutputText(node.sourceAnchor || detail).slice(0, 180);
+    let example = cleanOutputText(node.example || detail).slice(0, 180);
     const sourceSegment = sourceContext.sourceType === "video"
       ? resolveVideoSegment(sourceContext.videoSegments, node.sourceSegmentId, sourceAnchor || detail)
       : null;
@@ -3062,7 +3133,23 @@ function normalizeVisualModel(value, summary = [], sourceContext = {}) {
     }
     const exactSource = sourceSegment?.text
       || (collectionSource ? getCollectionSourceBlock(sourceContext.rawText, sourceContext.collectionSources, collectionSource.id) : sourceContext.rawText);
-    assertVisualNodeGrounded(exactSource, { label, detail, example: node.example, sourceAnchor });
+    const groundingFailures = getVisualNodeGroundingFailures(exactSource, { label, detail, example, sourceAnchor });
+    if (groundingFailures.length) {
+      const suppliedValues = { label, detail, example, sourceAnchor };
+      const repaired = repairVisualNodeGrounding(exactSource, { label, detail, example, sourceAnchor });
+      if (!repaired) {
+        groundingFailures.forEach((failure) => reportGroundingRepair("visual node", index, new Error(failure.message), {
+          ...suppliedValues,
+          action: "dropped because its citation could not be repaired"
+        }));
+        return null;
+      }
+      ({ label, detail, example, sourceAnchor } = repaired);
+      groundingFailures.forEach((failure) => reportGroundingRepair("visual node", index, new Error(failure.message), {
+        ...suppliedValues,
+        action: "repaired from its cited source phrase"
+      }));
+    }
     const sourcePage = resolveEvidencePage(node.sourcePage, sourceAnchor || detail, sourceContext, collectionSource);
     const sourceRef = buildQuestionSourceRef({
       sourceContext,
@@ -3078,7 +3165,7 @@ function normalizeVisualModel(value, summary = [], sourceContext = {}) {
       role: cleanOutputText(node.role || `Key part of ${model.title || "the topic"}`).slice(0, 120),
       detail,
       why: cleanOutputText(node.why || `This helps explain how ${label} affects the topic.`).slice(0, 200),
-      example: cleanOutputText(node.example || detail).slice(0, 180),
+      example,
       sourceAnchor,
       sourceId: collectionSource?.id || sourceContext.sourceId || "",
       sourceSegmentId: sourceSegment?.id || "",
@@ -3086,11 +3173,17 @@ function normalizeVisualModel(value, summary = [], sourceContext = {}) {
       sourceTimestamp: sourceSegment ? Math.round(sourceSegment.startMs / 1000) : null,
       sourceRef
     };
-  });
+  }).filter(Boolean);
+  if (nodes.length < 3) {
+    const fallbackModel = attachVideoSegmentsToVisualModel(buildFallbackVisualModel(summary), sourceContext);
+    assertCollectionVisualSourceCoverage(fallbackModel.nodes, sourceContext);
+    return fallbackModel;
+  }
   const validNodeIds = new Set(nodes.map((node) => node.id));
   const resolveNodeId = (id) => {
     const raw = String(id || "").trim();
-    return idMap.get(raw.toLowerCase()) || idMap.get(sanitizeVisualId(raw, "")) || (validNodeIds.has(raw) ? raw : "");
+    const candidate = idMap.get(raw.toLowerCase()) || idMap.get(sanitizeVisualId(raw, "")) || raw;
+    return validNodeIds.has(candidate) ? candidate : "";
   };
 
   const seenEdges = new Set();
@@ -3171,19 +3264,55 @@ function assertCollectionVisualSourceCoverage(nodes, sourceContext = {}) {
   }
 }
 
-function assertVisualNodeGrounded(sourceText, node) {
+function getVisualNodeGroundingFailures(sourceText, node) {
   const source = String(sourceText || "").trim();
-  if (!source) return;
+  if (!source) return [];
+  const failures = [];
   if (!hasGroundedClaim(source, node.sourceAnchor)) {
-    throw new Error("AI visual node citation is not supported by the saved source.");
+    failures.push({ field: "sourceAnchor", message: "AI visual node citation is not supported by the saved source." });
   }
-  if (!hasGroundedClaim(source, `${node.label || ""} ${node.detail || ""}`)) {
-    throw new Error("AI visual node claim is not grounded in the saved source.");
+  // Validate the explanatory text itself. A valid label must not mask an
+  // unrelated detail just because both strings are evaluated together.
+  if (!hasGroundedClaim(source, node.detail || node.label || "")) {
+    failures.push({ field: "detail", message: "AI visual node claim is not grounded in the saved source." });
   }
   const example = cleanOutputText(node.example || "");
   if (example && !hasGroundedClaim(source, example)) {
-    throw new Error("AI visual node example is not grounded in the saved source.");
+    failures.push({ field: "example", message: "AI visual node example is not grounded in the saved source." });
   }
+  return failures;
+}
+
+function assertVisualNodeGrounded(sourceText, node) {
+  const failure = getVisualNodeGroundingFailures(sourceText, node)[0];
+  if (failure) throw new Error(failure.message);
+}
+
+function makeGroundedVisualLabel(anchor) {
+  const words = cleanOutputText(anchor)
+    .split(/\s+/)
+    .filter((word) => /\p{L}|\p{N}/u.test(word))
+    .slice(0, 6);
+  return words.join(" ").slice(0, 70) || "Source-supported concept";
+}
+
+function repairVisualNodeGrounding(sourceText, node) {
+  const source = String(sourceText || "").trim();
+  const sourceAnchor = cleanOutputText(node?.sourceAnchor || "").slice(0, 180);
+  if (!source || !sourceAnchor || !hasGroundedClaim(source, sourceAnchor)) return null;
+  const candidate = {
+    label: hasGroundedClaim(source, node.label) ? node.label : makeGroundedVisualLabel(sourceAnchor),
+    detail: node.detail,
+    example: node.example,
+    sourceAnchor
+  };
+  if (!hasGroundedClaim(source, candidate.detail || candidate.label || "")) {
+    candidate.detail = sourceAnchor;
+  }
+  if (candidate.example && !hasGroundedClaim(source, candidate.example)) {
+    candidate.example = sourceAnchor;
+  }
+  return getVisualNodeGroundingFailures(source, candidate).length ? null : candidate;
 }
 
 function normalizeVisualEdgeType(value) {
@@ -3705,6 +3834,7 @@ module.exports = {
   getAllowedRequestOrigin,
   getCollectionSourceBlock,
   getResponseSchema,
+  stripGeminiUnsupportedSchemaKeywords,
   getDesiredVisualNodeCount,
   getQuizTokenBudget,
   hasEvidenceOverlap,

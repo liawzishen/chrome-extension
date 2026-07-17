@@ -116,25 +116,38 @@
     };
   }
 
-  function groundingTerms(value) {
-    return [...new Set(cleanText(value, 4000)
+  function normalizeGroundingText(value, maxLength = 4000) {
+    return cleanText(value, maxLength)
+      .normalize("NFKD")
+      .replace(/\p{M}/gu, "")
       .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function groundingTerms(value) {
+    return [...new Set(normalizeGroundingText(value, 4000)
       .split(/[^\p{L}\p{N}]+/u)
       .filter((token) => token.length > 2 && !GROUNDING_STOP_WORDS.has(token)))];
   }
 
   function hasGroundedClaim(evidenceValue, claimValue) {
-    const evidence = cleanText(evidenceValue, MAX_CONTEXT_TEXT).toLocaleLowerCase();
-    const claim = cleanText(claimValue, 1000).toLocaleLowerCase();
+    const evidence = normalizeGroundingText(evidenceValue, MAX_CONTEXT_TEXT);
+    const claim = normalizeGroundingText(claimValue, 1000);
     if (!evidence || !claim) return false;
     if (claim.length >= 8 && evidence.includes(claim)) return true;
 
     const evidenceTerms = new Set(groundingTerms(evidence));
     const claimTerms = groundingTerms(claim);
     if (!claimTerms.length) return false;
+    const hasSharedPhrase = claimTerms
+      .slice(1)
+      .some((term, index) => evidence.includes(`${claimTerms[index]} ${term}`));
+    if (hasSharedPhrase) return true;
     const matches = claimTerms.filter((term) => evidenceTerms.has(term)).length;
-    const requiredMatches = claimTerms.length >= 4 ? 2 : 1;
-    return matches >= requiredMatches && matches / claimTerms.length >= 0.25;
+    const requiredMatches = claimTerms.length >= 5 ? 2 : 1;
+    return matches >= requiredMatches && matches / claimTerms.length >= 0.2;
   }
 
   function getVisualNodes(context = {}) {
@@ -436,6 +449,22 @@
     };
   }
 
+  function sameLearnerText(first, second) {
+    const normalize = (value) => cleanText(value, 600)
+      .toLocaleLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const left = normalize(first);
+    const right = normalize(second);
+    // Do not treat a synthetic one-character payload as a meaningful duplicate.
+    // Apart from preserving bounded-field sanitization, this keeps the rule focused
+    // on repeated study content rather than malformed transport data.
+    const distinctCharacters = new Set(left.match(/[\p{L}\p{N}]/gu) || []);
+    if (distinctCharacters.size < 3) return false;
+    return Boolean(left && right && (left === right || (left.length >= 28 && right.length >= 28 && (left.includes(right) || right.includes(left)))));
+  }
+
   function createRow(rowValue, node, context, sourceType, index) {
     const row = rowValue && typeof rowValue === "object" ? rowValue : {};
     const topic = cleanText(row.topic || row.concept || row.label || row.title || node?.label, FIELD_LIMITS.topic);
@@ -450,8 +479,8 @@
       id: `cheat-${String(index + 1).padStart(2, "0")}`,
       topic,
       mainIdea,
-      keyFacts: keyFacts || mainIdea,
-      example: example || "Apply this idea when explaining or comparing the topic.",
+      keyFacts: keyFacts && !sameLearnerText(keyFacts, mainIdea) ? keyFacts : "",
+      example: example && !sameLearnerText(example, mainIdea) ? example : "",
       evidence: normalizeEvidence(row, node, context, sourceType)
     };
   }
@@ -465,13 +494,48 @@
       topic: `Key idea ${index + 1}`,
       mainIdea: item,
       keyFacts: item,
-      example: "Use this point in a short-answer explanation.",
+      example: "",
       sourceAnchor: item
     }, null, context, sourceType, index)).filter(Boolean);
   }
 
-  function normalizeCheatSheetValue(value, contextValue = {}, resilient = false) {
+  function createGroundedRepairRow(node, context, sourceType, index) {
+    if (!node || typeof node !== "object") return null;
+    const anchor = cleanText(
+      node.sourceAnchor || node.sourceRef?.quote || node.sourceText || node.detail,
+      FIELD_LIMITS.anchor
+    );
+    if (!anchor) return null;
+    const supplied = {
+      topic: node.label || "Source-supported concept",
+      mainIdea: anchor,
+      keyFacts: anchor,
+      example: node.example || anchor,
+      sourceAnchor: anchor,
+      sourceSegmentId: node.sourceSegmentId || node.sourceRef?.segmentId || "",
+      sourceId: node.sourceId || node.sourceRef?.sourceId || "",
+      sourcePage: node.sourcePage || node.sourceRef?.sourcePage || 0
+    };
+    const repaired = createRow(supplied, node, context, sourceType, index);
+    if (!repaired) return null;
+    try {
+      assertSuppliedRowGrounded(supplied, repaired, node, context, sourceType, index);
+      return repaired;
+    } catch {
+      return null;
+    }
+  }
+
+  function normalizeCheatSheetValue(value, contextValue = {}, optionsValue = false) {
     const context = contextValue && typeof contextValue === "object" ? contextValue : {};
+    const options = optionsValue && typeof optionsValue === "object"
+      ? optionsValue
+      : { resilient: Boolean(optionsValue), repairGrounding: false };
+    const resilient = Boolean(options.resilient);
+    const repairGrounding = Boolean(options.repairGrounding);
+    const reportGroundingFailure = typeof options.onGroundingFailure === "function"
+      ? options.onGroundingFailure
+      : null;
     const sourceType = normalizeSourceType(context);
     const nodes = getVisualNodes(context);
     const suppliedRows = normalizeRowsInput(value).slice(0, MAX_SUPPLIED_ROWS_TO_INSPECT);
@@ -486,6 +550,20 @@
         if (resilient && !grounded) normalizedRow.evidence = createUnavailableEvidence(sourceType);
       } catch (error) {
         if (!resilient) throw error;
+        if (repairGrounding) {
+          reportGroundingFailure?.({
+            index: rowIndex,
+            row,
+            error,
+            action: node ? "repaired from a grounded visual node" : "dropped because no grounded visual node was available"
+          });
+          const repaired = createGroundedRepairRow(node, context, sourceType, normalized.length);
+          if (repaired) {
+            if (normalized.length < maxRows) normalized.push(repaired);
+            return;
+          }
+          return;
+        }
         normalizedRow.evidence = createUnavailableEvidence(sourceType);
       }
       if (normalized.length < maxRows) normalized.push(normalizedRow);
@@ -520,6 +598,15 @@
 
   function normalizeCheatSheet(value, contextValue = {}) {
     return normalizeCheatSheetValue(value, contextValue, false);
+  }
+
+  function normalizeCheatSheetForGeneration(value, contextValue = {}) {
+    const context = contextValue && typeof contextValue === "object" ? contextValue : {};
+    return normalizeCheatSheetValue(value, context, {
+      resilient: true,
+      repairGrounding: true,
+      onGroundingFailure: context.onGroundingFailure
+    });
   }
 
   function normalizeCheatSheetForRender(value, contextValue = {}) {
@@ -558,6 +645,7 @@
     hasGroundedClaim,
     inferPdfPage,
     normalizeCheatSheet,
+    normalizeCheatSheetForGeneration,
     normalizeCheatSheetForRender,
     hasUsableCheatSheet
   });

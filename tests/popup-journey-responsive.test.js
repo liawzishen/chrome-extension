@@ -94,6 +94,34 @@ test("Smart Import matches the compact folder-and-status review hierarchy", () =
   assert.match(styles, /#pageView \.smart-import__footer-actions\s*\{/);
 });
 
+test("Journey metrics use semantic single surfaces with container-based reflow", () => {
+  const metricCard = styles.match(/#journeyView \.journey-metrics \.journey-metric\s*\{[\s\S]*?\n\}/)?.[0] || "";
+  assert.match(styles, /#journeyView\s*\{[\s\S]*?container-name:\s*journey-metrics;[\s\S]*?container-type:\s*inline-size;/);
+  assert.match(styles, /#journeyView \.journey-metrics\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1fr\);[\s\S]*?gap:\s*16px;/);
+  assert.match(metricCard, /min-height:\s*280px;[\s\S]*?overflow:\s*hidden;[\s\S]*?border:\s*1px solid color-mix\(in srgb, var\(--journey-metric-color\) 12%, var\(--ui-separator\)\);[\s\S]*?border-radius:\s*12px;[\s\S]*?padding:\s*20px;[\s\S]*?background:\s*var\(--journey-metric-surface-bg\);/);
+  assert.match(metricCard, /--journey-metric-surface-bg:\s*color-mix\(in srgb, var\(--journey-metric-wash\) 22%, var\(--ui-surface\)\);/);
+  assert.doesNotMatch(metricCard, /linear-gradient/);
+  assert.match(styles, /#journeyView \.journey-metric__copy\s*\{[\s\S]*?display:\s*grid;[\s\S]*?max-width:\s*58%;[\s\S]*?gap:\s*6px;/);
+  assert.match(styles, /#journeyView \.journey-metric \.journey-metric__label\s*\{[\s\S]*?font-size:\s*0\.75rem;[\s\S]*?font-weight:\s*600;[\s\S]*?letter-spacing:\s*0\.06em;/);
+  assert.match(styles, /#journeyView \.journey-metric \.journey-metric__value\s*\{[\s\S]*?font-size:\s*2\.25rem;[\s\S]*?font-weight:\s*700;[\s\S]*?letter-spacing:\s*-0\.02em;/);
+  assert.match(styles, /#journeyView \.journey-metric \.journey-metric__detail\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?font-size:\s*0\.87rem;[\s\S]*?font-weight:\s*500;/);
+  assert.match(styles, /#journeyView \.journey-metric__visual\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*0;[\s\S]*?pointer-events:\s*none;/);
+  assert.match(styles, /#journeyView \.journey-metric--average \.journey-metric__visual\s*\{[\s\S]*?width:\s*136px;[\s\S]*?right:\s*-4px;/);
+  assert.match(styles, /\.journey-hourglass__reservoir\s*\{[\s\S]*?mask-mode:\s*luminance;/);
+  assert.match(styles, /\.journey-hourglass--average \.journey-hourglass__reservoir--top\s*\{[\s\S]*?top:\s*8\.4%;[\s\S]*?left:\s*15%;[\s\S]*?width:\s*70%;/);
+  assert.match(styles, /\.journey-hourglass--average \.journey-hourglass__reservoir--bottom\s*\{[\s\S]*?top:\s*52\.6%;[\s\S]*?left:\s*15%;[\s\S]*?width:\s*70%;/);
+  assert.match(styles, /#journeyView \.journey-metric--focus \.journey-metric__visual\s*\{[\s\S]*?width:\s*174px;[\s\S]*?right:\s*-4px;/);
+  assert.match(styles, /@container journey-metrics \(min-width: 500px\)\s*\{[\s\S]*?#journeyView \.journey-metrics\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);[\s\S]*?#journeyView \.journey-metric--progress\s*\{[\s\S]*?grid-column:\s*1 \/ -1;/);
+  assert.match(styles, /@container journey-metrics \(min-width: 720px\)\s*\{[\s\S]*?#journeyView \.journey-metrics\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\);[\s\S]*?#journeyView \.journey-metric--progress\s*\{[\s\S]*?grid-column:\s*auto;/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)\s*\{[\s\S]*?#journeyView \.journey-metric,[\s\S]*?#journeyView \.journey-metric__visual,[\s\S]*?transition:\s*none !important;/);
+  assert.match(script, /function getJourneyMetricStateClass\(kind, tone, hasMetricValue = false\)/);
+  assert.match(script, /return "state-attention";/);
+  assert.match(script, /return tone\?\.key === "unscored" \? "state-ready" : "state-performance";/);
+  assert.match(script, /card\.className = \["journey-metric", "journey-metric--" \+ kind, stateClass\]\.join\(" "\);/);
+  assert.match(script, /visual\.setAttribute\("aria-hidden", "true"\);/);
+  assert.doesNotMatch(script, /journey-metric__focus-value/);
+});
+
 test("Smart Import generates affected chapter notes sequentially", () => {
   assert.match(script, /async function startImportNoteQueue\(chapterIds\)[\s\S]*?for \(const row of queue\.rows\) \{[\s\S]*?await runImportNoteQueueRow\(queue, row\)/);
   assert.match(script, /async function runImportNoteQueueRow\(queue, row\)[\s\S]*?await handleBuildChapterLesson\(row\.chapterId, \{[\s\S]*?rethrow: true/);
@@ -130,6 +158,10 @@ test("Journey presents a newest-first, de-duplicated artifact timeline", () => {
   assert.match(script, /Showing the \$\{visibleArtifacts\.length\} newest unique artifacts/);
   assert.match(script, /createElement\("strong", "Chapter timeline"\)/);
   assert.match(styles, /\.journey-timeline-heading,[\s\S]*?\.journey-section-heading/);
+  assert.match(styles, /\.journey-node\s*\{[\s\S]*?grid-template-columns:\s*58px minmax\(0, 1fr\) auto;[\s\S]*?min-height:\s*86px;[\s\S]*?border-radius:\s*22px;/);
+  assert.match(styles, /\.journey-node\[aria-pressed="true"\]\s*\{[\s\S]*?background:\s*#f3f8ff;/);
+  assert.match(styles, /\.journey-node:not\(:last-child\) \.journey-node-orb::after\s*\{[\s\S]*?height:\s*calc\(100% \+ 20px\);/);
+  assert.match(styles, /@media \(max-width: 480px\)\s*\{[\s\S]*?\.journey-node\s*\{[\s\S]*?grid-template-columns:\s*52px minmax\(0, 1fr\);[\s\S]*?\.journey-node-state\s*\{[\s\S]*?grid-column:\s*2;/);
 });
 
 test("compact Journey rows wrap without ellipsis and keep touch-sized actions", () => {

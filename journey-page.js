@@ -434,13 +434,16 @@ function renderInspector() {
   artifacts.append(createText("h3", "Saved learning artifacts"));
   const artifactList = document.createElement("div");
   artifactList.className = "source-leaves artifact-list";
+  const visibleArtifacts = globalThis.ExamCramJourney.getChapterArtifactTimeline(chapter, savedArtifacts);
   if (!chapter.sessions.length) {
     artifactList.append(createText("p", "No saved visual notes or quizzes in this tree yet."));
+  } else if (!visibleArtifacts.length) {
+    artifactList.append(createText("p", "No distinct saved learning artifacts are available for this tree yet."));
   } else {
-    [...chapter.sessions]
-      .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
-        - globalThis.ExamCramJourney.sessionActivityTime(first))
-      .forEach((session) => artifactList.append(renderArtifactCard(session)));
+    visibleArtifacts.forEach((session) => artifactList.append(renderArtifactCard(session)));
+    if (chapter.sessions.length > visibleArtifacts.length) {
+      artifactList.append(createText("p", `Showing the ${visibleArtifacts.length} newest unique artifacts. Older saves remain in Library.`, "artifact-limit-note"));
+    }
   }
   artifacts.append(artifactList);
 
