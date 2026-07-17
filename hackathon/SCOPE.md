@@ -30,7 +30,7 @@ In one study session, a student can save a source, understand it through a sourc
 
 ## Demo scenario
 
-A student studying any subject saves a course source to a chapter, produces a visual note with evidence, completes a quiz, and sees the resulting progress in the Journey. A biology source can be used for the demonstration because it is easy to understand, but it does not define the product's audience.
+A first-time student opens the zero-setup mathematics route, which saves a short linear-equations source to a dedicated stable chapter, shows an evidence-linked visual note, completes one source-checked question, and sees the result in Journey. The curated mathematics example is only the judge path; the core product remains source-led and subject agnostic.
 
 ## Out of scope
 
@@ -41,4 +41,4 @@ A student studying any subject saves a course source to a chapter, produces a vi
 
 ## Success condition
 
-A first-time student can complete the core study loop in under five minutes and understands both the generated material and the evidence that supports it.
+A first-time student can complete the curated demo loop in 60-90 seconds and understands both the generated material and the evidence that supports it. A normal user-owned source follows the same loop without claiming that every generated statement is automatically correct.

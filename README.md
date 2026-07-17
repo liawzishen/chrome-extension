@@ -2,6 +2,8 @@
 
 Exam-Cram is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker.
 
+The project is available under the [MIT License](LICENSE).
+
 The product is designed around one loop:
 
 ```text
@@ -15,6 +17,17 @@ read across pages and videos
 ```
 
 This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; Exam-Cram is optimizing for traceability, active learning, persistence, and a clear next study action.
+
+## Judge Quick Start (no API key)
+
+For the fastest end-to-end evaluation, run `npm ci`, then `npm run preview`, and open `http://127.0.0.1:8788`.
+
+1. Select **Notes** and choose **Try 60-sec math demo**.
+2. Inspect one visual concept and its quoted source evidence; the source banner shows an explicit **Evidence checked** status.
+3. Select **Start 1-question check**, choose `x = 6`, and submit.
+4. Open **Journey** to see the stable **Demo - Linear Equations** chapter update.
+
+The curated route uses no API key, browser permission, extension setup, or database cleanup. See [the system architecture](ARCHITECTURE.md) for component boundaries and data contracts, and [the Devpost handoff](hackathon/DEVPOST_SUBMISSION.md) for the five-line summary, video beat sheet, and pilot metrics.
 
 ## OpenAI Build Week Submission Evidence
 
@@ -206,7 +219,7 @@ Run the local interface preview in another terminal:
 npm run preview
 ```
 
-Open `http://127.0.0.1:8788`, select **Notes**, and choose **Try the demo**. Open `http://127.0.0.1:8788/journey.html` to inspect the full Learning Forest route. Browser tab reading, blocking, timestamp jumping, the persistent side panel, and tab-audio capture require the loaded extension.
+Open `http://127.0.0.1:8788`, select **Notes**, and choose **Try 60-sec math demo**. It loads a curated source, an evidence-linked visual note, and a one-question check without backend configuration. Open `http://127.0.0.1:8788/journey.html` to inspect the full Learning Forest route. Browser tab reading, blocking, timestamp jumping, the persistent side panel, and tab-audio capture require the loaded extension.
 
 ## Side Panel And Page Access
 

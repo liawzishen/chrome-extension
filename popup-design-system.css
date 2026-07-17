@@ -891,6 +891,48 @@ summary:focus-visible,
   color: #075f50;
 }
 
+.evidence-status {
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+  border-top: 1px solid rgba(8, 125, 104, 0.2);
+  padding-top: var(--ui-space-2);
+}
+
+.evidence-status strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-success);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.evidence-status strong::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.evidence-status span {
+  color: var(--ui-label-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.evidence-status--review strong {
+  color: var(--ui-warning);
+}
+
+.demo-path-hint {
+  margin: var(--ui-space-3) 0 0;
+  color: var(--ui-label-secondary);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .interactive-note-shell {
   overflow: visible;
   border-color: var(--ui-separator);
@@ -1138,6 +1180,23 @@ summary:focus-visible,
   border-color: var(--ui-separator);
   background: var(--ui-surface-secondary);
   color: var(--ui-label);
+}
+
+.vin-report-button {
+  flex: 1 1 100%;
+  min-height: 36px;
+  border: 1px solid var(--ui-separator);
+  border-radius: var(--ui-radius-control);
+  padding: 7px 10px;
+  background: var(--ui-surface);
+  color: var(--ui-label-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vin-report-button:hover:not(:disabled) {
+  border-color: var(--ui-warning);
+  color: var(--ui-warning);
 }
 
 .vin-secondary-tab.active,

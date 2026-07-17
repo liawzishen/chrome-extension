@@ -95,7 +95,7 @@ After the quiz, the extension should identify areas where the student performed 
 
 Example:
 
-If the user answers 3 questions wrong about "photosynthesis light-dependent reactions", the extension marks that topic as weak.
+If the user answers 3 questions wrong about "solving linear equations", the extension marks that topic as weak.
 
 The weak-topic report should show:
 

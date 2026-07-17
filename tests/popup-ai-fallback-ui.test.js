@@ -31,10 +31,10 @@ test("AI note fallbacks have a visible explanation, a safe reason, and a retry a
   assert.doesNotMatch(sanitize("apiKey=secret-value https://ai.example.test/private"), /secret-value|https?:\/\//i);
 });
 
-test("local visual-note presentation suppresses repeated examples and source evidence", () => {
+test("local visual-note presentation suppresses repeated examples but retains labelled source evidence", () => {
   assert.match(script, /const example = suppliedExample && !sameVisualText\(suppliedExample, detail\) && !sameVisualText\(suppliedExample, sourceText\)/);
   assert.match(script, /const appendDistinctDetail = \(label, value\) => \{[\s\S]*?visibleDetails\.some\(\(previous\) => sameVisualText\(previous, text\)\)/);
-  assert.match(script, /if \(node\.sourceText && !visibleDetails\.some\(\(previous\) => sameVisualText\(previous, node\.sourceText\)\)\)/);
+  assert.match(script, /if \(node\.sourceText\) \{[\s\S]*?createElement\("strong", "Source evidence"/);
 });
 
 test("a hidden active-tab URL directs the learner to the toolbar rather than a dead permission state", () => {

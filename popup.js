@@ -6,11 +6,16 @@ const STORAGE_KEYS = {
   focusState: "examCramFocusState",
   lastChapter: "examCramLastChapter",
   sessionDraft: "examCramSessionDraft",
-  panelState: "examCramPanelState"
+  panelState: "examCramPanelState",
+  claimReports: "examCramUnsupportedClaimReports"
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
 const DEFAULT_STATUS_MESSAGE = "Ready for your next study action.";
+const CURATED_DEMO_CHAPTER_TITLE = "Demo - Linear Equations";
+const CURATED_DEMO_NOTE_ID = "demo-linear-equations-note";
+const CURATED_DEMO_SOURCE_ID = "demo-linear-equations-source";
+const CURATED_DEMO_FINGERPRINT = "demo:linear-equations:v1";
 
 const STOP_WORDS = new Set([
   "about", "after", "again", "also", "because", "before", "being", "between",
@@ -221,7 +226,7 @@ function init() {
   elements.studyNotesButton.addEventListener("click", handleStudyNotes);
   elements.pasteNotesButton?.addEventListener("click", () => switchView("notesView"));
   elements.backToCreateButton?.addEventListener("click", () => switchView("pageView"));
-  elements.demoNoteButton?.addEventListener("click", handleDemoNote);
+  elements.demoNoteButton?.addEventListener("click", handleCuratedMathDemo);
   elements.submitQuizButton.addEventListener("click", handleSubmitQuiz);
   elements.startRecoveryQuizButton?.addEventListener("click", handleGenerateRecoveryQuiz);
   elements.generateQuizButton?.addEventListener("click", openQuizSettings);
@@ -2460,189 +2465,339 @@ async function handleStudyNotes() {
   }
 }
 
-function handleDemoNote() {
-  const note = buildInteractiveDemoNote();
-  renderNote(note);
-  showStatus("Interactive demo loaded. Select a concept, change the conditions, then generate a quiz only if you want one.");
+async function handleCuratedMathDemo() {
+  const note = buildCuratedMathDemoNote();
+  let journeyRecorded = false;
+  setBusy(true, "Loading the zero-setup math demo...");
+  startProgress("Saving the curated source to its demo chapter...", 18);
+  try {
+    const recorded = await recordLearningItem(
+      note,
+      note.journeyChapterTitle,
+      buildCuratedMathDemoJourneySource(note)
+    );
+    if (recorded?.chapterId) {
+      note.journeyChapterId = recorded.chapterId;
+      note.sourceBinding.chapterId = recorded.chapterId;
+      selectChapterAcrossControls(recorded.chapterId);
+      journeyRecorded = true;
+    }
+    if (recorded?.sourceId) {
+      note.sourceId = recorded.sourceId;
+      note.sourceBinding.sourceId = recorded.sourceId;
+    }
+    await saveLibraryItem(note);
+    await savePanelState();
+    finishProgress("Math source ready.");
+  } catch (error) {
+    failProgress("Demo source loaded without Journey persistence.");
+    showStatus(`Math demo loaded, but its Journey source was not saved: ${error?.message || "unknown storage error"}`, true);
+  } finally {
+    renderNote(note);
+    setBusy(false);
+  }
+  if (journeyRecorded) {
+    showStatus("Math demo ready: inspect one evidence-linked concept, then start the 1-question check to update its Journey.");
+  }
 }
 
-function buildInteractiveDemoNote() {
+function buildCuratedMathDemoJourneySource(note) {
   return {
-    id: "demo-photosynthesis",
+    id: CURATED_DEMO_SOURCE_ID,
+    type: "notes",
+    title: note.sourceBinding.title,
+    url: "",
+    capturedAt: note.createdAt,
+    fingerprint: CURATED_DEMO_FINGERPRINT,
+    text: note.sourceBinding.rawText
+  };
+}
+
+function buildCuratedMathDemoNote() {
+  const rawText = [
+    "An equation stays balanced when the same operation is applied to both sides.",
+    "To solve 2(x + 3) = 18, divide both sides by 2 to get x + 3 = 9.",
+    "Then subtract 3 from both sides to get x = 6.",
+    "Substituting x = 6 back into 2(x + 3) gives 2(9) = 18, which verifies the solution."
+  ].join(" ");
+  const sourceRef = (quote) => ({
+    sourceType: "notes",
+    sourceId: CURATED_DEMO_SOURCE_ID,
+    sourceFingerprint: CURATED_DEMO_FINGERPRINT,
+    title: "Curated Mathematics source: solving a linear equation",
+    quote
+  });
+  const balanceEvidence = "An equation stays balanced when the same operation is applied to both sides.";
+  const divideEvidence = "To solve 2(x + 3) = 18, divide both sides by 2 to get x + 3 = 9.";
+  const subtractEvidence = "Then subtract 3 from both sides to get x = 6.";
+  const verifyEvidence = "Substituting x = 6 back into 2(x + 3) gives 2(9) = 18, which verifies the solution.";
+  return {
+    id: CURATED_DEMO_NOTE_ID,
     kind: "note",
     artifactType: "study",
-    title: "Photosynthesis: light into stored energy",
-    sourceType: "demo",
+    title: "Math demo: solve 2(x + 3) = 18",
+    sourceType: "notes",
     sourceUrl: "",
+    sourceId: CURATED_DEMO_SOURCE_ID,
+    sourceFingerprint: CURATED_DEMO_FINGERPRINT,
     createdAt: new Date().toISOString(),
-    generator: "built-in demo",
+    generator: "curated demo",
+    demoMode: true,
+    evidenceStatus: {
+      tone: "verified",
+      label: "Evidence checked",
+      detail: "4 of 4 visual claims match the curated source excerpt."
+    },
+    journeyChapterTitle: CURATED_DEMO_CHAPTER_TITLE,
     sourceBinding: {
+      sourceId: CURATED_DEMO_SOURCE_ID,
       type: "notes",
       sourceType: "notes",
-      title: "Built-in photosynthesis demo",
+      title: "Curated Mathematics source: solving a linear equation",
       url: "",
-      fingerprint: "demo:photosynthesis:v1",
-      chapter: "Interactive demo",
-      chapterTitle: "Interactive demo",
-      rawText: "Photosynthesis converts light energy into chemical energy stored in glucose. Water and carbon dioxide supply matter to the connected reactions inside chloroplasts. Glucose stores captured energy, while oxygen is released. When usable light, water, or carbon dioxide becomes limited, the connected pathway slows and downstream outputs change.",
+      fingerprint: CURATED_DEMO_FINGERPRINT,
+      chapter: CURATED_DEMO_CHAPTER_TITLE,
+      chapterTitle: CURATED_DEMO_CHAPTER_TITLE,
+      rawText,
       videoSegments: [],
       collectionSources: [],
       capturedAt: new Date().toISOString()
     },
     summary: [
-      "Photosynthesis converts light energy into chemical energy stored in glucose.",
-      "Water and carbon dioxide supply matter; glucose and oxygen are produced.",
-      "Changing an input changes the rate of the connected process and its outputs."
+      "Keep an equation balanced by applying the same operation to both sides.",
+      "Divide by 2 first, then subtract 3 to isolate x.",
+      "Substitute x = 6 into the original equation to verify the solution."
     ],
-    terms: ["Light energy", "Chloroplast", "Carbon dioxide", "Water", "Glucose", "Oxygen"],
+    terms: ["Balanced equation", "Divide both sides", "Isolate x", "Substitution check"],
     goals: [
-      "Trace every input through the chloroplast to an output.",
-      "Predict which product changes when one input is limited.",
-      "Explain why glucose is stored chemical energy."
+      "Explain why the same operation must happen on both sides.",
+      "Solve the equation in the stated order.",
+      "Verify a solution by substitution."
     ],
     visualLesson: {
-      title: "How photosynthesis moves energy and matter",
+      title: "Solve a linear equation without losing balance",
       visualModel: {
-        title: "From sunlight to sugar",
-        objective: "Trace the inputs, transformation, and outputs—then change one condition to see what the system can produce.",
-        kind: "system",
+        title: "From equation to verified solution",
+        objective: "Follow one evidence-backed operation at a time, then verify the result in the original equation.",
+        kind: "process",
         nodes: [
           {
-            id: "chloroplast",
-            label: "Chloroplast",
-            symbol: "◎",
-            role: "Transformation",
-            detail: "Chloroplasts capture light energy and use it to build glucose from carbon dioxide and water.",
-            why: "This is the central conversion that links every input to both outputs.",
-            example: "Leaf cells contain many chloroplasts where the reactions occur.",
-            sourceAnchor: "Photosynthesis occurs in chloroplasts and converts light energy into chemical energy."
+            id: "balance",
+            label: "Keep both sides balanced",
+            symbol: "=",
+            role: "Rule",
+            detail: "Apply the same operation to both sides of an equation.",
+            why: "The equality remains true only when both sides change in the same way.",
+            example: "Dividing both sides by 2 keeps 2(x + 3) = 18 balanced.",
+            sourceText: balanceEvidence,
+            sourceAnchor: balanceEvidence,
+            sourceId: CURATED_DEMO_SOURCE_ID,
+            sourceRef: sourceRef(balanceEvidence)
           },
           {
-            id: "light",
-            label: "Light",
-            symbol: "☀",
-            role: "Energy input",
-            detail: "Light supplies the energy that drives the reactions.",
-            why: "Without an energy source, the conversion cannot keep running.",
-            example: "A plant in brighter usable light can photosynthesize faster until another input becomes limiting.",
-            sourceAnchor: "Light energy powers photosynthesis."
+            id: "divide",
+            label: "Divide by 2",
+            symbol: "/2",
+            role: "First operation",
+            detail: "Divide both sides by 2 to turn 2(x + 3) = 18 into x + 3 = 9.",
+            why: "This removes the factor of 2 outside the parentheses.",
+            example: "18 divided by 2 is 9.",
+            sourceText: divideEvidence,
+            sourceAnchor: divideEvidence,
+            sourceId: CURATED_DEMO_SOURCE_ID,
+            sourceRef: sourceRef(divideEvidence)
           },
           {
-            id: "carbon-dioxide",
-            label: "Carbon dioxide",
-            symbol: "CO₂",
-            role: "Matter input",
-            detail: "Carbon dioxide supplies carbon atoms used to assemble glucose.",
-            why: "Glucose cannot be built when its carbon source is missing.",
-            example: "Carbon dioxide enters a leaf through tiny openings called stomata.",
-            sourceAnchor: "Plants take in carbon dioxide to make glucose."
+            id: "subtract",
+            label: "Subtract 3",
+            symbol: "-3",
+            role: "Isolate x",
+            detail: "Subtract 3 from both sides to get x = 6.",
+            why: "Removing the remaining +3 leaves x by itself.",
+            example: "9 minus 3 is 6.",
+            sourceText: subtractEvidence,
+            sourceAnchor: subtractEvidence,
+            sourceId: CURATED_DEMO_SOURCE_ID,
+            sourceRef: sourceRef(subtractEvidence)
           },
           {
-            id: "water",
-            label: "Water",
-            symbol: "H₂O",
-            role: "Matter input",
-            detail: "Water provides hydrogen and participates in the light-dependent reactions.",
-            why: "A shortage of water limits the connected reactions and can cause stomata to close.",
-            example: "Roots absorb water and transport it to leaves.",
-            sourceAnchor: "Water is one of the raw materials for photosynthesis."
-          },
-          {
-            id: "glucose",
-            label: "Glucose",
-            symbol: "C₆",
-            role: "Stored-energy output",
-            detail: "Glucose stores captured energy in chemical bonds for later use and growth.",
-            why: "It is the main energy-rich product the plant can transport, store, or break down.",
-            example: "Glucose can be converted into starch for storage.",
-            sourceAnchor: "The captured energy is stored in glucose."
-          },
-          {
-            id: "oxygen",
-            label: "Oxygen",
-            symbol: "O₂",
-            role: "Released output",
-            detail: "Oxygen is released as water molecules are processed during the light reactions.",
-            why: "Its release is observable evidence that the light-driven stage is active.",
-            example: "Aquatic plants can produce visible oxygen bubbles in bright light.",
-            sourceAnchor: "Oxygen is released during photosynthesis."
+            id: "check",
+            label: "Check by substitution",
+            symbol: "check",
+            role: "Verification",
+            detail: "Put x = 6 back into the original equation to confirm that both sides equal 18.",
+            why: "A substitution check tests the answer against the original source equation.",
+            example: "2(6 + 3) = 18.",
+            sourceText: verifyEvidence,
+            sourceAnchor: verifyEvidence,
+            sourceId: CURATED_DEMO_SOURCE_ID,
+            sourceRef: sourceRef(verifyEvidence)
           }
         ],
         edges: [
-          { from: "light", to: "chloroplast", label: "powers" },
-          { from: "carbon-dioxide", to: "chloroplast", label: "supplies carbon" },
-          { from: "water", to: "chloroplast", label: "supplies matter" },
-          { from: "chloroplast", to: "glucose", label: "stores energy" },
-          { from: "chloroplast", to: "oxygen", label: "releases" }
+          { from: "balance", to: "divide", label: "preserves equality" },
+          { from: "divide", to: "subtract", label: "leaves x + 3 = 9" },
+          { from: "subtract", to: "check", label: "produces x = 6" }
         ],
         scenarios: [
           {
-            id: "balanced",
-            label: "Balanced inputs",
-            prompt: "All three inputs are available.",
-            activeIds: ["light", "carbon-dioxide", "water", "chloroplast", "glucose", "oxygen"],
-            values: [
-              { nodeId: "glucose", value: "steady output" },
-              { nodeId: "oxygen", value: "released" }
-            ],
-            outcome: "The connected pathway can keep producing glucose and releasing oxygen.",
-            insight: "Energy and matter inputs work together; one input cannot replace another."
+            id: "divide-first",
+            label: "Divide first",
+            prompt: "Start with 2(x + 3) = 18.",
+            activeIds: ["balance", "divide"],
+            values: [{ nodeId: "divide", value: "x + 3 = 9" }],
+            outcome: "Dividing both sides by 2 preserves the balance and removes the outside factor.",
+            insight: "Use the same operation on both sides before changing the next term."
           },
           {
-            id: "low-light",
-            label: "Low light",
-            prompt: "Reduce the energy input while matter is still available.",
-            activeIds: ["light", "chloroplast", "glucose", "oxygen"],
-            values: [
-              { nodeId: "light", value: "limited" },
-              { nodeId: "glucose", value: "slower" },
-              { nodeId: "oxygen", value: "less" }
-            ],
-            outcome: "The light-driven stage slows, so both product rates fall.",
-            insight: "Follow the active path from the limited input to every downstream output."
+            id: "isolate-x",
+            label: "Isolate x",
+            prompt: "Continue from x + 3 = 9.",
+            activeIds: ["divide", "subtract"],
+            values: [{ nodeId: "subtract", value: "x = 6" }],
+            outcome: "Subtracting 3 from both sides leaves x = 6.",
+            insight: "The inverse of +3 is -3, applied on both sides."
           },
           {
-            id: "no-carbon",
-            label: "No CO₂",
-            prompt: "Remove the carbon source but keep light and water available.",
-            activeIds: ["carbon-dioxide", "chloroplast", "glucose"],
-            values: [
-              { nodeId: "carbon-dioxide", value: "missing" },
-              { nodeId: "glucose", value: "cannot build" }
-            ],
-            outcome: "Glucose production becomes limited because the system lacks carbon atoms.",
-            insight: "Energy can still arrive, but the main stored-energy product needs matter as well."
+            id: "verify-answer",
+            label: "Verify",
+            prompt: "Test x = 6 in the original equation.",
+            activeIds: ["subtract", "check"],
+            values: [{ nodeId: "check", value: "2(9) = 18" }],
+            outcome: "The original equation becomes 2(9) = 18, so x = 6 is verified.",
+            insight: "Checking the original equation catches an incorrect operation order."
           }
         ],
         check: {
-          prompt: "If usable light falls sharply, which change should happen first?",
-          choices: [
-            "The light-driven reactions slow",
-            "Glucose production immediately increases",
-            "Carbon dioxide becomes an output"
-          ],
-          answer: "The light-driven reactions slow",
-          explanation: "Light is the energy input. Reducing it slows the light-dependent stage before the lower product rates follow."
+          prompt: "Which operation turns x + 3 = 9 into x = 6?",
+          choices: ["Subtract 3 from both sides", "Divide both sides by 2", "x + 3 = 9"],
+          answer: "Subtract 3 from both sides",
+          explanation: "The curated source states that subtracting 3 from both sides gives x = 6."
         },
         suggestedQuestions: [
-          "Why is glucose called stored energy?",
-          "Why does low light affect oxygen too?"
+          "Why does dividing both sides preserve equality?",
+          "How does substitution verify a solution?"
         ]
       },
       blocks: [
         {
-          type: "process_steps",
-          title: "Trace the pathway",
-          intro: "Follow energy and matter through the system.",
+          type: "worked_example",
+          title: "Worked example from the source",
+          intro: "Use the source's operation order, then check the original equation.",
           steps: [
-            { label: "Capture", detail: "Chlorophyll absorbs usable light.", why: "The pathway needs an energy source." },
-            { label: "Transform", detail: "Water and carbon dioxide are processed in linked reactions.", why: "Atoms are rearranged instead of created." },
-            { label: "Store and release", detail: "Energy is stored in glucose while oxygen is released.", why: "The outputs have different roles." }
+            { label: "1. Divide", detail: "2(x + 3) = 18 becomes x + 3 = 9." },
+            { label: "2. Subtract", detail: "x + 3 = 9 becomes x = 6." },
+            { label: "3. Check", detail: "2(6 + 3) = 18 verifies the result." }
           ]
         }
       ]
     }
   };
+}
+
+function buildCuratedMathDemoQuiz(note) {
+  const rawText = String(note?.sourceBinding?.rawText || "").trim();
+  const input = {
+    noteId: note.id,
+    title: note.title,
+    sourceType: "notes",
+    sourceUrl: "",
+    sourceId: note.sourceId || note.sourceBinding?.sourceId || CURATED_DEMO_SOURCE_ID,
+    sourceFingerprint: note.sourceFingerprint || note.sourceBinding?.fingerprint || CURATED_DEMO_FINGERPRINT,
+    rawText,
+    visualModel: note.visualLesson?.visualModel || {},
+    questionCount: 1
+  };
+  const evidence = "Then subtract 3 from both sides to get x = 6.";
+  const normalized = normalizeClientQuizArtifact({
+    title: "Linear equations: 1-question check",
+    difficulty: "normal",
+    quizStyle: "application",
+    generator: "curated demo",
+    questions: [{
+      type: "mcq",
+      prompt: "After dividing both sides of 2(x + 3) = 18 by 2, what value of x follows after the next stated operation?",
+      choices: ["x = 6", "x + 3 = 9", "divide both sides by 2", "subtract 3 from both sides"],
+      answer: "x = 6",
+      topic: "Solve for x",
+      primaryConceptId: "subtract",
+      relatedConceptIds: ["divide", "check"],
+      questionStyle: "Application",
+      cognitiveLevel: "apply",
+      skill: "Solve a linear equation",
+      whyThisMatters: "It checks whether the learner follows the source's operation order.",
+      hint: evidence,
+      explanation: evidence,
+      sourceText: evidence,
+      sourceId: input.sourceId,
+      sourceRef: {
+        sourceType: "notes",
+        sourceId: input.sourceId,
+        sourceFingerprint: input.sourceFingerprint,
+        title: note.sourceBinding?.title || "Curated Mathematics source",
+        quote: evidence
+      }
+    }]
+  }, input, { allowConceptInference: false });
+  validateGeneratedQuiz(normalized, input, "Curated demo quiz");
+  return {
+    ...note,
+    ...normalized,
+    id: note.id,
+    noteId: note.id,
+    kind: "quiz",
+    artifactType: "study",
+    sourceType: "notes",
+    sourceUrl: "",
+    sourceId: input.sourceId,
+    sourceFingerprint: input.sourceFingerprint,
+    difficulty: "normal",
+    quizStyle: "application",
+    quizGeneratedAt: new Date().toISOString(),
+    answers: {},
+    score: null,
+    submittedAt: null,
+    questionAttempts: [],
+    wrongAnswers: [],
+    weakTopics: [],
+    weakConceptDiagnosis: [],
+    attemptType: "normal",
+    recoveryTargetConceptId: "",
+    recoveryComposition: null,
+    usedLocalQuizFallback: false
+  };
+}
+
+async function openCuratedMathDemoQuiz(artifact) {
+  if (!artifact?.demoMode) return;
+  elements.generateQuizButton.disabled = true;
+  startProgress("Loading the source-checked demo question...", 30);
+  try {
+    const session = buildCuratedMathDemoQuiz(artifact);
+    const recorded = await recordLearningItem(
+      session,
+      session.journeyChapterId || session.journeyChapterTitle
+    );
+    if (recorded?.chapterId) {
+      session.journeyChapterId = recorded.chapterId;
+      session.sourceBinding.chapterId = recorded.chapterId;
+      selectChapterAcrossControls(recorded.chapterId);
+    }
+    state.currentArtifact = session;
+    state.currentSession = session;
+    state.currentExportItem = session;
+    state.submitted = false;
+    await saveLibraryItem(session);
+    await persistCurrentSessionDraft();
+    renderSession(session);
+    finishProgress("One-question check ready.");
+    showStatus("Answer the one source-checked question, then submit it to update the Demo - Linear Equations Journey.");
+  } catch (error) {
+    failProgress("Demo quiz could not be opened.");
+    showStatus(error?.message || "Could not open the curated demo quiz.", true);
+  } finally {
+    elements.generateQuizButton.disabled = false;
+  }
 }
 
 async function createStudyNote(input) {
@@ -2894,6 +3049,10 @@ function openQuizSettings() {
   const artifact = state.currentArtifact || state.currentExportItem;
   if (!artifact?.visualLesson) {
     showStatus("Create or open a visual note before generating a quiz.", true);
+    return;
+  }
+  if (artifact.demoMode) {
+    void openCuratedMathDemoQuiz(artifact);
     return;
   }
   const binding = artifact.sourceBinding || {};
@@ -4879,7 +5038,9 @@ function renderNote(note) {
   elements.submitQuizButton.classList.add("hidden");
   elements.saveSessionButton.classList.add("hidden");
   elements.generateQuizButton?.classList.remove("hidden");
-  if (elements.generateQuizButton) elements.generateQuizButton.textContent = "Generate quiz";
+  if (elements.generateQuizButton) {
+    elements.generateQuizButton.textContent = note.demoMode ? "Start 1-question check" : "Generate quiz";
+  }
   renderArtifactSourceBanner(note);
 
   elements.sessionTitle.textContent = note.title;
@@ -6406,7 +6567,7 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
     relationshipField.append(list);
     content.append(relationshipField);
   }
-  if (node.sourceText && !visibleDetails.some((previous) => sameVisualText(previous, node.sourceText))) {
+  if (node.sourceText) {
     const source = document.createElement("blockquote");
     source.className = "vin-source-excerpt";
     source.append(
@@ -6426,7 +6587,9 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
                 : "This excerpt is grounded in the publisher caption segment at the linked video time."
             : context.sourceType === "collection"
               ? `This excerpt is grounded in ${node.sourceRef?.title || "one saved chapter source"}.`
-          : "This passage was matched from the note you pasted.",
+              : context.demoMode
+                ? "This exact passage comes from the curated demo source."
+                : "This passage was matched from the note you pasted.",
         "vin-source-help"
       )
     );
@@ -6486,8 +6649,59 @@ function renderVisualNodeDetail(panel, node, scenario, context, model) {
     });
     actions.append(sourceLink);
   }
+  const reportButton = document.createElement("button");
+  reportButton.type = "button";
+  reportButton.className = "text-button vin-report-button";
+  reportButton.textContent = "Report unsupported claim";
+  reportButton.addEventListener("click", async () => {
+    reportButton.disabled = true;
+    try {
+      const outcome = await reportUnsupportedClaim(context, node, nodeEvidence);
+      sourceStatus.textContent = outcome.message;
+      if (outcome.reported) reportButton.textContent = "Reported";
+      else reportButton.disabled = false;
+    } catch {
+      sourceStatus.textContent = "The report could not be saved locally. Your study source was not changed.";
+      reportButton.disabled = false;
+    }
+  });
+  actions.append(reportButton);
   actions.append(sourceStatus);
   panel.replaceChildren(header, content, actions);
+}
+
+async function reportUnsupportedClaim(context = {}, node = {}, evidence = {}) {
+  const reports = await getStorage(STORAGE_KEYS.claimReports, []);
+  const existing = Array.isArray(reports) ? reports : [];
+  const artifactId = String(context?.id || context?.noteId || "unknown-artifact").slice(0, 120);
+  const conceptId = String(node?.id || "unknown-concept").slice(0, 120);
+  const sourceFingerprint = String(
+    evidence?.sourceFingerprint || context?.sourceFingerprint || context?.sourceBinding?.fingerprint || ""
+  ).slice(0, 160);
+  const duplicate = existing.find((report) => (
+    report?.artifactId === artifactId
+    && report?.conceptId === conceptId
+    && report?.sourceFingerprint === sourceFingerprint
+  ));
+  if (duplicate) {
+    return { reported: false, message: "This claim is already marked for review. Your source was not changed." };
+  }
+  const report = {
+    id: `claim-${Date.now()}-${conceptId}`,
+    artifactId,
+    conceptId,
+    conceptLabel: String(node?.label || "Concept").slice(0, 160),
+    claim: String(node?.detail || "").slice(0, 500),
+    evidenceQuote: String(evidence?.quote || node?.sourceText || node?.sourceAnchor || "").slice(0, 600),
+    sourceFingerprint,
+    createdAt: new Date().toISOString(),
+    status: "open"
+  };
+  await setStorage(STORAGE_KEYS.claimReports, [report, ...existing].slice(0, 50));
+  return {
+    reported: true,
+    message: "Reported for review. This local report keeps only the claim and its evidence quote; it does not change your source."
+  };
 }
 
 function renderVisualDetailField(label, value) {
@@ -7100,6 +7314,7 @@ function renderArtifactSourceBanner(item) {
   const sourceUrl = binding.url || item?.sourceUrl || "";
   let sourceName = binding.title || item?.title || "Imported notes";
   let sourceMeta = sourceType === "notes" ? "Pasted study material" : sourceType;
+  if (item?.demoMode) sourceMeta = "Curated mathematics source - zero setup";
   if (binding.documentType === "pdf") {
     sourceMeta = binding.pageCount
       ? `PDF document · ${binding.pageCount} ${binding.pageCount === 1 ? "page" : "pages"}`
@@ -7120,11 +7335,41 @@ function renderArtifactSourceBanner(item) {
     }
   }
   const chapter = item?.journeyChapterTitle || binding.chapterTitle || "Current chapter";
+  const evidenceStatus = getEvidenceStatus(item);
   elements.artifactSourceBanner.replaceChildren(
     createElement("strong", `This note is from ${sourceName}`),
     createElement("span", `${sourceMeta} · Saved to ${chapter}. Switching pages will not replace this source.`)
   );
+  const status = document.createElement("div");
+  status.className = `evidence-status evidence-status--${evidenceStatus.tone}`;
+  status.append(
+    createElement("strong", evidenceStatus.label),
+    createElement("span", evidenceStatus.detail)
+  );
+  elements.artifactSourceBanner.append(status);
   renderAiFallbackBanner(item);
+}
+
+function getEvidenceStatus(item = {}) {
+  const explicit = item.evidenceStatus && typeof item.evidenceStatus === "object" ? item.evidenceStatus : null;
+  if (explicit?.label && explicit?.detail) {
+    return {
+      tone: String(explicit.tone || "linked").replace(/[^a-z-]/gi, "").toLowerCase() || "linked",
+      label: String(explicit.label).slice(0, 80),
+      detail: String(explicit.detail).slice(0, 220)
+    };
+  }
+  const nodes = Array.isArray(item?.visualLesson?.visualModel?.nodes)
+    ? item.visualLesson.visualModel.nodes
+    : [];
+  const cited = nodes.filter((node) => String(node?.sourceText || node?.sourceAnchor || node?.sourceRef?.quote || "").trim()).length;
+  if (!nodes.length) {
+    return { tone: "review", label: "Evidence status unavailable", detail: "This artifact has no visual concepts to check yet." };
+  }
+  if (cited === nodes.length) {
+    return { tone: "linked", label: "Evidence linked", detail: `${cited} of ${nodes.length} visual concepts include a saved source excerpt.` };
+  }
+  return { tone: "review", label: "Evidence needs review", detail: `${cited} of ${nodes.length} visual concepts include a source excerpt.` };
 }
 
 function renderAiFallbackBanner(item) {
@@ -7291,7 +7536,9 @@ function renderSession(session) {
   elements.quizBlock.classList.add("hidden");
   elements.saveSessionButton.classList.remove("hidden");
   elements.generateQuizButton?.classList.remove("hidden");
-  if (elements.generateQuizButton) elements.generateQuizButton.textContent = "Regenerate quiz";
+  if (elements.generateQuizButton) {
+    elements.generateQuizButton.textContent = session.demoMode ? "Restart 1-question check" : "Regenerate quiz";
+  }
   renderArtifactSourceBanner(session);
   updatePinnedArtifactControl();
   const conciseSummary = compactSummaryForDisplay(session.summary || []);

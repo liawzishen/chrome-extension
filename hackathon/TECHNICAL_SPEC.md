@@ -2,14 +2,18 @@
 
 ## Architecture
 
-```text
-Chrome side-panel extension (Manifest V3)
-  -> service worker and explicit permission flows
-  -> local Chrome storage for chapters and study artifacts
-  -> local Node.js backend on loopback
-  -> configured AI provider for note and quiz generation
-  -> local export, PDF parsing, and video-processing paths
-```
+The canonical system design is in [the repository architecture](../ARCHITECTURE.md). The implementation has six explicit boundaries: side-panel orchestration, source normalization, evidence/artifact validation, stable Journey persistence, privileged service-worker actions, and an optional hardened loopback backend.
+
+~~~mermaid
+flowchart LR
+  source["Learner-selected source or curated Math source"] --> normalize["Normalize + fingerprint"]
+  normalize --> validate["Validate evidence-linked artifact"]
+  validate --> journey["Stable Journey chapter"]
+  validate -. "optional generation" .-> backend["Loopback backend"]
+  backend --> provider["Configured provider"]
+~~~
+
+The curated Mathematics demo follows the same source, validation, and Journey contracts as the normal route, while bypassing the optional backend entirely. This keeps the judge experience deterministic without creating a misleading parallel product path.
 
 ## Main components
 

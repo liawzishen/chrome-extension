@@ -1,10 +1,10 @@
 # Journey hourglass and chapter timeline QA
 
-- Source visual truth, average mask defect: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-63a432fb-a5db-4974-95e4-6b55e4025cf0.png`
-- Source visual truth, chapter timeline: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-f1df2799-0319-48be-8af4-153f282baa29.png`
-- Browser-rendered desktop metrics capture: `C:\Users\Dell\AppData\Local\Temp\journey-average-mask-final-desktop.png`
-- Browser-rendered desktop timeline capture: `C:\Users\Dell\AppData\Local\Temp\journey-timeline-final-desktop.png`
-- Browser-rendered mobile timeline capture: `C:\Users\Dell\AppData\Local\Temp\journey-timeline-final-mobile.png`
+- Source visual truth, average mask defect: local capture `codex-clipboard-63a432fb-a5db-4974-95e4-6b55e4025cf0.png` (not included)
+- Source visual truth, chapter timeline: local capture `codex-clipboard-f1df2799-0319-48be-8af4-153f282baa29.png` (not included)
+- Browser-rendered desktop metrics capture: local capture `journey-average-mask-final-desktop.png` (not included)
+- Browser-rendered desktop timeline capture: local capture `journey-timeline-final-desktop.png` (not included)
+- Browser-rendered mobile timeline capture: local capture `journey-timeline-final-mobile.png` (not included)
 - Desktop viewport: `842 x 820`.
 - Mobile viewport: `360 x 640`.
 - Local data state: Progress `0%`, Average unscored, Focus `0m`. The Average reference shows `40%`, so its active sand fill could not be reproduced without changing stored learning data.

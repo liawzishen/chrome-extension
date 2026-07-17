@@ -98,7 +98,7 @@ Yes—let’s keep targeted retries as a design discussion for now; I won’t im
 
 ## 9. Assistant
 
-The original quiz bug is fixed: the Photosynthesis demo now produces exactly five grounded questions, Java-specific fallback templates are gone, and both client/server reject partial or unrelated quiz output. All 219 tests pass. See [popup.js](C:\Users\Dell\Documents\google_plugin\popup.js:2113), [server.js](C:\Users\Dell\Documents\google_plugin\server.js:2014), and the new regression test [popup-quiz-generation.test.js](C:\Users\Dell\Documents\google_plugin\tests\popup-quiz-generation.test.js:31).
+The original quiz bug is fixed: the Photosynthesis demo now produces exactly five grounded questions, Java-specific fallback templates are gone, and both client/server reject partial or unrelated quiz output. All 219 tests pass. See [popup.js](../popup.js:2113), [server.js](../server.js:2014), and the new regression test [popup-quiz-generation.test.js](../tests/popup-quiz-generation.test.js:31).
 
 ## Targeted-retry design
 
@@ -264,7 +264,7 @@ Key changes:
 - Condensed prompts, response caching, error-aware retries, scaled note output, and stronger grounding for video, collections, visual nodes, and cheat sheets.
 - Existing `weakTopics` remains intact; cross-note canonicalization remains deliberately deferred.
 
-Primary files: [server.js](C:/Users/Dell/Documents/google_plugin/server.js), [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js), [popup.html](C:/Users/Dell/Documents/google_plugin/popup.html), [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js), and [cheat-sheet-utils.js](C:/Users/Dell/Documents/google_plugin/cheat-sheet-utils.js).
+Primary files: [server.js](../server.js), [popup.js](../popup.js), [popup.html](../popup.html), [journey-utils.js](../journey-utils.js), and [cheat-sheet-utils.js](../cheat-sheet-utils.js).
 
 Verification passed:
 
@@ -318,7 +318,7 @@ Fixed both problems.
 - Videos focus the matching tab and jump to the cited timestamp.
 - Collection citations retain the underlying source’s PDF/video metadata and fingerprint.
 
-Primary changes: [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:2455), [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:1083), and [cheat-sheet-utils.js](C:/Users/Dell/Documents/google_plugin/cheat-sheet-utils.js:337).
+Primary changes: [popup.js](../popup.js:2455), [journey-utils.js](../journey-utils.js:1083), and [cheat-sheet-utils.js](../cheat-sheet-utils.js:337).
 
 Verification: all 268 repository tests and syntax checks pass.
 
@@ -411,18 +411,18 @@ The recovery baseline is green. All 12 cut points were already coherently comple
 
 | File | Interrupted area recovered |
 |---|---|
-| [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:7207) | Journey session upsert carrying question attempts and quiz metadata |
-| [server.js](C:/Users/Dell/Documents/google_plugin/server.js:2764) | Visual-model normalization with concept IDs, typed edges, evidence, and `sourcePage` |
-| [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:969) | Weak-concept attempt grouping and ranking |
-| [journey-worker-utils.js](C:/Users/Dell/Documents/google_plugin/journey-worker-utils.js:252) | Applied-operation metadata inside the serialized reducer |
-| [cheat-sheet-utils.js](C:/Users/Dell/Documents/google_plugin/cheat-sheet-utils.js:323) | Exact-source claim and citation grounding |
-| [tests/cheat-sheet-utils.test.js](C:/Users/Dell/Documents/google_plugin/tests/cheat-sheet-utils.test.js:205) | PDF page-alias and source-fingerprint fixture |
-| [tests/journey-utils.test.js](C:/Users/Dell/Documents/google_plugin/tests/journey-utils.test.js:500) | Source-binding learning-context test |
-| [tests/journey-worker-utils.test.js](C:/Users/Dell/Documents/google_plugin/tests/journey-worker-utils.test.js:289) | Repeated webpage snapshot source payload |
-| [tests/popup-quiz-generation.test.js](C:/Users/Dell/Documents/google_plugin/tests/popup-quiz-generation.test.js:113) | Quiz-service boundary harness and exact-count/grounding assertions |
-| [tests/server-artifacts.test.js](C:/Users/Dell/Documents/google_plugin/tests/server-artifacts.test.js:394) | Contaminated-question fixture and concept-linked quiz validation |
-| [tests/server-cheat-sheet.test.js](C:/Users/Dell/Documents/google_plugin/tests/server-cheat-sheet.test.js:193) | PDF cheat-sheet page evidence assertions |
-| [tests/server-hardening.test.js](C:/Users/Dell/Documents/google_plugin/tests/server-hardening.test.js:165) | Global oldest-session eviction assertion |
+| [popup.js](../popup.js:7207) | Journey session upsert carrying question attempts and quiz metadata |
+| [server.js](../server.js:2764) | Visual-model normalization with concept IDs, typed edges, evidence, and `sourcePage` |
+| [journey-utils.js](../journey-utils.js:969) | Weak-concept attempt grouping and ranking |
+| [journey-worker-utils.js](../journey-worker-utils.js:252) | Applied-operation metadata inside the serialized reducer |
+| [cheat-sheet-utils.js](../cheat-sheet-utils.js:323) | Exact-source claim and citation grounding |
+| [tests/cheat-sheet-utils.test.js](../tests/cheat-sheet-utils.test.js:205) | PDF page-alias and source-fingerprint fixture |
+| [tests/journey-utils.test.js](../tests/journey-utils.test.js:500) | Source-binding learning-context test |
+| [tests/journey-worker-utils.test.js](../tests/journey-worker-utils.test.js:289) | Repeated webpage snapshot source payload |
+| [tests/popup-quiz-generation.test.js](../tests/popup-quiz-generation.test.js:113) | Quiz-service boundary harness and exact-count/grounding assertions |
+| [tests/server-artifacts.test.js](../tests/server-artifacts.test.js:394) | Contaminated-question fixture and concept-linked quiz validation |
+| [tests/server-cheat-sheet.test.js](../tests/server-cheat-sheet.test.js:193) | PDF cheat-sheet page evidence assertions |
+| [tests/server-hardening.test.js](../tests/server-hardening.test.js:165) | Global oldest-session eviction assertion |
 
 Verification:
 
@@ -440,7 +440,7 @@ The quiz ID uniqueness, concept-linking, evidence, and `sourcePage` work remains
 
 # Files mentioned by the user:
 
-## Part 1 — Detailed findings (my testing feedback) 🔴 F1 — The error message lies…: C:\Users\Dell\.codex/attachments/34b553fe-2d78-4b8d-9e18-9dbaa3c66bc4/pasted-text.txt
+## Part 1 - Detailed findings (my testing feedback): local attachment not included in the repository
 
 ## My request for Codex:
 I have test the program just now and it is not the latest version. So based on the below information of the problem that you have been fixed , ignore it.
@@ -534,13 +534,13 @@ I did not create the requested separate performance commit because the worktree 
 
 # Files mentioned by the user:
 
-## codex-clipboard-043582a7-9e65-477e-a0b4-dae11c7ca1ca.png: C:/Users/Dell/AppData/Local/Temp/codex-clipboard-043582a7-9e65-477e-a0b4-dae11c7ca1ca.png
+## codex-clipboard-043582a7-9e65-477e-a0b4-dae11c7ca1ca.png: local attachment not included in the repository
 
 ## My request for Codex:
 Why once i generated about the quiz with 15 amount, it showing this message:"The study service couldn’t be reached. A source-grounded local backup quiz was generated instead. Start the local backend to use AI generation.", although i have successfully generated 15 quiz.Also, why the learning journey inside the particle tree with the subheader just only showing one? It does not showing the other note that we have do about it When i build the visual chapter note, it seem like only using one note for generating, not combine with all the note that inside the chapter. Fix it. Please always let me know if you have any confusion or unclear about my requirement
 
 
-> Attached image: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-043582a7-9e65-477e-a0b4-dae11c7ca1ca.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -604,13 +604,13 @@ Syntax validation is green. The focused regressions now cover: neutral success s
 
 # Files mentioned by the user:
 
-## codex-clipboard-8fd11a9d-2c67-4a8b-9c66-63684e3a4799.png: C:/Users/Dell/AppData/Local/Temp/codex-clipboard-8fd11a9d-2c67-4a8b-9c66-63684e3a4799.png
+## codex-clipboard-8fd11a9d-2c67-4a8b-9c66-63684e3a4799.png: local attachment not included in the repository
 
 ## My request for Codex:
 we only could create about 7/8 notes for one chapter right? But why there is so many things inside the tree? Fix it
 
 
-> Attached image: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-8fd11a9d-2c67-4a8b-9c66-63684e3a4799.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -723,7 +723,7 @@ Fixed the Learning Forest design.
 - Rebuilt `journey-tree.bundle.js`.
 - Visually verified focused seedling, mature-tree, and multi-tree overview modes.
 
-![Updated Learning Forest overview](C:/Users/Dell/Documents/google_plugin/output/playwright/forest-overview-final.png)
+> Updated Learning Forest overview: local generated screenshot not included in the repository.
 
 Verification:
 
@@ -738,13 +738,13 @@ The only design assumption is that “seedling” means a two-leaf dicot, not a 
 
 # Files mentioned by the user:
 
-## codex-clipboard-4760f2a8-0eea-45fc-a5ef-2adfa76301cd.png: C:/Users/Dell/AppData/Local/Temp/codex-clipboard-4760f2a8-0eea-45fc-a5ef-2adfa76301cd.png
+## codex-clipboard-4760f2a8-0eea-45fc-a5ef-2adfa76301cd.png: local attachment not included in the repository
 
 ## My request for Codex:
 Now increasing the distance between each of the chapter as currently is will be blocking about the other chapter. 
 
 
-> Attached image: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-4760f2a8-0eea-45fc-a5ef-2adfa76301cd.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -782,13 +782,13 @@ At the reported 798×472 viewport, all six chapters now have distinct canopies a
 
 # Files mentioned by the user:
 
-## Generated image 3.png: C:/Users/Dell/Downloads/Generated image 3.png
+## Generated image 3.png: local attachment not included in the repository
 
 ## My request for Codex:
 Please refer to this picture and continue
 
 
-> Attached image: `C:\Users\Dell\Downloads\Generated image 3.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -832,9 +832,9 @@ Implemented the reference-inspired Learning Forest layout.
 - Added the broad Journey Ribbon shown in your reference.
 - Verified both 6- and 12-chapter layouts at the original 798×472 viewport with zero console errors.
 
-![Updated 12-chapter forest](C:/Users/Dell/Documents/google_plugin/output/playwright/forest-reference-hierarchy-12-settled.png)
+> Updated 12-chapter forest: local generated screenshot not included in the repository.
 
-Main changes: [forest.js](C:/Users/Dell/Documents/google_plugin/journey-tree/forest.js:133), [journey.css](C:/Users/Dell/Documents/google_plugin/journey.css:313), and [journey.html](C:/Users/Dell/Documents/google_plugin/journey.html:48).
+Main changes: [forest.js](../journey-tree/forest.js:133), [journey.css](../journey.css:313), and [journey.html](../journey.html:48).
 
 Validation is green:
 
@@ -849,13 +849,13 @@ The only interpretation I made was preserving each chapter’s true growth stage
 
 # Files mentioned by the user:
 
-## codex-clipboard-393fc134-aebb-4449-91e7-8c5073bd890a.png: C:/Users/Dell/AppData/Local/Temp/codex-clipboard-393fc134-aebb-4449-91e7-8c5073bd890a.png
+## codex-clipboard-393fc134-aebb-4449-91e7-8c5073bd890a.png: local attachment not included in the repository
 
 ## My request for Codex:
 I notice some seedling title has been blocked. Fix it
 
 
-> Attached image: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-393fc134-aebb-4449-91e7-8c5073bd890a.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -891,7 +891,7 @@ Fixed.
 - Collision handling can move titles sideways or downward, but never upward through a seedling.
 - Verified `test1`, `test3`, and `test4` at 798×472.
 
-Changes are in [forest.js](C:/Users/Dell/Documents/google_plugin/journey-tree/forest.js:203), with regression coverage in [journey-page.test.js](C:/Users/Dell/Documents/google_plugin/tests/journey-page.test.js:60).
+Changes are in [forest.js](../journey-tree/forest.js:203), with regression coverage in [journey-page.test.js](../tests/journey-page.test.js:60).
 
 Validation passed:
 
@@ -951,7 +951,7 @@ Implemented.
 - Manual **Pause motion** blocks touch activation.
 - Focused-tree motion remains unchanged.
 
-Main implementation: [forest.js](C:/Users/Dell/Documents/google_plugin/journey-tree/forest.js:1222), [particle-system.js](C:/Users/Dell/Documents/google_plugin/journey-tree/particle-system.js:1175), and [shaders.js](C:/Users/Dell/Documents/google_plugin/journey-tree/shaders.js:13).
+Main implementation: [forest.js](../journey-tree/forest.js:1222), [particle-system.js](../journey-tree/particle-system.js:1175), and [shaders.js](../journey-tree/shaders.js:13).
 
 Verified with mouse, blank space inside tree bounds, direct touch, cancellation, manual pause, and focus mode.
 
@@ -966,13 +966,13 @@ No unresolved ambiguity remains.
 
 # Files mentioned by the user:
 
-## codex-clipboard-b2403847-c08a-4d25-b850-90d49a1f6fee.png: C:/Users/Dell/AppData/Local/Temp/codex-clipboard-b2403847-c08a-4d25-b850-90d49a1f6fee.png
+## codex-clipboard-b2403847-c08a-4d25-b850-90d49a1f6fee.png: local attachment not included in the repository
 
 ## My request for Codex:
 Also included the bottom panel when touching or currently choosing, the particle will also having the motion
 
 
-> Attached image: `C:\Users\Dell\AppData\Local\Temp\codex-clipboard-b2403847-c08a-4d25-b850-90d49a1f6fee.png`
+> Attached image: local attachment not included in the repository.
 
 ---
 
@@ -1008,7 +1008,7 @@ Implemented.
 - Hovering, focusing, or touching another chapter temporarily animates that tree too.
 - Particle repulsion still requires direct contact with actual particles.
 - Pause motion overrides every motion source.
-- Rebuilt `journey-tree.bundle.js` and updated coverage in [journey-page.test.js](C:/Users/Dell/Documents/google_plugin/tests/journey-page.test.js:229).
+- Rebuilt `journey-tree.bundle.js` and updated coverage in [journey-page.test.js](../tests/journey-page.test.js:229).
 
 Verification:
 

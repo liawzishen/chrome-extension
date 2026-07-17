@@ -22,7 +22,7 @@
 
 # Files mentioned by the user:
 
-## optimization.md: C:/Users/Dell/Downloads/optimization.md
+## optimization.md: local attachment not included in the repository
 
 ## My request for Codex:
 Read this optimization.md and go through with it. Please let me know and ask me if you are not 100% sure about it
@@ -195,11 +195,11 @@ Implemented the required Tasks 1–5 from `optimization.md`, including the clari
 
 Key changes:
 
-- Spaced-repetition strength, intervals, decay, and due concepts in [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:1079)
-- Habit profiling and study-plan generation in [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:1181)
-- Functional “TODAY’S PLAN” UI and targeted recovery quizzes in [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:7525)
-- Responsive semantic styling in [popup.css](C:/Users/Dell/Documents/google_plugin/popup.css:2225)
-- Sanitized habit/due-concept AI summary context in [server.js](C:/Users/Dell/Documents/google_plugin/server.js:914)
+- Spaced-repetition strength, intervals, decay, and due concepts in [journey-utils.js](../journey-utils.js:1079)
+- Habit profiling and study-plan generation in [journey-utils.js](../journey-utils.js:1181)
+- Functional Today’s Plan UI and targeted recovery quizzes in [popup.js](../popup.js:7525)
+- Responsive semantic styling in [popup.css](../popup.css:2225)
+- Sanitized habit/due-concept AI summary context in [server.js](../server.js:914)
 
 Verification passed:
 
@@ -216,7 +216,7 @@ No unresolved questions remain. Task 6 was explicitly optional, so I left it out
 
 # Files mentioned by the user:
 
-## smart-import.md: C:/Users/Dell/Downloads/smart-import.md
+## smart-import.md: local attachment not included in the repository
 
 ## My request for Codex:
 now do the samething with this file. Always ask me for clarification if you are not 100 percent suer
@@ -314,7 +314,7 @@ Key changes:
 - Sequential source saving through the existing Journey operation.
 - Sequential note generation with progress, retry, dismissal, and backend-unavailable handling.
 
-Main files: [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:519), [server.js](C:/Users/Dell/Documents/google_plugin/server.js:926), [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:739), [popup.html](C:/Users/Dell/Documents/google_plugin/popup.html:109), and [popup.css](C:/Users/Dell/Documents/google_plugin/popup.css).
+Main files: [journey-utils.js](../journey-utils.js:519), [server.js](../server.js:926), [popup.js](../popup.js:739), [popup.html](../popup.html:109), and [popup.css](../popup.css).
 
 Verification completed:
 

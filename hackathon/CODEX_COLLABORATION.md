@@ -41,7 +41,7 @@ Codex exported the visible work sessions, linked them to the project documentati
 | Workstream | My direction and review role | Codex GPT-5.6 contribution |
 | --- | --- | --- |
 | Product and learning model | Defined Exam-Cram as a source-grounded study companion with an evidence-to-mastery loop. | Mapped that product model onto the existing extension architecture and helped keep changes aligned to it. |
-| Quiz correctness and trust | Reported a concrete failure: a five-question photosynthesis flow returned the wrong count and unrelated Java content. Set the requirement that quiz material remain grounded in the loaded source. | Traced the quiz-generation and evidence path, implemented focused grounding and validation work, and recorded the largest implementation session in the project evidence. |
+| Quiz correctness and trust | Reported a concrete failure: a five-question source-grounded flow returned the wrong count and unrelated content. Set the requirement that quiz material remain grounded in the loaded source. | Traced the quiz-generation and evidence path, implemented focused grounding and validation work, and recorded the largest implementation session in the project evidence. |
 | Documentation-led implementation | Authored the scope, PRD, technical specification, and design materials that set product and engineering constraints. | Read the briefs in context, identified affected repository areas, and implemented against those requirements. |
 | UX and visual refinement | Provided design feedback, reference expectations, and direction on information density, timeline order, duplicate information, and visual fit. | Compared the current experience against the target, refined Journey and import-review interactions, and supported responsive and accessibility-aware implementation. |
 | Design validation | Required uncertainty to be raised before edits. | Detected the Vite-versus-extension workspace mismatch and found the appropriate implementation target before a wrong-repository change could occur. |
@@ -70,4 +70,3 @@ I created the product direction and authored the scope, requirements, technical 
 ## Accuracy Note
 
 This report describes GPT-5.6 as part of the Codex build workflow. It does not claim that the shipped extension necessarily uses GPT-5.6 as a runtime model; runtime claims should always match the actual deployed configuration.
-

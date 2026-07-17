@@ -6,6 +6,7 @@ process.env.ALLOWED_EXTENSION_ORIGINS = "chrome-extension://abcdefghijklmnopabcd
 
 const {
   appendRetryCorrection,
+  assertVisualModelUsable,
   buildNotesPrompt,
   buildQuizOnlyPrompt,
   buildRecoveryComposition,
@@ -1169,6 +1170,68 @@ test("collection visual nodes repair claims contaminated beyond their exact save
   assert.equal(repaired.sourceId, "source-a");
   assert.match(repaired.detail, /Cell membranes control transport through selective permeability/i);
   assert.doesNotMatch(JSON.stringify(repaired), /Java int|primitive type/i);
+});
+
+function makeUsableRawVisualModel({ scenarioCount = 2, nodeCount = 3, brokenScenario = false } = {}) {
+  const nodes = [];
+  for (let index = 0; index < nodeCount; index += 1) {
+    nodes.push({
+      id: `n${index + 1}`,
+      label: `Concept ${index + 1}`,
+      detail: `Concept ${index + 1} is grounded in the source material.`
+    });
+  }
+  const scenarios = [];
+  for (let index = 0; index < scenarioCount; index += 1) {
+    scenarios.push({
+      id: `s${index + 1}`,
+      label: `Scenario ${index + 1}`,
+      activeIds: brokenScenario ? ["does-not-exist"] : ["n1"],
+      values: [],
+      outcome: "The active concept drives the outcome.",
+      insight: "Use the active relationship to explain the result."
+    });
+  }
+  return {
+    title: "Model",
+    objective: "Understand how the concepts connect.",
+    kind: "system",
+    nodes,
+    edges: [],
+    scenarios,
+    check: {
+      question: "Which concept is active?",
+      choices: ["Increases the rate", "Decreases the rate", "Stops the process"],
+      answer: "Increases the rate"
+    },
+    suggestedQuestions: []
+  };
+}
+
+test("assertVisualModelUsable tolerates fewer than 2 scenarios when scenarios are not required", () => {
+  const rawModel = makeUsableRawVisualModel({ scenarioCount: 1 });
+  assert.doesNotThrow(() => assertVisualModelUsable(rawModel, { requireScenarios: false }));
+});
+
+test("assertVisualModelUsable still requires 2 scenarios by default", () => {
+  const rawModel = makeUsableRawVisualModel({ scenarioCount: 1 });
+  assert.throws(() => assertVisualModelUsable(rawModel), /fewer than 2 usable scenarios/);
+});
+
+test("assertVisualModelUsable still rejects a broken scenario even when scenarios are optional", () => {
+  const rawModel = makeUsableRawVisualModel({ scenarioCount: 2, brokenScenario: true });
+  assert.throws(
+    () => assertVisualModelUsable(rawModel, { requireScenarios: false }),
+    /scenario with no valid active node IDs/
+  );
+});
+
+test("assertVisualModelUsable still fast-fails on too few nodes when scenarios are optional", () => {
+  const rawModel = makeUsableRawVisualModel({ scenarioCount: 1, nodeCount: 2 });
+  assert.throws(
+    () => assertVisualModelUsable(rawModel, { requireScenarios: false }),
+    /fewer than 3 usable nodes/
+  );
 });
 
 test("strips unsupported item-count keywords from every Gemini schema path only", () => {

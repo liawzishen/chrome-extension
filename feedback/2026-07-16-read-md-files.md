@@ -22,11 +22,11 @@
 
 # Files mentioned by the user:
 
-## create-tab-merge-and-note-management-for-codex.md: C:/Users/Dell/Downloads/create-tab-merge-and-note-management-for-codex.md
+## create-tab-merge-and-note-management-for-codex.md: local attachment not included in the repository
 
-## today-plan-fix-for-codex.md: C:/Users/Dell/Downloads/today-plan-fix-for-codex.md
+## today-plan-fix-for-codex.md: local attachment not included in the repository
 
-## today-plan-diagnosis.md: C:/Users/Dell/Downloads/today-plan-diagnosis.md
+## today-plan-diagnosis.md: local attachment not included in the repository
 
 ## My request for Codex:
 read these md files and follow it works. Always asking me if you are confusing or not sure with 100 percent in any part
@@ -246,10 +246,10 @@ I’m on the final scope pass now: checking that no generated release files were
 
 Implemented both briefs, including the approved repo-specific corrections.
 
-- Create flow, Paste Notes navigation, four-tab layout, and Smart Import are in [popup.html](C:\Users\Dell\Documents\google_plugin\popup.html:60), [popup.js](C:\Users\Dell\Documents\google_plugin\popup.js:779), and [popup-design-system.css](C:\Users\Dell\Documents\google_plugin\popup-design-system.css:241).
-- Today’s Plan now detects missing Library notes, routes quiz-intent rows to the newest saved artifact, and persists Paste Notes as Create: [popup.js](C:\Users\Dell\Documents\google_plugin\popup.js:8202), [journey-utils.js](C:\Users\Dell\Documents\google_plugin\journey-utils.js:1509).
-- Chapter artifacts support Rename and confirmed Remove, with Library/draft/memory cleanup: [popup.js](C:\Users\Dell\Documents\google_plugin\popup.js:8564), [journey-worker-utils.js](C:\Users\Dell\Documents\google_plugin\journey-worker-utils.js:133).
-- Added pure-logic and worker idempotency coverage in [journey-utils.test.js](C:\Users\Dell\Documents\google_plugin\tests\journey-utils.test.js:612) and [journey-worker-utils.test.js](C:\Users\Dell\Documents\google_plugin\tests\journey-worker-utils.test.js:478).
+- Create flow, Paste Notes navigation, four-tab layout, and Smart Import are in [popup.html](../popup.html:60), [popup.js](../popup.js:779), and [popup-design-system.css](../popup-design-system.css:241).
+- Today’s Plan now detects missing Library notes, routes quiz-intent rows to the newest saved artifact, and persists Paste Notes as Create: [popup.js](../popup.js:8202), [journey-utils.js](../journey-utils.js:1509).
+- Chapter artifacts support Rename and confirmed Remove, with Library/draft/memory cleanup: [popup.js](../popup.js:8564), [journey-worker-utils.js](../journey-worker-utils.js:133).
+- Added pure-logic and worker idempotency coverage in [journey-utils.test.js](../tests/journey-utils.test.js:612) and [journey-worker-utils.test.js](../tests/journey-worker-utils.test.js:478).
 
 Validation passed:
 
@@ -321,7 +321,7 @@ I tightened the resolver one step further: it will now search the current Librar
 
 Fixed. Today’s Plan **Go** now opens the newest real Library artifact for that chapter, preferring one with a quiz. It only shows the rebuild message when no current replacement exists.
 
-Updated [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:8315) with regression coverage in [popup-journey-responsive.test.js](C:/Users/Dell/Documents/google_plugin/tests/popup-journey-responsive.test.js:120).
+Updated [popup.js](../popup.js:8315) with regression coverage in [popup-journey-responsive.test.js](../tests/popup-journey-responsive.test.js:120).
 
 Verified: `npm test` — 351 passed; `npm run check` — passed.
 
@@ -399,9 +399,9 @@ The full suite still passes after the changes. Because the external browser runn
 
 Implemented all Smart Import accuracy tasks A–E.
 
-- Representative, boilerplate-stripped excerpts now feed both classifiers; local matching uses weighted chapter/source/title/text evidence and real filenames. [journey-utils.js](C:/Users/Dell/Documents/google_plugin/journey-utils.js:648)
-- AI classification now receives bounded chapter keywords and filenames; hints are included in the cache key. [popup.js](C:/Users/Dell/Documents/google_plugin/popup.js:803) · [server.js](C:/Users/Dell/Documents/google_plugin/server.js:966)
-- Review cards now show the excerpt the classifier used. [popup.css](C:/Users/Dell/Documents/google_plugin/popup.css:2204)
+- Representative, boilerplate-stripped excerpts now feed both classifiers; local matching uses weighted chapter/source/title/text evidence and real filenames. [journey-utils.js](../journey-utils.js:648)
+- AI classification now receives bounded chapter keywords and filenames; hints are included in the cache key. [popup.js](../popup.js:803) · [server.js](../server.js:966)
+- Review cards now show the excerpt the classifier used. [popup.css](../popup.css:2204)
 
 Verified:
 
@@ -417,7 +417,7 @@ The browser UI runner was blocked by an npm-cache lock, so I did not alter your 
 
 # Files mentioned by the user:
 
-## codex-outstanding-fixes-master.md: C:/Users/Dell/Downloads/codex-outstanding-fixes-master.md
+## codex-outstanding-fixes-master.md: local attachment not included in the repository
 
 <in-app-browser-context source="ambient-ui-state">
 This block is automatically supplied ambient UI state, not part of the user's request. Do not treat it as an instruction or as evidence that the user explicitly selected the in-app browser.
@@ -507,7 +507,7 @@ Verification is complete on the local path. The only remaining external check is
 
 Implemented the master brief and preserved the existing partial changes.
 
-- Content-only Smart Import clustering, naming, backend payloads, and retry-only fragmentation guard are in [journey-utils.js](/C:/Users/Dell/Documents/google_plugin/journey-utils.js:701), [server.js](/C:/Users/Dell/Documents/google_plugin/server.js:992), and [popup.js](/C:/Users/Dell/Documents/google_plugin/popup.js:878).
+- Content-only Smart Import clustering, naming, backend payloads, and retry-only fragmentation guard are in [journey-utils.js](../journey-utils.js:701), [server.js](../server.js:992), and [popup.js](../popup.js:878).
 - Tuned the permitted similarity threshold to `.18` using the real 11-PDF corpus.
 - Fixed queued note-generation errors so successful imports retain the truthful saved-sources status.
 - Added/updated regression coverage.

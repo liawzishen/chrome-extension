@@ -707,7 +707,7 @@ async function generateStudyNotes(input) {
       const prompt = appendRetryCorrection(promptBuilder(safeInput), lastError);
       try {
         const note = parseSessionJson(await generateAiText(systemInstruction, prompt, getNotesTokenBudget(safeInput), "study_notes"));
-        assertVisualModelUsable(note?.visualLesson?.visualModel);
+        assertVisualModelUsable(note?.visualLesson?.visualModel, { requireScenarios: false });
         const normalized = normalizeNotes(note, safeInput);
         assertVisualModelUsable(normalized.visualLesson.visualModel);
         return normalized;
@@ -3057,7 +3057,7 @@ function attachVideoSegmentsToVisualModel(model, sourceContext) {
   };
 }
 
-function assertVisualModelUsable(value) {
+function assertVisualModelUsable(value, { requireScenarios = true } = {}) {
   if (!value || typeof value !== "object") {
     throw new Error("AI visual model is missing.");
   }
@@ -3081,17 +3081,22 @@ function assertVisualModelUsable(value) {
   }
 
   const scenarios = normalizeObjectList(value.scenarios).slice(0, 4);
-  if (scenarios.length < 2) {
+  if (requireScenarios && scenarios.length < 2) {
     throw new Error("AI visual model has fewer than 2 usable scenarios.");
   }
-  const hasBrokenScenario = scenarios.some((scenario) => {
-    const activeIds = normalizeStringList(scenario.activeIds)
-      .map((id) => sanitizeVisualId(id, ""))
-      .filter((id) => nodeIds.has(id));
-    return activeIds.length === 0;
-  });
-  if (hasBrokenScenario) {
-    throw new Error("AI visual model has a scenario with no valid active node IDs.");
+  // normalizeVisualModel() pads scenarios up to 2 grounded fallbacks, so the raw
+  // pre-normalization check can accept fewer; still reject any scenario that cites
+  // no real node when scenarios are present.
+  if (scenarios.length) {
+    const hasBrokenScenario = scenarios.some((scenario) => {
+      const activeIds = normalizeStringList(scenario.activeIds)
+        .map((id) => sanitizeVisualId(id, ""))
+        .filter((id) => nodeIds.has(id));
+      return activeIds.length === 0;
+    });
+    if (hasBrokenScenario) {
+      throw new Error("AI visual model has a scenario with no valid active node IDs.");
+    }
   }
 }
 
@@ -3821,6 +3826,7 @@ function clamp(value, min, max) {
 module.exports = {
   server,
   assertAuthorizedRequest,
+  assertVisualModelUsable,
   appendRetryCorrection,
   buildClassifySourcesPrompt,
   buildNotesPrompt,
