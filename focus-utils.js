@@ -17,6 +17,10 @@
   const MAX_RULES = 50;
   const MAX_PATH_LENGTH = 180;
   const MAX_HISTORY = 40;
+  const CHAPTER_STORAGE_KEY = "examCramChapterFocusState";
+  const CHAPTER_IDLE_ALARM = "examCramChapterFocus:idle";
+  const CHAPTER_IDLE_TIMEOUT_MS = 90 * 1000;
+  const MAX_CHAPTER_HISTORY = 500;
   const FOCUS_SESSION_TIME_LABEL = "Focus session time";
   const GLOBAL_OPTIONAL_HOST_PATTERN = "*://*/*";
   const EXTENSION_RELOAD_REQUIRED_MESSAGE = "Reload Exam-Cram from chrome://extensions to activate updated permissions.";
@@ -27,6 +31,14 @@
     START: "FOCUS_START",
     STOP: "FOCUS_STOP",
     BREAK: "FOCUS_BREAK"
+  });
+  const CHAPTER_MESSAGE_TYPES = Object.freeze({
+    GET_STATE: "CHAPTER_FOCUS_GET_STATE",
+    SELECT: "CHAPTER_FOCUS_SELECT",
+    START: "CHAPTER_FOCUS_START",
+    PAUSE: "CHAPTER_FOCUS_PAUSE",
+    RESUME: "CHAPTER_FOCUS_RESUME",
+    ACTIVITY: "CHAPTER_FOCUS_ACTIVITY"
   });
 
   class FocusError extends Error {
@@ -49,6 +61,27 @@
       rules: [],
       history: [],
       lastError: "",
+      updatedAt: normalizeNow(now)
+    };
+  }
+
+  function createDefaultChapterFocusState(now = Date.now()) {
+    return {
+      schemaVersion: 1,
+      active: false,
+      status: "idle",
+      sessionId: "",
+      chapterId: "",
+      chapterTitle: "",
+      ownerId: "",
+      ownerTabId: null,
+      startedAt: null,
+      resumedAt: null,
+      lastActivityAt: null,
+      currentSessionMs: 0,
+      lastSessionDurationMs: 0,
+      chapterTotals: {},
+      history: [],
       updatedAt: normalizeNow(now)
     };
   }
@@ -331,6 +364,208 @@
       .slice(-MAX_HISTORY);
   }
 
+  function normalizeChapterFocusHistory(values) {
+    if (!Array.isArray(values)) return [];
+    return values
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        sessionId: String(entry.sessionId || "").slice(0, 100),
+        chapterId: String(entry.chapterId || "").slice(0, 100),
+        chapterTitle: String(entry.chapterTitle || "").replace(/\s+/g, " ").trim().slice(0, 140),
+        startedAt: normalizeNullableTime(entry.startedAt),
+        endedAt: normalizeNullableTime(entry.endedAt),
+        durationMs: clampInteger(entry.durationMs, 0, MAX_DURATION_MINUTES * 60 * 1000),
+        lastActivityAt: normalizeNullableTime(entry.lastActivityAt),
+        outcome: normalizeChapterFocusOutcome(entry.outcome)
+      }))
+      .filter((entry) => entry.sessionId && entry.chapterId && entry.startedAt !== null && entry.endedAt !== null)
+      .slice(-MAX_CHAPTER_HISTORY);
+  }
+
+  function normalizeChapterTotals(value, history = []) {
+    const totals = {};
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      Object.entries(value).slice(0, 500).forEach(([chapterId, duration]) => {
+        const id = String(chapterId || "").slice(0, 100);
+        if (id) totals[id] = clampInteger(duration, 0, 10 * 365 * 24 * 60 * 60 * 1000);
+      });
+    }
+    if (!Object.keys(totals).length) {
+      history.forEach((entry) => {
+        totals[entry.chapterId] = (totals[entry.chapterId] || 0) + entry.durationMs;
+      });
+    }
+    return totals;
+  }
+
+  function normalizeChapterFocusOutcome(value) {
+    const outcome = String(value || "paused");
+    return ["paused", "hidden", "inactive", "switched", "replaced", "closed"].includes(outcome)
+      ? outcome
+      : "paused";
+  }
+
+  function normalizeChapterFocusState(value, now = Date.now()) {
+    const fallback = createDefaultChapterFocusState(now);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
+    const history = normalizeChapterFocusHistory(value.history);
+    const chapterId = String(value.chapterId || "").slice(0, 100);
+    const chapterTitle = String(value.chapterTitle || "").replace(/\s+/g, " ").trim().slice(0, 140);
+    const startedAt = normalizeNullableTime(value.startedAt);
+    const resumedAt = normalizeNullableTime(value.resumedAt);
+    const lastActivityAt = normalizeNullableTime(value.lastActivityAt);
+    const canRun = Boolean(value.active && value.status === "running" && value.sessionId && chapterId
+      && startedAt !== null && resumedAt !== null && lastActivityAt !== null);
+    const suppliedStatus = String(value.status || "idle");
+    const status = canRun ? "running" : suppliedStatus === "paused" && chapterId ? "paused" : "idle";
+    return {
+      schemaVersion: 1,
+      active: canRun,
+      status,
+      sessionId: canRun ? String(value.sessionId).slice(0, 100) : "",
+      chapterId,
+      chapterTitle,
+      ownerId: canRun ? String(value.ownerId || "").slice(0, 100) : "",
+      ownerTabId: canRun && value.ownerTabId !== null && value.ownerTabId !== undefined
+        && Number.isInteger(Number(value.ownerTabId)) ? Number(value.ownerTabId) : null,
+      startedAt: canRun ? startedAt : null,
+      resumedAt: canRun ? resumedAt : null,
+      lastActivityAt: canRun ? lastActivityAt : null,
+      currentSessionMs: canRun ? clampInteger(value.currentSessionMs, 0, MAX_DURATION_MINUTES * 60 * 1000) : 0,
+      lastSessionDurationMs: clampInteger(value.lastSessionDurationMs, 0, MAX_DURATION_MINUTES * 60 * 1000),
+      chapterTotals: normalizeChapterTotals(value.chapterTotals, history),
+      history,
+      updatedAt: normalizeNullableTime(value.updatedAt) ?? normalizeNow(now)
+    };
+  }
+
+  function getChapterFocusElapsedMs(stateValue, now = Date.now()) {
+    const state = normalizeChapterFocusState(stateValue, now);
+    if (!state.active || state.resumedAt === null) return state.currentSessionMs;
+    return Math.max(0, state.currentSessionMs + normalizeNow(now) - state.resumedAt);
+  }
+
+  function pauseChapterFocusState(previousValue, now = Date.now(), outcome = "paused") {
+    const currentTime = normalizeNow(now);
+    const previous = normalizeChapterFocusState(previousValue, currentTime);
+    if (!previous.active) return previous;
+    const endedAt = Math.max(previous.startedAt, currentTime);
+    const durationMs = Math.min(
+      MAX_DURATION_MINUTES * 60 * 1000,
+      Math.max(0, previous.currentSessionMs + endedAt - previous.resumedAt)
+    );
+    const entry = {
+      sessionId: previous.sessionId,
+      chapterId: previous.chapterId,
+      chapterTitle: previous.chapterTitle,
+      startedAt: previous.startedAt,
+      endedAt,
+      durationMs,
+      lastActivityAt: previous.lastActivityAt,
+      outcome: normalizeChapterFocusOutcome(outcome)
+    };
+    return {
+      ...previous,
+      active: false,
+      status: "paused",
+      sessionId: "",
+      ownerId: "",
+      ownerTabId: null,
+      startedAt: null,
+      resumedAt: null,
+      lastActivityAt: null,
+      currentSessionMs: 0,
+      lastSessionDurationMs: durationMs,
+      chapterTotals: {
+        ...previous.chapterTotals,
+        [previous.chapterId]: (previous.chapterTotals[previous.chapterId] || 0) + durationMs
+      },
+      history: [...previous.history, entry].slice(-MAX_CHAPTER_HISTORY),
+      updatedAt: currentTime
+    };
+  }
+
+  function selectChapterFocusState(previousValue, input, now = Date.now()) {
+    const currentTime = normalizeNow(now);
+    let previous = normalizeChapterFocusState(previousValue, currentTime);
+    const chapterId = String(input?.chapterId || "").slice(0, 100);
+    const chapterTitle = String(input?.chapterTitle || "").replace(/\s+/g, " ").trim().slice(0, 140);
+    if (!chapterId) return previous;
+    if (previous.active && previous.chapterId !== chapterId) {
+      previous = pauseChapterFocusState(previous, currentTime, "switched");
+    }
+    return {
+      ...previous,
+      status: previous.active ? "running" : previous.chapterId === chapterId && previous.status === "paused" ? "paused" : "idle",
+      chapterId,
+      chapterTitle: chapterTitle || previous.chapterTitle,
+      updatedAt: currentTime
+    };
+  }
+
+  function startChapterFocusState(previousValue, input, now = Date.now(), sessionId = "") {
+    const currentTime = normalizeNow(now);
+    let previous = normalizeChapterFocusState(previousValue, currentTime);
+    const chapterId = String(input?.chapterId || previous.chapterId || "").slice(0, 100);
+    const chapterTitle = String(input?.chapterTitle || previous.chapterTitle || "").replace(/\s+/g, " ").trim().slice(0, 140);
+    const ownerId = String(input?.ownerId || "").slice(0, 100);
+    if (!chapterId) throw new FocusError("INVALID_CHAPTER", "Choose a chapter before starting its study timer.");
+    if (!ownerId) throw new FocusError("INVALID_TIMER_OWNER", "The chapter timer could not identify this Learning Tree window.");
+    if (previous.active) {
+      if (previous.chapterId === chapterId && previous.ownerId === ownerId) return previous;
+      previous = pauseChapterFocusState(previous, currentTime, previous.chapterId === chapterId ? "replaced" : "switched");
+    }
+    const nextSessionId = String(sessionId || "").trim();
+    if (!nextSessionId) throw new FocusError("INVALID_SESSION", "The chapter timer could not create a session identifier.");
+    return {
+      ...previous,
+      active: true,
+      status: "running",
+      sessionId: nextSessionId.slice(0, 100),
+      chapterId,
+      chapterTitle,
+      ownerId,
+      ownerTabId: input?.ownerTabId !== null && input?.ownerTabId !== undefined
+        && Number.isInteger(Number(input.ownerTabId)) ? Number(input.ownerTabId) : null,
+      startedAt: currentTime,
+      resumedAt: currentTime,
+      lastActivityAt: currentTime,
+      currentSessionMs: 0,
+      updatedAt: currentTime
+    };
+  }
+
+  function recordChapterFocusActivity(previousValue, input, now = Date.now()) {
+    const currentTime = normalizeNow(now);
+    const previous = normalizeChapterFocusState(previousValue, currentTime);
+    if (!previous.active || previous.ownerId !== String(input?.ownerId || "")
+      || previous.chapterId !== String(input?.chapterId || "")) return previous;
+    return { ...previous, lastActivityAt: currentTime, updatedAt: currentTime };
+  }
+
+  function reconcileChapterFocusState(previousValue, now = Date.now()) {
+    const currentTime = normalizeNow(now);
+    const previous = normalizeChapterFocusState(previousValue, currentTime);
+    if (!previous.active || previous.lastActivityAt === null
+      || currentTime - previous.lastActivityAt < CHAPTER_IDLE_TIMEOUT_MS) {
+      return { state: previous, changed: false };
+    }
+    const endedAt = Math.min(currentTime, previous.lastActivityAt + CHAPTER_IDLE_TIMEOUT_MS);
+    return { state: pauseChapterFocusState(previous, endedAt, "inactive"), changed: true };
+  }
+
+  function getChapterFocusedMs(stateValue, chapterId, now = Date.now()) {
+    const state = normalizeChapterFocusState(stateValue, now);
+    const id = String(chapterId || "");
+    return (state.chapterTotals[id] || 0) + (state.active && state.chapterId === id ? getChapterFocusElapsedMs(state, now) : 0);
+  }
+
+  function getTotalChapterFocusedMs(stateValue, now = Date.now()) {
+    const state = normalizeChapterFocusState(stateValue, now);
+    const stored = Object.values(state.chapterTotals).reduce((total, duration) => total + Math.max(0, Number(duration) || 0), 0);
+    return stored + (state.active ? getChapterFocusElapsedMs(state, now) : 0);
+  }
+
   function normalizeNullableTime(value) {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);
@@ -506,14 +741,20 @@
     MAX_DURATION_MINUTES,
     MAX_RULES,
     MAX_HISTORY,
+    CHAPTER_STORAGE_KEY,
+    CHAPTER_IDLE_ALARM,
+    CHAPTER_IDLE_TIMEOUT_MS,
+    MAX_CHAPTER_HISTORY,
     FOCUS_SESSION_TIME_LABEL,
     GLOBAL_OPTIONAL_HOST_PATTERN,
     EXTENSION_RELOAD_REQUIRED_MESSAGE,
     DNR_RULE_ID_BASE,
     DNR_RULE_ID_LIMIT,
     MESSAGE_TYPES,
+    CHAPTER_MESSAGE_TYPES,
     FocusError,
     createDefaultFocusState,
+    createDefaultChapterFocusState,
     normalizeDurationMinutes,
     resolveDurationMinutes,
     getDurationControlState,
@@ -525,6 +766,7 @@
     normalizeFocusRule,
     normalizeFocusRules,
     normalizeFocusState,
+    normalizeChapterFocusState,
     getRequiredOrigin,
     getRequiredOrigins,
     getManifestOptionalHostPermissions,
@@ -539,6 +781,14 @@
     applyFiveMinuteBreak,
     reconcileFocusState,
     shouldBlock,
-    toPublicFocusState
+    toPublicFocusState,
+    selectChapterFocusState,
+    startChapterFocusState,
+    pauseChapterFocusState,
+    recordChapterFocusActivity,
+    reconcileChapterFocusState,
+    getChapterFocusElapsedMs,
+    getChapterFocusedMs,
+    getTotalChapterFocusedMs
   });
 });

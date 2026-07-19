@@ -37,6 +37,38 @@
         </div>
       </header>
 
+      <aside class="forest-study-rail" aria-label="Learning Tree study controls">
+        <section id="chapterFocusPanel" class="chapter-timer-panel" aria-labelledby="chapterFocusHeading">
+          <header class="chapter-timer-panel__header">
+            <div>
+              <span class="forest-state-card__eyebrow">Focus</span>
+              <h2 id="chapterFocusHeading">Chapter study timer</h2>
+            </div>
+            <span id="chapterFocusStatus" class="chapter-timer-panel__status">Not running</span>
+          </header>
+          <div class="chapter-timer-panel__metrics" aria-live="polite">
+            <div><span>Total focused</span><strong id="chapterFocusTotal">0m</strong></div>
+            <div><span>Current chapter</span><strong id="chapterFocusCurrent">Choose a chapter</strong></div>
+            <div><span>This session</span><strong id="chapterFocusSession">0:00</strong></div>
+            <div><span>Studied chapters</span><strong id="chapterFocusStudied">0</strong></div>
+          </div>
+          <div class="chapter-timer-panel__actions" role="group" aria-label="Chapter timer controls">
+            <button id="startChapterFocus" type="button">Start</button>
+            <button id="pauseChapterFocus" type="button" hidden>Pause</button>
+            <button id="resumeChapterFocus" type="button" hidden>Resume</button>
+          </div>
+          <p id="chapterFocusMessage" class="chapter-timer-panel__message">Select a chapter, then start when you begin studying. The timer pauses on chapter switches, hidden pages, and inactivity.</p>
+        </section>
+
+        <section class="learning-outline" aria-labelledby="learningOutlineHeading">
+          <header>
+            <span class="forest-state-card__eyebrow">Course outline</span>
+            <h2 id="learningOutlineHeading">Uploaded files & chapters</h2>
+          </header>
+          <div id="learningOutline" class="learning-outline__tree"></div>
+        </section>
+      </aside>
+
       <svg id="forestConnectors" class="forest-connectors" aria-hidden="true">
         <defs>
           <marker id="forest-arrowhead" viewBox="0 0 7 7" refX="6.2" refY="3.5" markerWidth="5" markerHeight="5" orient="auto">

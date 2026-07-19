@@ -12,6 +12,8 @@
   const MAX_HTML_NODES = 2500;
   const MAX_HTML_CHUNKS = 400;
   const MAX_PDF_TEXT_ITEMS = 100000;
+  const MAX_PDF_PAGE_TEXT = 6000;
+  const MAX_PDF_CHAPTERS = 40;
   const DOCUMENT_PARSE_TIMEOUT_MS = 20000;
   const MAX_FRAME_RESULTS = 32;
   const PDF_VIEWER_EXTENSION_ID = "mhjfbmdgcfjbbpaeojofohoefgiehjai";
@@ -330,6 +332,184 @@
     return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
   }
 
+  function cleanPdfChapterTitle(value, fallback = "") {
+    const title = normalizeExtractedText(value, 140)
+      .replace(/\.{2,}\s*\d+\s*$/g, "")
+      .replace(/^(?:chapter|unit|part|section)\s+(\d+|[ivxlcdm]+)\s*[:.\-\u2013\u2014]?\s*/i, (_match, number) => `Chapter ${number}: `)
+      .replace(/:\s*$/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    return title || fallback;
+  }
+
+  function getPdfHeadingCandidate(line) {
+    const text = normalizeExtractedText(line, 180).replace(/\s+/g, " ").trim();
+    if (!text || text.length > 140 || /^(?:page\s+)?\d+(?:\s+of\s+\d+)?$/i.test(text)) return null;
+    const explicit = text.match(/^(chapter|unit|part|section)\s+(\d+|[ivxlcdm]+)(?:\s*[:.\-\u2013\u2014]\s*|\s+)?(.{0,110})$/i);
+    if (explicit) {
+      const suffix = cleanPdfChapterTitle(explicit[3]);
+      return cleanPdfChapterTitle(`${explicit[1]} ${explicit[2]}${suffix ? `: ${suffix}` : ""}`);
+    }
+    const numbered = text.match(/^(\d{1,2})(?:\.(?!\d)|\s*[:\u2013\u2014\-])\s*([A-Z][^.!?]{3,100})$/);
+    if (numbered) return cleanPdfChapterTitle(`${numbered[1]}. ${numbered[2]}`);
+    return null;
+  }
+
+  function findPdfContentsCandidates(pageTexts, pageCount) {
+    const candidates = [];
+    const scanLimit = Math.min(Array.isArray(pageTexts) ? pageTexts.length : 0, 12);
+    for (let pageIndex = 0; pageIndex < scanLimit; pageIndex += 1) {
+      const lines = String(pageTexts[pageIndex] || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+      if (!lines.some((line) => /^(?:table of )?contents$/i.test(line))) continue;
+      lines.forEach((line) => {
+        const match = line.match(/^((?:chapter|unit|part|section)\s+(?:\d+|[ivxlcdm]+)(?:\s*[:.\-\u2013\u2014]?\s*[^.]{0,100})?)\s*(?:\.{2,}|\s{2,}|\s\u2026\s)\s*(\d{1,4})\s*$/i);
+        if (!match) return;
+        const pageNumber = Math.round(Number(match[2]));
+        if (pageNumber < 1 || pageNumber > pageCount) return;
+        candidates.push({ title: cleanPdfChapterTitle(match[1]), pageNumber, method: "contents" });
+      });
+    }
+    return candidates;
+  }
+
+  function findPdfHeadingCandidates(pageTexts) {
+    const raw = [];
+    (Array.isArray(pageTexts) ? pageTexts : []).forEach((pageText, pageIndex) => {
+      const lines = String(pageText || "").split(/\n+/).map((line) => line.trim()).filter(Boolean).slice(0, 12);
+      lines.forEach((line) => {
+        const title = getPdfHeadingCandidate(line);
+        if (title) raw.push({ title, pageNumber: pageIndex + 1, method: "heading" });
+      });
+    });
+    const counts = new Map();
+    raw.forEach((entry) => {
+      const key = entry.title.toLocaleLowerCase();
+      counts.set(key, (counts.get(key) || 0) + 1);
+    });
+    return raw.filter((entry) => (counts.get(entry.title.toLocaleLowerCase()) || 0) <= 2);
+  }
+
+  function normalizePdfChapterCandidates(candidates, pageCount) {
+    const seenPages = new Set();
+    const output = [];
+    (Array.isArray(candidates) ? candidates : [])
+      .filter((entry) => entry && Number.isInteger(Number(entry.pageNumber)))
+      .sort((first, second) => Number(first.pageNumber) - Number(second.pageNumber))
+      .forEach((entry) => {
+        const pageNumber = Math.max(1, Math.min(pageCount, Math.round(Number(entry.pageNumber))));
+        const title = cleanPdfChapterTitle(entry.title);
+        if (!title || seenPages.has(pageNumber)) return;
+        seenPages.add(pageNumber);
+        output.push({ title, pageNumber, method: entry.method || "heading" });
+      });
+    return output.slice(0, MAX_PDF_CHAPTERS);
+  }
+
+  function buildPdfChapterText(pageTexts, pageStart, pageEnd, maxLength = 14000) {
+    const blocks = [];
+    let length = 0;
+    for (let pageNumber = pageStart; pageNumber <= pageEnd; pageNumber += 1) {
+      const pageText = normalizeExtractedText(pageTexts?.[pageNumber - 1], MAX_PDF_PAGE_TEXT);
+      if (!pageText) continue;
+      const prefix = `Page ${pageNumber}\n`;
+      const remaining = Math.max(0, maxLength - length);
+      if (remaining <= prefix.length) break;
+      const block = `${prefix}${pageText}`.slice(0, remaining);
+      blocks.push(block);
+      length += block.length + 2;
+      if (length >= maxLength) break;
+    }
+    return normalizeExtractedText(blocks.join("\n\n"), maxLength);
+  }
+
+  function detectPdfChapters({ title = "PDF document", pageTexts = [], outline = [], pageCount = 0 } = {}) {
+    const totalPages = Math.max(1, Math.round(Number(pageCount) || pageTexts.length || 1));
+    const outlineCandidates = normalizePdfChapterCandidates(outline, totalPages);
+    const contentsCandidates = normalizePdfChapterCandidates(findPdfContentsCandidates(pageTexts, totalPages), totalPages);
+    const headingCandidates = normalizePdfChapterCandidates(findPdfHeadingCandidates(pageTexts), totalPages);
+    let candidates = outlineCandidates.length >= 2
+      ? outlineCandidates
+      : contentsCandidates.length >= 2
+        ? contentsCandidates
+        : headingCandidates.length >= 2
+          ? headingCandidates
+          : [];
+
+    if (!candidates.length) {
+      return [{
+        title: cleanPdfChapterTitle(title, "Complete document"),
+        order: 1,
+        pageStart: 1,
+        pageEnd: totalPages,
+        detectionMethod: "whole-document",
+        status: "ready",
+        text: buildPdfChapterText(pageTexts, 1, totalPages)
+      }];
+    }
+
+    if (candidates[0].pageNumber > 1) {
+      candidates = [{ title: "Introduction", pageNumber: 1, method: candidates[0].method }, ...candidates];
+    } else {
+      candidates[0] = { ...candidates[0], pageNumber: 1 };
+    }
+    const titleCounts = new Map();
+    return candidates.slice(0, MAX_PDF_CHAPTERS).map((candidate, index, list) => {
+      const baseTitle = cleanPdfChapterTitle(candidate.title, `Chapter ${index + 1}`);
+      const key = baseTitle.toLocaleLowerCase();
+      const count = (titleCounts.get(key) || 0) + 1;
+      titleCounts.set(key, count);
+      const pageStart = candidate.pageNumber;
+      const pageEnd = Math.max(pageStart, (list[index + 1]?.pageNumber || totalPages + 1) - 1);
+      return {
+        title: count === 1 ? baseTitle : `${baseTitle} (${count})`,
+        order: index + 1,
+        pageStart,
+        pageEnd,
+        detectionMethod: candidate.method,
+        status: "ready",
+        text: buildPdfChapterText(pageTexts, pageStart, pageEnd)
+      };
+    });
+  }
+
+  async function extractPdfOutline(pdf, timeoutFailure) {
+    if (typeof pdf?.getOutline !== "function") return [];
+    const outline = await Promise.race([pdf.getOutline(), timeoutFailure]).catch(() => []);
+    const flattened = [];
+    const visit = (items, depth = 0) => {
+      (Array.isArray(items) ? items : []).slice(0, MAX_PDF_CHAPTERS * 4).forEach((item) => {
+        if (flattened.length >= MAX_PDF_CHAPTERS * 4) return;
+        flattened.push({ title: item?.title, destination: item?.dest, depth });
+        visit(item?.items, depth + 1);
+      });
+    };
+    visit(outline);
+    const resolved = [];
+    for (const entry of flattened) {
+      try {
+        const destination = typeof entry.destination === "string"
+          ? await Promise.race([pdf.getDestination(entry.destination), timeoutFailure])
+          : entry.destination;
+        const reference = Array.isArray(destination) ? destination[0] : null;
+        if (!reference || typeof pdf.getPageIndex !== "function") continue;
+        const pageIndex = await Promise.race([pdf.getPageIndex(reference), timeoutFailure]);
+        resolved.push({
+          title: cleanPdfChapterTitle(entry.title),
+          pageNumber: Math.max(1, Math.round(Number(pageIndex) || 0) + 1),
+          depth: entry.depth,
+          method: "bookmark"
+        });
+      } catch {
+        // A malformed bookmark must not prevent the remaining PDF from importing.
+      }
+    }
+    const chapterLike = resolved.filter((entry) => /^(?:chapter|unit|part|section)\b/i.test(entry.title));
+    if (chapterLike.length >= 2) return chapterLike;
+    if (!resolved.length) return [];
+    const minimumDepth = Math.min(...resolved.map((entry) => entry.depth));
+    return resolved.filter((entry) => entry.depth === minimumDepth);
+  }
+
   async function extractPdfText(bytes, pdfjs, options = {}) {
     if (!(bytes instanceof Uint8Array) || !hasPdfSignature(bytes)) {
       throw new DocumentReaderError("INVALID_PDF", "This file is not a valid PDF document.");
@@ -371,6 +551,7 @@
       }
 
       const pages = [];
+      const pageTexts = [];
       let selectableCharacters = 0;
       let outputCharacters = 0;
       let inspectedTextItems = 0;
@@ -383,10 +564,9 @@
         let line = "";
         let pageCharacters = 0;
         const textLimit = options.maxText || MAX_EXTRACTED_TEXT;
-        const pageLabelLength = `Page ${pageNumber}\n`.length;
-        const pageBudget = Math.max(0, textLimit - outputCharacters - pageLabelLength);
+        const pageBudget = MAX_PDF_PAGE_TEXT;
         for (const item of content.items || []) {
-          if (pageCharacters + line.length >= pageBudget || outputCharacters >= textLimit) break;
+          if (pageCharacters + line.length >= pageBudget) break;
           inspectedTextItems += 1;
           if (inspectedTextItems > MAX_PDF_TEXT_ITEMS || Date.now() > deadline) {
             throw new DocumentReaderError("PDF_TEXT_LIMIT", "This PDF contains more text objects than Exam-Cram can process safely.");
@@ -406,24 +586,31 @@
           }
         }
         if (line) lines.push(line);
+        const pageText = normalizeExtractedText(lines.join("\n"), MAX_PDF_PAGE_TEXT);
+        pageTexts.push(pageText);
         const remaining = Math.max(0, textLimit - outputCharacters);
-        const pageText = normalizeExtractedText(lines.join("\n"), remaining);
         if (pageText) {
           const anchoredPage = `Page ${pageNumber}\n${pageText}`.slice(0, remaining);
-          pages.push(anchoredPage);
-          outputCharacters += anchoredPage.length + 2;
+          if (anchoredPage) {
+            pages.push(anchoredPage);
+            outputCharacters += anchoredPage.length + 2;
+          }
         }
         page.cleanup?.();
-        if (outputCharacters >= textLimit) break;
       }
       if (selectableCharacters < 40) {
         throw new DocumentReaderError("PDF_NO_TEXT", "This PDF has no selectable text. It may be a scanned document; OCR is not available yet.");
       }
       const metadata = await pdf.getMetadata().catch(() => null);
+      const title = normalizeExtractedText(metadata?.info?.Title || options.fallbackTitle || "PDF document", 180);
+      const outline = await extractPdfOutline(pdf, timeoutFailure);
       return {
-        title: normalizeExtractedText(metadata?.info?.Title || options.fallbackTitle || "PDF document", 180),
+        title,
         text: normalizeExtractedText(pages.join("\n\n"), options.maxText || MAX_EXTRACTED_TEXT),
-        pageCount: pdf.numPages
+        pageCount: pdf.numPages,
+        pageTexts,
+        outline,
+        chapters: detectPdfChapters({ title, pageTexts, outline, pageCount: pdf.numPages })
       };
     } catch (error) {
       if (error instanceof DocumentReaderError) throw error;
@@ -448,6 +635,8 @@
     MAX_HTML_NODES,
     MAX_HTML_CHUNKS,
     MAX_PDF_TEXT_ITEMS,
+    MAX_PDF_PAGE_TEXT,
+    MAX_PDF_CHAPTERS,
     DOCUMENT_PARSE_TIMEOUT_MS,
     MAX_FRAME_RESULTS,
     PDF_VIEWER_EXTENSION_ID,
@@ -466,6 +655,7 @@
     mergeFrameSnapshots,
     extractHtmlText,
     decodeHtmlBytes,
+    detectPdfChapters,
     extractPdfText
   });
 });

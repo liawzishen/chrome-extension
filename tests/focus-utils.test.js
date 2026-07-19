@@ -211,3 +211,64 @@ test("turns stale permission manifests and Chrome's raw mismatch into a reload i
   assert.equal(mapped.code, "EXTENSION_RELOAD_REQUIRED");
   assert.equal(mapped.message, Focus.EXTENSION_RELOAD_REQUIRED_MESSAGE);
 });
+
+test("keeps one persistent chapter timer and pauses on chapter switch or inactivity", () => {
+  const startedAt = 1_800_000_000_000;
+  let state = Focus.startChapterFocusState(
+    Focus.createDefaultChapterFocusState(startedAt),
+    { chapterId: "chapter-a", chapterTitle: "Cells", ownerId: "tree-a", ownerTabId: 7 },
+    startedAt,
+    "chapter-session-a"
+  );
+  assert.equal(state.active, true);
+  assert.equal(state.ownerTabId, 7);
+  assert.equal(Focus.getChapterFocusedMs(state, "chapter-a", startedAt + 30_000), 30_000);
+
+  state = Focus.recordChapterFocusActivity(
+    state,
+    { chapterId: "chapter-a", ownerId: "tree-a" },
+    startedAt + 30_000
+  );
+  state = Focus.selectChapterFocusState(
+    state,
+    { chapterId: "chapter-b", chapterTitle: "Energy" },
+    startedAt + 60_000
+  );
+  assert.equal(state.active, false);
+  assert.equal(state.chapterId, "chapter-b");
+  assert.equal(state.chapterTotals["chapter-a"], 60_000);
+  assert.equal(state.history.at(-1).outcome, "switched");
+
+  state = Focus.startChapterFocusState(
+    state,
+    { chapterId: "chapter-b", chapterTitle: "Energy", ownerId: "tree-b", ownerTabId: 8 },
+    startedAt + 61_000,
+    "chapter-session-b"
+  );
+  const replaced = Focus.startChapterFocusState(
+    state,
+    { chapterId: "chapter-a", chapterTitle: "Cells", ownerId: "tree-a", ownerTabId: 7 },
+    startedAt + 62_000,
+    "chapter-session-c"
+  );
+  assert.equal(replaced.active, true);
+  assert.equal(replaced.chapterId, "chapter-a");
+  assert.equal(replaced.history.at(-1).outcome, "switched");
+  assert.equal(replaced.chapterTotals["chapter-b"], 1_000);
+
+  const idle = Focus.reconcileChapterFocusState(
+    replaced,
+    replaced.lastActivityAt + Focus.CHAPTER_IDLE_TIMEOUT_MS
+  );
+  assert.equal(idle.changed, true);
+  assert.equal(idle.state.active, false);
+  assert.equal(idle.state.history.at(-1).outcome, "inactive");
+  assert.equal(
+    Focus.getTotalChapterFocusedMs(idle.state),
+    Object.values(idle.state.chapterTotals).reduce((total, duration) => total + duration, 0)
+  );
+  assert.deepEqual(
+    Focus.normalizeChapterFocusState(structuredClone(idle.state), idle.state.updatedAt),
+    idle.state
+  );
+});

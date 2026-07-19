@@ -1249,6 +1249,43 @@
   scrollbar-color: var(--planner-brass) transparent;
 }
 
+.vintage-planner--forest .chapter-workspace__tabs {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper-deep);
+  box-shadow: 0 3px 10px rgba(61, 39, 22, 0.12);
+}
+
+.vintage-planner--forest .chapter-workspace__tabs button {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .chapter-workspace__tabs button[aria-selected="true"] {
+  border: 1px solid var(--planner-paper-edge);
+  background: var(--planner-paper);
+  color: var(--planner-oxblood-dark);
+  box-shadow: 0 2px 5px rgba(61, 39, 22, 0.14);
+}
+
+.vintage-planner--forest .chapter-workspace__resource-header button {
+  border: 1px solid var(--planner-oxblood-dark);
+  border-radius: var(--planner-radius-control);
+  background: var(--planner-oxblood);
+  color: #fff6df;
+}
+
+.vintage-planner--forest .chapter-workspace__empty,
+.vintage-planner--forest .chapter-summary-resources section,
+.vintage-planner--forest .chapter-practice-list > li {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper-soft);
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .chapter-summary-resources h4,
+.vintage-planner--forest .chapter-practice-list details {
+  color: var(--planner-oxblood);
+}
+
 .vintage-planner--forest .study-context,
 .vintage-planner--forest .chapter-inspector,
 .vintage-planner--forest .artifact-open-status,
@@ -1270,6 +1307,32 @@
   border-radius: var(--planner-radius-control);
   background: var(--planner-oxblood);
   color: #fff6df;
+}
+
+.vintage-planner--forest .source-leaf__meta,
+.vintage-planner--forest .source-leaf__preview {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .source-leaf__local-badge {
+  border-color: var(--planner-brass);
+  background: var(--planner-brass-soft);
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .source-leaf__content {
+  border-top-color: var(--planner-paper-edge);
+}
+
+.vintage-planner--forest .source-leaf__content-toggle {
+  color: var(--planner-oxblood);
+}
+
+.vintage-planner--forest .source-leaf__content-body {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper-soft);
+  color: var(--planner-ink);
+  scrollbar-color: var(--planner-brass) transparent;
 }
 
 .vintage-planner--forest .summary-actions select {

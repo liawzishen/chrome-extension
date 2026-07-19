@@ -573,3 +573,52 @@ test("renames a session through the worker and replays the result idempotently",
   assert.equal(retry.result.renamed, true);
   assert.equal(retry.journey.chapters[0].sessions[0].title, "Cell membranes");
 });
+
+test("persists imported chapter generation status through the serialized worker", () => {
+  const seeded = Journey.addSource(
+    Journey.createJourney("Imported course", "2026-07-20T01:00:00Z"),
+    "Course — Foundations",
+    {
+      id: "source-imported-foundations",
+      type: "webpage",
+      title: "Foundations",
+      documentType: "pdf",
+      pageCount: 12,
+      pageStart: 2,
+      pageEnd: 5,
+      fileId: "file-course",
+      fileName: "course.pdf",
+      fileSize: 4096,
+      fileFingerprint: "course-fingerprint",
+      importKey: "file-course:pages-2-5:chapter-1",
+      importedChapterTitle: "Foundations",
+      importedChapterOrder: 1,
+      text: "Page 2 Foundations introduce the course evidence and terminology."
+    },
+    "2026-07-20T01:01:00Z"
+  ).journey;
+  const chapter = seeded.chapters[0];
+  assert.equal(chapter.importedFileName, "course.pdf");
+  assert.equal(chapter.pageStart, 2);
+  assert.equal(chapter.resourceStatus, "waiting");
+
+  const request = operation(
+    Worker.MESSAGE_TYPES.UPDATE_CHAPTER_STATUS,
+    "op:chapter-status:failed",
+    seeded.revision,
+    {
+      chapterId: chapter.id,
+      processingStatus: "completed",
+      resourceStatus: "failed",
+      resourceError: "Cheat Sheet generation timed out."
+    }
+  );
+  const failed = Worker.reduceJourneyOperation(seeded, request, "2026-07-20T01:02:00Z");
+  assert.equal(failed.journey.chapters[0].resourceStatus, "failed");
+  assert.equal(failed.journey.chapters[0].resourceError, "Cheat Sheet generation timed out.");
+
+  const replay = Worker.reduceJourneyOperation(failed.journey, request, "2026-07-20T01:03:00Z");
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.changed, false);
+  assert.equal(replay.journey.chapters[0].resourceStatus, "failed");
+});

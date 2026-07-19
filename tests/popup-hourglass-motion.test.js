@@ -56,8 +56,20 @@ test("the focus pocket watch pairs a conic sweep with a rotating hand", () => {
 test("metric values count up without fighting live focus updates", () => {
   assert.match(script, /function animateMetricValue\(element, targetText\)/);
   assert.match(script, /animateMetricValue\(valueElement, value\);/);
-  assert.match(script, /if \(element\.dataset\.liveValue\) return;/);
+  assert.match(script, /if \(element\.dataset\.liveValue\) \{\s*clearTimeout\(settle\);\s*return;\s*\}/);
+  assert.match(script, /document\.visibilityState === "hidden";/);
+  assert.match(script, /const settle = setTimeout\(\(\) => \{\s*if \(!element\.dataset\.liveValue\) element\.textContent = targetText;\s*\}, 1400\);/);
   assert.match(script, /prefers-reduced-motion: reduce/);
+});
+
+test("the focus card counts only today's focused minutes toward the daily goal", () => {
+  assert.match(script, /function sumTodayFocusMinutes\(history\)/);
+  assert.match(script, /journeyUtils\.localDayKey\(new Date\(endedAt\)\) !== todayKey\) return total;/);
+  assert.match(script, /const focusMinutesToday = sumTodayFocusMinutes\(focusHistory\);/);
+  assert.match(script, /value: `\$\{focusMinutesToday\}m`,/);
+  assert.match(script, /fraction: Math\.max\(0, Math\.min\(1, focusMinutesToday \/ \(journeyStudyGoal\?\.dailyMinutes \|\| 20\)\)\)/);
+  assert.match(script, /\? sumTodayFocusMinutes\(focus\.history\)/);
+  assert.doesNotMatch(script, /metrics\.focusMinutes \/ \(journeyStudyGoal/);
 });
 
 test("the focus card mirrors the quick toggle's live session state", () => {

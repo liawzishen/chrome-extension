@@ -279,6 +279,113 @@ test("Journey separates saved artifacts from deduplicated source snapshots", () 
   assert.match(source, /immutableFingerprint\s*\?\s*source\.fingerprint === immutableFingerprint/);
 });
 
+test("PDF, imported-collection, and video fallback notes all persist as Journey artifacts", async () => {
+  const journeySourceBuilder = functionBody(
+    "function buildJourneySourceFromStudyInput(input, item)",
+    "async function recordLearningItem("
+  );
+  const artifactPersistence = functionBody(
+    "function buildStudySourceBinding(input)",
+    "async function generateNotesWithBackend("
+  );
+  const recorded = [];
+  const finalizedCollections = [];
+  const saved = [];
+  const rendered = [];
+  let noteSequence = 0;
+  const context = {
+    state: {
+      generationToken: 41,
+      currentArtifact: null,
+      currentSession: null,
+      currentExportItem: null,
+      submitted: false
+    },
+    makeContentFingerprint: (text) => `fingerprint:${String(text).length}`,
+    createStudyNote: async (input) => ({
+      id: `note-${++noteSequence}`,
+      kind: "note",
+      artifactType: "study",
+      title: `${input.title} visual note`,
+      createdAt: "2026-07-19T12:00:00.000Z",
+      generatedAt: "2026-07-19T12:00:00.000Z",
+      usedLocalFallback: true,
+      generationError: "The AI backend is unavailable.",
+      visualLesson: { visualModel: { nodes: [{ id: "concept-1", label: "Grounded concept" }] } }
+    }),
+    recordLearningItem: async (artifact, chapterId, sourceSnapshot) => {
+      recorded.push({ artifact, chapterId, sourceSnapshot });
+      return { chapterId, sourceId: `source-${chapterId}` };
+    },
+    mutateJourney: async (type, payload) => {
+      finalizedCollections.push({ type, payload });
+      return { result: { chapterId: payload.chapterId, sessionId: payload.session.id } };
+    },
+    saveLibraryItem: async (artifact) => saved.push(artifact),
+    persistCurrentSessionDraft: async () => {},
+    renderNote: (artifact) => rendered.push(artifact)
+  };
+  const createAndRecordStudyArtifact = vm.runInNewContext(`(() => {
+    ${journeySourceBuilder}
+    ${artifactPersistence}
+    return createAndRecordStudyArtifact;
+  })()`, context);
+
+  const pdfArtifact = await createAndRecordStudyArtifact({
+    title: "Imported algorithms.pdf",
+    sourceType: "webpage",
+    sourceUrl: "",
+    sourceFingerprint: "pdf-fingerprint",
+    documentType: "pdf",
+    pageCount: 12,
+    rawText: "Page 1 Trees and graphs. Page 2 Traversal algorithms.",
+    chapterId: "chapter-pdf",
+    chapterTitle: "Algorithms",
+    generationToken: 41
+  });
+  const videoArtifact = await createAndRecordStudyArtifact({
+    title: "Tree traversal lecture",
+    sourceType: "video",
+    sourceUrl: "https://video.example/watch/trees",
+    sourceFingerprint: "video-fingerprint",
+    videoMediaId: "media-trees",
+    transcriptFingerprint: "transcript-trees",
+    videoSegments: [{ startMs: 0, endMs: 5000, text: "A preorder traversal visits the root first." }],
+    rawText: "[00:00] A preorder traversal visits the root first.",
+    chapterId: "chapter-video",
+    chapterTitle: "Video Trees",
+    generationToken: 41
+  });
+  const collectionArtifact = await createAndRecordStudyArtifact({
+    title: "Imported PDFs: combined visual note",
+    sourceType: "collection",
+    rawText: "Combined bounded PDF evidence.",
+    sourceRevisionHash: "source-revision-1",
+    compositionRevisionHash: "composition-revision-1",
+    collectionSources: [{ id: "pdf-source-1", documentType: "pdf", text: "PDF evidence" }],
+    chapterId: "chapter-imports",
+    chapterTitle: "Imported PDFs",
+    generationToken: 41
+  });
+
+  assert.equal(pdfArtifact.sourceBinding.documentType, "pdf");
+  assert.equal(pdfArtifact.sourceBinding.pageCount, 12);
+  assert.equal(pdfArtifact.journeyChapterId, "chapter-pdf");
+  assert.equal(recorded[0].sourceSnapshot.documentType, "pdf");
+  assert.equal(videoArtifact.sourceBinding.sourceType, "video");
+  assert.equal(videoArtifact.sourceBinding.mediaId, "media-trees");
+  assert.equal(recorded[1].sourceSnapshot.type, "video");
+  assert.equal(recorded[1].sourceSnapshot.segments.length, 1);
+  assert.equal(collectionArtifact.journeyChapterId, "chapter-imports");
+  assert.equal(finalizedCollections.length, 1);
+  assert.equal(finalizedCollections[0].type, "JOURNEY_FINALIZE_COLLECTION");
+  assert.equal(finalizedCollections[0].payload.session.id, collectionArtifact.id);
+  assert.equal(saved.length, 3);
+  assert.equal(rendered.length, 3);
+  assert.ok(saved.every((artifact) => artifact.usedLocalFallback));
+  assert.ok(saved.every((artifact) => artifact.artifactType === "study"));
+});
+
 test("startup upgrades older Journey evidence from the richer saved artifact", () => {
   const loadJourney = functionBody("async function loadJourney()", "async function updateJourneyChapterOptions(");
   const quizGeneration = functionBody("async function handleGenerateQuiz(event)", "async function resolveQuizSourceInput(");

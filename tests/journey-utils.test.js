@@ -863,6 +863,7 @@ test("preserves PDF document metadata on a saved webpage source", () => {
   assert.equal(source.type, "webpage");
   assert.equal(source.documentType, "pdf");
   assert.equal(source.pageCount, 14);
+  assert.equal(source.text, "Page 1 Cell transport moves materials across membranes.");
 });
 
 test("migrates schema-v2 journeys with empty learning memory while preserving weakTopics", () => {

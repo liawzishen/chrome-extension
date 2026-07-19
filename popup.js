@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   lastChapter: "examCramLastChapter",
   sessionDraft: "examCramSessionDraft",
   panelState: "examCramPanelState",
+  pendingChapterAction: "examCramPendingChapterAction",
   claimReports: "examCramUnsupportedClaimReports"
 };
 
@@ -353,8 +354,12 @@ function init() {
 
   if (globalThis.chrome?.storage?.onChanged) {
     globalThis.chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") return;
+      if (changes?.[STORAGE_KEYS.pendingChapterAction]?.newValue) {
+        void consumePendingChapterAction(changes[STORAGE_KEYS.pendingChapterAction].newValue);
+      }
       const draft = changes?.[STORAGE_KEYS.sessionDraft]?.newValue;
-      if (areaName !== "local" || !draft || state.currentArtifact || state.currentSession) return;
+      if (!draft || state.currentArtifact || state.currentSession) return;
       void maybeRestoreSessionDraft().catch((error) => {
         showStatus(error?.message || "The saved note could not be restored.", true);
       });
@@ -386,6 +391,28 @@ async function initializePersistentPanel() {
     showStatus(error?.message || "Could not restore the pinned note.", true);
   }
   await detectActiveSource();
+  await consumePendingChapterAction().catch(() => {});
+}
+
+async function consumePendingChapterAction(providedAction = null) {
+  const action = providedAction || await getStorage(STORAGE_KEYS.pendingChapterAction, null);
+  if (!action?.chapterId) return false;
+  const requestedAt = Number(action.requestedAt) || 0;
+  await removeStorage(STORAGE_KEYS.pendingChapterAction).catch(() => {});
+  if (!requestedAt || Date.now() - requestedAt > 10 * 60 * 1000) return false;
+  const journey = await getJourney();
+  const chapter = globalThis.ExamCramJourney.findChapter(journey, String(action.chapterId));
+  if (!chapter) {
+    showStatus("That chapter is no longer available in the Learning Tree.", true);
+    return false;
+  }
+  switchView("journeyView");
+  selectChapterAcrossControls(chapter.id);
+  showStatus(action.action === "regenerate"
+    ? `Regenerating learning resources for ${chapter.title}...`
+    : `Retrying learning resources for ${chapter.title}...`);
+  void startImportNoteQueue([chapter.id]);
+  return true;
 }
 
 async function handleRefreshSource() {
@@ -1073,6 +1100,7 @@ async function extractDocumentSource(file) {
       fingerprint: makeContentFingerprint(parsed.text),
       type: "webpage",
       documentType: "pdf",
+      chapters: Array.isArray(parsed.chapters) ? parsed.chapters : [],
       imported: true
     };
     Reader.assertReadableContent(source.text, source.documentType);
@@ -1088,6 +1116,15 @@ async function extractDocumentSource(file) {
     fingerprint: makeContentFingerprint(parsed.text),
     type: "webpage",
     documentType: "html",
+    chapters: [{
+      title: parsed.title || name,
+      order: 1,
+      pageStart: 0,
+      pageEnd: 0,
+      detectionMethod: "whole-document",
+      status: "ready",
+      text: parsed.text
+    }],
     imported: true
   };
   Reader.assertReadableContent(source.text, source.documentType);
@@ -1107,52 +1144,89 @@ async function handleBulkImportSelected(event) {
   state.pendingImport = null;
   if (elements.bulkImportButton) elements.bulkImportButton.disabled = true;
   try {
-    const files = [];
+    const journey = await getJourney();
+    const files = selectedFiles.map((file, index) => ({
+      fileId: `import-${index}`,
+      fileName: String(file?.name || "Local document").slice(0, 180),
+      fileSize: Math.max(0, Number(file?.size) || 0),
+      title: String(file?.name || "Local document").slice(0, 180),
+      excerpt: "",
+      originalFile: file,
+      source: null,
+      detectedChapters: [],
+      status: "uploading",
+      skipped: true,
+      error: ""
+    }));
+    const assignments = files.map((file) => ({
+      fileId: file.fileId,
+      chapterTitle: "",
+      confidence: 0,
+      skipped: true
+    }));
+    state.pendingImport = {
+      id: crypto.randomUUID(),
+      files,
+      assignments,
+      plan: globalThis.ExamCramJourney.planBulkFiling(assignments, journey),
+      journey,
+      usedLocalClassification: false,
+      retryingFileIds: new Set(),
+      cancelled: false
+    };
+    const pending = state.pendingImport;
+    renderImportReview();
+
     for (let index = 0; index < selectedFiles.length; index += 1) {
       const file = selectedFiles[index];
-      const fileId = `import-${index}`;
+      const record = files[index];
+      if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(record)) continue;
+      record.status = "detecting";
+      renderImportReview();
       showStatus(`Reading ${index + 1} of ${selectedFiles.length}: ${file.name}...`);
       try {
         const source = await readImportedDocument(file);
-        files.push({
-          fileId,
+        if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(record)) continue;
+        Object.assign(record, {
           fileName: String(file.name || source.title || "Local document").slice(0, 180),
           title: source.title || file.name,
           excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
-          originalFile: file,
           source,
+          detectedChapters: normalizeImportedChapterCandidates(source),
           status: "ready",
-          skipped: false
+          skipped: false,
+          error: ""
         });
       } catch (error) {
-        files.push({
-          fileId,
-          fileName: String(file.name || "Local document").slice(0, 180),
-          title: String(file.name || "Local document").slice(0, 180),
-          excerpt: "",
-          originalFile: file,
+        if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(record)) continue;
+        Object.assign(record, {
           source: null,
+          excerpt: "",
+          detectedChapters: [],
           status: "failed",
           skipped: true,
           error: error?.message || "This file could not be read safely."
         });
       }
+      rebuildPendingImportPlan(pending);
+      renderImportReview();
     }
 
+    if (pending.cancelled || state.pendingImport !== pending) return;
     const readableFiles = files.filter((file) => !file.skipped);
-    const journey = await getJourney();
-    let assignments = [];
+    let classifiedAssignments = [];
     let usedLocalClassification = false;
     if (readableFiles.length) {
       showStatus(`Sorting ${readableFiles.length} readable ${readableFiles.length === 1 ? "file" : "files"} into chapters...`);
       try {
-        assignments = await classifyImportSourcesWithBackend(readableFiles, journey);
+        classifiedAssignments = await classifyImportSourcesWithBackend(readableFiles, journey);
       } catch {
-        assignments = globalThis.ExamCramJourney.classifySourcesLocally(readableFiles, journey);
+        classifiedAssignments = globalThis.ExamCramJourney.classifySourcesLocally(readableFiles, journey);
         usedLocalClassification = true;
       }
     }
-    const assignmentByFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
+    if (pending.cancelled || state.pendingImport !== pending) return;
+    const assignmentByFileId = new Map(classifiedAssignments.map((assignment) => [assignment.fileId, assignment]));
     const plannedAssignments = files.map((file) => {
       if (file.skipped) {
         return {
@@ -1178,16 +1252,9 @@ async function handleBulkImportSelected(event) {
     });
     refreshImportDuplicateAssignments({ files, assignments: plannedAssignments }, journey);
     const plan = globalThis.ExamCramJourney.planBulkFiling(plannedAssignments, journey);
-    state.pendingImport = {
-      id: crypto.randomUUID(),
-      files,
-      assignments: plannedAssignments,
-      plan,
-      journey,
-      usedLocalClassification,
-      retryingFileIds: new Set(),
-      cancelled: false
-    };
+    pending.assignments = plannedAssignments;
+    pending.plan = plan;
+    pending.usedLocalClassification = usedLocalClassification;
     renderImportReview();
     if (!readableFiles.length) {
       showStatus("None of the selected files could be read. Review each error, then retry or remove the file.", true);
@@ -1197,11 +1264,38 @@ async function handleBulkImportSelected(event) {
         : "Your files are sorted for review. Nothing has been saved yet.");
     }
   } catch (error) {
-    state.pendingImport = null;
-    showStatus(error?.message || "The selected files could not be prepared for import.", true);
+    if (!state.pendingImport) {
+      showStatus(error?.message || "The selected files could not be prepared for import.", true);
+    } else {
+      renderImportReview();
+      showStatus(error?.message || "Some files could not be prepared. Review each row and retry independently.", true);
+    }
   } finally {
     if (elements.bulkImportButton) elements.bulkImportButton.disabled = false;
   }
+}
+
+function normalizeImportedChapterCandidates(source) {
+  const raw = Array.isArray(source?.chapters) && source.chapters.length
+    ? source.chapters
+    : [{
+        title: source?.title || "Complete document",
+        order: 1,
+        pageStart: source?.documentType === "pdf" ? 1 : 0,
+        pageEnd: source?.documentType === "pdf" ? Math.max(1, Number(source?.pageCount) || 1) : 0,
+        detectionMethod: "whole-document",
+        status: "ready",
+        text: source?.text || ""
+      }];
+  return raw.map((chapter, index) => ({
+    title: String(chapter?.title || `Chapter ${index + 1}`).replace(/\s+/g, " ").trim().slice(0, 140),
+    order: Math.max(1, Math.round(Number(chapter?.order) || index + 1)),
+    pageStart: Math.max(0, Math.round(Number(chapter?.pageStart) || 0)),
+    pageEnd: Math.max(0, Math.round(Number(chapter?.pageEnd) || 0)),
+    detectionMethod: String(chapter?.detectionMethod || "whole-document").slice(0, 40),
+    status: chapter?.text ? "ready" : "empty",
+    text: String(chapter?.text || "").slice(0, 14000)
+  }));
 }
 
 async function classifyImportSourcesWithBackend(files, journey) {
@@ -1254,11 +1348,16 @@ function normalizeImportClassificationResponse(payload, files) {
 }
 
 function isImportSourceAlreadySaved(file, assignment, journey) {
+  const detectedChapters = normalizeImportedChapterCandidates(file?.source);
+  const importKeys = detectedChapters
+    .map((chapter) => buildImportedChapterSource(file, chapter).importKey)
+    .filter(Boolean);
+  if (importKeys.length) {
+    return importKeys.every((importKey) => Boolean(findImportChapterByKey(journey, importKey)));
+  }
   const chapter = globalThis.ExamCramJourney.findChapter(journey, assignment?.chapterTitle);
   const sourceFingerprint = String(file?.source?.fingerprint || file?.source?.sourceFingerprint || "");
-  return Boolean(sourceFingerprint && chapter?.sources.some((source) => (
-    source.fingerprint === sourceFingerprint
-  )));
+  return Boolean(sourceFingerprint && chapter?.sources.some((source) => source.fingerprint === sourceFingerprint));
 }
 
 function refreshImportDuplicateAssignments(pending, journey) {
@@ -1324,12 +1423,14 @@ function renderImportReview() {
   const reviewRows = getPendingImportReviewEntries(pending);
   const stats = getImportReviewStats(pending.plan, pending.files, pending.assignments);
   const retryingCount = pending.retryingFileIds?.size || 0;
+  const processingCount = pending.files.filter((file) => ["uploading", "reading", "detecting", "retrying"].includes(file.status)).length;
+  const completedPreparationCount = Math.max(0, pending.files.length - processingCount);
   const importableCount = pending.plan.rows.filter((row) => !row.skipped && !row.blocked).length;
 
   const section = document.createElement("section");
   section.className = "smart-import";
   section.setAttribute("aria-label", "Review imported files");
-  section.setAttribute("aria-busy", String(retryingCount > 0));
+  section.setAttribute("aria-busy", String(retryingCount > 0 || processingCount > 0));
   const header = document.createElement("header");
   header.className = "smart-import__header";
   const title = document.createElement("h2");
@@ -1345,13 +1446,19 @@ function renderImportReview() {
   header.append(title);
   const summary = createElement(
     "p",
-    retryingCount
-      ? `Retrying ${retryingCount} ${retryingCount === 1 ? "file" : "files"}. Other review choices are preserved.`
+    processingCount
+      ? `Preparing ${processingCount} ${processingCount === 1 ? "file" : "files"}. Completed rows remain available while the rest continue.`
       : buildImportPlanSummary(pending.plan, pending.files.length),
     "smart-import__summary"
   );
   summary.setAttribute("role", "status");
   header.append(summary);
+  const progress = document.createElement("progress");
+  progress.className = "smart-import__progress";
+  progress.max = Math.max(1, pending.files.length);
+  progress.value = completedPreparationCount;
+  progress.setAttribute("aria-label", "Overall file preparation progress");
+  header.append(progress);
   if (pending.usedLocalClassification) {
     const notice = createElement(
       "p",
@@ -1394,7 +1501,7 @@ function renderImportReview() {
   confirm.type = "button";
   confirm.className = "primary smart-import__confirm";
   confirm.textContent = "Confirm Import";
-  confirm.disabled = retryingCount > 0 || pending.plan.blockedCount > 0 || importableCount === 0;
+  confirm.disabled = retryingCount > 0 || processingCount > 0 || pending.plan.blockedCount > 0 || importableCount === 0;
   confirm.addEventListener("click", handleConfirmImport);
   footerActions.append(confirm, cancel);
   footer.append(footerSummary, footerActions);
@@ -1437,8 +1544,12 @@ function getImportReviewStats(plan, files = [], assignments = []) {
   const fileByFileId = new Map(files.map((file) => [file.fileId, file]));
   const assignmentByFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
   return rows.reduce((stats, row) => {
+    const file = fileByFileId.get(row.fileId);
+    if (["uploading", "reading", "detecting", "retrying"].includes(file?.status)) {
+      stats.processing += 1;
+      return stats;
+    }
     if (row?.skipped) {
-      const file = fileByFileId.get(row.fileId);
       const assignment = assignmentByFileId.get(row.fileId);
       if (file?.status === "failed" && !assignment?.alreadySaved) stats.failed += 1;
       else stats.skipped += 1;
@@ -1446,11 +1557,12 @@ function getImportReviewStats(plan, files = [], assignments = []) {
     else if (row?.blocked || Number(row?.confidence) < 0.5) stats.review += 1;
     else stats.ready += 1;
     return stats;
-  }, { ready: 0, review: 0, failed: 0, skipped: 0 });
+  }, { ready: 0, review: 0, failed: 0, skipped: 0, processing: 0 });
 }
 
 function buildImportReviewFooterCopy(stats) {
   const parts = [];
+  if (stats.processing) parts.push(`${stats.processing} processing`);
   if (stats.ready) parts.push(`${stats.ready} ready`);
   if (stats.review) parts.push(`${stats.review} ${stats.review === 1 ? "needs" : "need"} review`);
   if (stats.failed) parts.push(`${stats.failed} failed`);
@@ -1462,15 +1574,16 @@ function groupImportReviewEntries(entries) {
   const groups = new Map();
   entries.forEach((entry) => {
     const retrying = Boolean(entry.retrying);
+    const processing = retrying || ["uploading", "reading", "detecting", "retrying"].includes(entry.file?.status);
     const skipped = Boolean(entry.row?.skipped);
-    const chapterTitle = retrying
-      ? "Retrying files"
+    const chapterTitle = processing
+      ? "Files being prepared"
       : skipped
         ? "Files needing attention"
       : String(entry.row?.finalChapterTitle || entry.assignment?.chapterTitle || "").trim()
         || "Choose a chapter";
-    const key = retrying
-      ? "retrying"
+    const key = processing
+      ? "processing"
       : skipped
         ? "skipped"
       : `${entry.row?.blocked ? "blocked:" : ""}${chapterTitle.toLowerCase()}`;
@@ -1480,7 +1593,7 @@ function groupImportReviewEntries(entries) {
       createsChapter: false,
       blocked: false,
       skipped,
-      retrying
+      retrying: processing
     };
     group.entries.push(entry);
     group.createsChapter ||= Boolean(entry.row?.willCreateChapter);
@@ -1507,22 +1620,23 @@ function renderImportReviewFolderGroup(cluster, pending) {
 
 function renderImportReviewRow(entry, pending) {
   const { row, file, assignment, index, retrying } = entry;
+  const loading = retrying || ["uploading", "reading", "detecting", "retrying"].includes(file?.status);
   const article = document.createElement("article");
-  const needsReview = !retrying && !row.skipped && (row.confidence < 0.5 || row.blocked);
-  article.className = `smart-import__row${row.skipped ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}${needsReview ? " smart-import__row--review" : ""}${retrying ? " smart-import__row--retrying" : ""}`;
+  const needsReview = !loading && !row.skipped && (row.confidence < 0.5 || row.blocked);
+  article.className = `smart-import__row${row.skipped && !loading ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}${needsReview ? " smart-import__row--review" : ""}${loading ? " smart-import__row--retrying" : ""}`;
   article.dataset.importFileId = row.fileId;
-  article.setAttribute("aria-busy", String(Boolean(retrying)));
+  article.setAttribute("aria-busy", String(Boolean(loading)));
   if (assignment?.reason) article.title = assignment.reason;
   const heading = document.createElement("div");
   heading.className = "smart-import__row-heading";
   heading.append(
-    createElement("span", getImportFileTypeLabel(file), "smart-import__file-type"),
+    createElement("span", `${getImportFileTypeLabel(file)} \u00b7 ${formatImportFileSize(file?.fileSize)}`, "smart-import__file-type"),
     createElement("strong", file?.fileName || file?.title || row.fileId, "smart-import__file-title")
   );
   const badges = document.createElement("div");
   badges.className = "smart-import__badges";
-  const statusLabel = retrying
-    ? "Retrying"
+  const statusLabel = loading
+    ? file?.status === "detecting" ? "Detecting chapters" : file?.status === "retrying" ? "Retrying" : "Uploading"
     : row.skipped
       ? assignment?.alreadySaved ? "Already saved" : "Read failed"
       : row.blocked
@@ -1530,7 +1644,7 @@ function renderImportReviewRow(entry, pending) {
         : row.confidence < 0.5
           ? "Low match"
           : "Ready";
-  const statusTone = retrying
+  const statusTone = loading
     ? "loading"
     : row.skipped
       ? assignment?.alreadySaved ? "skipped" : "failed"
@@ -1554,8 +1668,12 @@ function renderImportReviewRow(entry, pending) {
   remove.setAttribute("aria-label", `Remove ${file?.fileName || file?.title || row.fileId} from this import`);
   remove.addEventListener("click", () => removeImportReviewFile(row.fileId));
 
-  if (retrying) {
-    const message = createElement("p", "Reading and classifying this file again…", "smart-import__message");
+  if (loading) {
+    const message = createElement(
+      "p",
+      file?.status === "detecting" ? "Reading the document and detecting chapter boundaries..." : "Preparing this file...",
+      "smart-import__message"
+    );
     message.setAttribute("role", "status");
     const actions = document.createElement("div");
     actions.className = "smart-import__row-actions smart-import__row-actions--compact";
@@ -1589,6 +1707,14 @@ function renderImportReviewRow(entry, pending) {
     return article;
   }
   if (assignment?.reason) article.append(createElement("p", assignment.reason, "smart-import__reason"));
+  const chapterCount = Array.isArray(file?.detectedChapters) ? file.detectedChapters.length : 0;
+  if (chapterCount) {
+    article.append(createElement(
+      "p",
+      `${chapterCount} ${chapterCount === 1 ? "chapter" : "chapters"} detected${file.source?.documentType === "pdf" ? ` across ${file.source.pageCount || 0} pages` : ""}.`,
+      "smart-import__message smart-import__message--chapters"
+    ));
+  }
   const previewText = String(file?.excerpt || "").slice(0, 140);
   if (previewText) article.append(createElement("p", `${previewText}…`, "smart-import__preview"));
   if (row.blocked) {
@@ -1669,6 +1795,13 @@ function getImportFileTypeLabel(file) {
   return extension || "FILE";
 }
 
+function formatImportFileSize(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
 function rebuildPendingImportPlan(pending) {
   if (!pending) return;
   const assignmentByFileId = new Map(
@@ -1733,6 +1866,7 @@ async function retryImportReviewFile(fileId) {
       title: source.title || file.fileName,
       excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
       source,
+      detectedChapters: normalizeImportedChapterCandidates(source),
       status: "ready",
       skipped: false,
       error: "",
@@ -1796,6 +1930,10 @@ async function handleConfirmImport() {
     showStatus("Wait for every retry to finish before confirming the import.", true);
     return;
   }
+  if (pending.files.some((file) => ["uploading", "reading", "detecting", "retrying"].includes(file.status))) {
+    showStatus("Wait for every file to finish processing before confirming the import.", true);
+    return;
+  }
   if (pending.plan.blockedCount > 0) {
     showStatus("Choose existing chapters for every blocked file before confirming.", true);
     return;
@@ -1827,42 +1965,83 @@ async function handleConfirmImport() {
     const affectedChapterIds = new Set();
     const createdChapterTitles = new Set();
     const filedCounts = new Map();
+    const importErrors = [];
     let filedCount = 0;
-    let duplicateCount = pending.assignments.filter((assignment) => assignment.alreadySaved).length;
+    let duplicateCount = pending.assignments
+      .filter((assignment) => assignment.alreadySaved)
+      .reduce((total, assignment) => {
+        const file = fileByFileId.get(assignment.fileId);
+        return total + Math.max(1, file?.detectedChapters?.length || 0);
+      }, 0);
+    const totalChapterCount = pending.plan.rows.reduce((total, row) => {
+      if (row.skipped || row.blocked) return total;
+      return total + Math.max(1, fileByFileId.get(row.fileId)?.detectedChapters?.length || 0);
+    }, 0);
+    let processedChapterCount = 0;
+    const importProgress = section?.querySelector(".smart-import__progress");
+    if (importProgress) {
+      importProgress.max = Math.max(1, totalChapterCount);
+      importProgress.value = 0;
+      importProgress.setAttribute("aria-label", "Chapter import progress");
+    }
     for (const row of pending.plan.rows) {
       if (row.skipped || row.blocked) continue;
       const file = fileByFileId.get(row.fileId);
       if (!file?.source) continue;
-      const added = await saveImportedSourceToChapter(
-        row.finalChapterTitle,
-        file.source,
-        pending.journey
-      );
-      pending.journey = added.journey;
-      const chapter = globalThis.ExamCramJourney.findChapter(added.journey, added.result?.chapterId);
-      if (added.result?.duplicate) {
-        duplicateCount += 1;
-        continue;
+      const detectedChapters = normalizeImportedChapterCandidates(file.source);
+      for (const detectedChapter of detectedChapters) {
+        processedChapterCount += 1;
+        if (footerSummary) footerSummary.textContent = `Importing chapter ${processedChapterCount} of ${totalChapterCount}...`;
+        if (importProgress) importProgress.value = processedChapterCount - 1;
+        const source = buildImportedChapterSource(file, detectedChapter);
+        const existingChapter = findImportChapterByKey(pending.journey, source.importKey);
+        if (existingChapter) {
+          duplicateCount += 1;
+          if (importProgress) importProgress.value = processedChapterCount;
+          continue;
+        }
+        const chapterTitle = buildImportedJourneyChapterTitle(
+          row.finalChapterTitle,
+          detectedChapter,
+          detectedChapters.length,
+          pending.journey
+        );
+        try {
+          const added = await saveImportedSourceToChapter(chapterTitle, source, pending.journey);
+          pending.journey = added.journey;
+          const chapter = globalThis.ExamCramJourney.findChapter(added.journey, added.result?.chapterId);
+          if (added.result?.duplicate) {
+            duplicateCount += 1;
+            continue;
+          }
+          filedCount += 1;
+          filedCounts.set(file.fileName, (filedCounts.get(file.fileName) || 0) + 1);
+          if (chapter?.id) affectedChapterIds.add(chapter.id);
+          if (chapter?.id && !initialChapterIds.has(chapter.id)) createdChapterTitles.add(chapter.title);
+        } catch (error) {
+          importErrors.push(`${detectedChapter.title}: ${error?.message || "could not be saved"}`);
+        } finally {
+          if (importProgress) importProgress.value = processedChapterCount;
+        }
       }
-      filedCount += 1;
-      const chapterTitle = chapter?.title || row.finalChapterTitle;
-      filedCounts.set(chapterTitle, (filedCounts.get(chapterTitle) || 0) + 1);
-      if (chapter?.id) affectedChapterIds.add(chapter.id);
-      if (chapter?.id && !initialChapterIds.has(chapter.id)) createdChapterTitles.add(chapter.title);
     }
 
     const skippedCount = pending.files.filter((file) => file.skipped).length;
     const statusParts = [filedCount
-      ? `Filed ${filedCount} ${filedCount === 1 ? "source" : "sources"} into ${formatImportChapterCounts(filedCounts)}.`
-      : "No new sources were filed."];
+      ? `Filed ${filedCount} detected ${filedCount === 1 ? "chapter" : "chapters"} from ${formatImportChapterCounts(filedCounts)}.`
+      : "No new chapters were filed."];
     if (duplicateCount) {
       statusParts.push(`${duplicateCount} ${duplicateCount === 1 ? "was" : "were"} already saved.`);
     }
     if (createdChapterTitles.size) {
-      statusParts.push(`Created chapters: ${[...createdChapterTitles].join(", ")}.`);
+      const createdTitles = [...createdChapterTitles];
+      statusParts.push(`Created chapters: ${createdTitles.slice(0, 5).join(", ")}${createdTitles.length > 5 ? ` and ${createdTitles.length - 5} more` : ""}.`);
     }
     if (skippedCount) {
       statusParts.push(`${skippedCount} unreadable ${skippedCount === 1 ? "file was" : "files were"} skipped.`);
+    }
+    if (importErrors.length) {
+      statusParts.push(`${importErrors.length} ${importErrors.length === 1 ? "chapter" : "chapters"} could not be saved; other chapters were kept. Re-import the file to retry.`);
     }
 
     state.pendingImport = null;
@@ -1870,7 +2049,7 @@ async function handleConfirmImport() {
     elements.documentImportControls?.closest(".page-composer")?.classList.remove("page-composer--reviewing");
     elements.documentImportControls?.classList.remove("hidden");
     await renderJourney().catch(() => {});
-    showStatus(statusParts.join(" "));
+    showStatus(statusParts.join(" "), importErrors.length > 0);
     startImportNoteQueue([...affectedChapterIds]);
   } catch (error) {
     showStatus(error?.message || "The import stopped before every source could be filed. Already filed sources remain saved.", true);
@@ -1885,6 +2064,57 @@ function saveImportedSourceToChapter(chapterTitle, source, journey) {
     chapterIdOrTitle: chapterTitle,
     source
   }, { journey });
+}
+
+function buildImportedChapterSource(file, chapter) {
+  const fileFingerprint = String(file?.source?.fingerprint || file?.source?.sourceFingerprint || makeContentFingerprint(file?.source?.text || file?.fileName || ""));
+  const fileId = `file-${makeContentFingerprint(fileFingerprint || file?.fileName || "document")}`.slice(0, 120);
+  const pageStart = Math.max(0, Math.round(Number(chapter?.pageStart) || 0));
+  const pageEnd = Math.max(pageStart, Math.round(Number(chapter?.pageEnd) || pageStart));
+  const importKey = `${fileId}:pages-${pageStart || 0}-${pageEnd || 0}:chapter-${Math.max(1, Number(chapter?.order) || 1)}`.slice(0, 180);
+  const text = String(chapter?.text || file?.source?.text || "").slice(0, 14000);
+  return {
+    id: `source-${makeContentFingerprint(importKey)}`.slice(0, 100),
+    type: "webpage",
+    title: String(chapter?.title || file?.source?.title || file?.fileName || "Imported chapter").slice(0, 180),
+    url: "",
+    capturedAt: new Date().toISOString(),
+    fingerprint: makeContentFingerprint(text),
+    text,
+    documentType: file?.source?.documentType || "html",
+    pageCount: Math.max(0, Math.round(Number(file?.source?.pageCount) || 0)),
+    pageStart,
+    pageEnd,
+    fileId,
+    fileName: String(file?.fileName || file?.source?.title || "Imported document").slice(0, 180),
+    fileSize: Math.max(0, Number(file?.fileSize) || 0),
+    fileFingerprint,
+    importKey,
+    importedChapterTitle: String(chapter?.title || "Imported chapter").slice(0, 140),
+    importedChapterOrder: Math.max(1, Math.round(Number(chapter?.order) || 1)),
+    detectionMethod: String(chapter?.detectionMethod || "whole-document").slice(0, 40)
+  };
+}
+
+function findImportChapterByKey(journey, importKey) {
+  return (journey?.chapters || []).find((chapter) => (
+    chapter.importKey === importKey || chapter.sources?.some((source) => source.importKey === importKey)
+  )) || null;
+}
+
+function buildImportedJourneyChapterTitle(baseTitle, detectedChapter, chapterCount, journey) {
+  const base = String(baseTitle || "Imported document").replace(/\s+/g, " ").trim();
+  const detectedTitle = String(detectedChapter?.title || "Chapter").replace(/\s+/g, " ").trim();
+  const initial = (chapterCount > 1 ? `${base} \u2014 ${detectedTitle}` : base).slice(0, 140) || detectedTitle;
+  const existingTitles = new Set((journey?.chapters || []).map((chapter) => chapter.title.toLocaleLowerCase()));
+  if (!existingTitles.has(initial.toLocaleLowerCase())) return initial;
+  let suffix = 2;
+  while (suffix < 1000) {
+    const candidate = `${initial.slice(0, Math.max(1, 136 - String(suffix).length))} ${suffix}`;
+    if (!existingTitles.has(candidate.toLocaleLowerCase())) return candidate;
+    suffix += 1;
+  }
+  return `${initial.slice(0, 132)} ${Date.now().toString(36)}`.slice(0, 140);
 }
 
 function formatImportChapterCounts(counts) {
@@ -1922,28 +2152,9 @@ async function startImportNoteQueue(chapterIds) {
     state.importNoteQueue = queue;
     renderImportNoteQueue(queue);
 
-    const settings = await getStorage(STORAGE_KEYS.settings, {});
-    if (!getConfiguredApiEndpoint(settings)) {
-      rows.forEach((row) => {
-        row.status = "later";
-        row.message = "Source saved. Generate the note later with Build chapter visual note";
-      });
-      queue.running = false;
-      renderImportNoteQueue(queue);
-      return;
-    }
-
     for (const row of queue.rows) {
       if (queue.dismissed) break;
-      const outcome = await runImportNoteQueueRow(queue, row);
-      if (outcome === "backend-unavailable") {
-        queue.rows.filter((item) => item.status === "pending").forEach((item) => {
-          item.status = "later";
-          item.message = "Generate later with Build lesson";
-        });
-        showStatus("All imported sources are saved in their chapters. Generate each chapter's visual note later with Build chapter visual note.");
-        break;
-      }
+      await runImportNoteQueueRow(queue, row);
     }
     queue.running = false;
     if (!queue.dismissed) renderImportNoteQueue(queue);
@@ -1960,28 +2171,33 @@ async function startImportNoteQueue(chapterIds) {
 
 async function runImportNoteQueueRow(queue, row) {
   row.status = "generating";
-  row.message = "Generating combined visual note...";
+  row.message = "Generating Visual Note, Cheat Sheet, Summary, concepts, definitions, examples, and practice...";
   renderImportNoteQueue(queue);
+  await updateImportChapterResourceStatus(row.chapterId, "generating", "").catch(() => {});
   try {
     const artifact = await handleBuildChapterLesson(row.chapterId, {
       rethrow: true,
-      requireAiBackend: true,
       quietStatus: true
     });
     if (!artifact) throw new Error("Visual note generation was interrupted.");
     row.status = "done";
-    row.message = "Combined visual note ready";
+    row.message = artifact.usedLocalFallback
+      ? "Local backup learning resources saved"
+      : "All chapter learning resources are ready";
+    await updateImportChapterResourceStatus(row.chapterId, "completed", "").catch(() => {});
     renderImportNoteQueue(queue);
-    return "done";
+    return artifact.usedLocalFallback ? "local-fallback" : "done";
   } catch (error) {
-    if (error?.code === "IMPORT_NOTE_BACKEND_UNAVAILABLE") {
-      row.status = "later";
-      row.message = "Generate later with Build lesson";
-      renderImportNoteQueue(queue);
-      return "backend-unavailable";
-    }
     row.status = "failed";
     row.message = error?.message || "Visual note generation failed.";
+    const journey = await getJourney().catch(() => null);
+    const chapter = journey ? globalThis.ExamCramJourney.findChapter(journey, row.chapterId) : null;
+    const retainedSuccess = Boolean(chapter?.sessions?.some((session) => session.hasVisualNote));
+    await updateImportChapterResourceStatus(
+      row.chapterId,
+      retainedSuccess ? "partially_completed" : "failed",
+      row.message
+    ).catch(() => {});
     renderImportNoteQueue(queue);
     return "failed";
   }
@@ -1995,7 +2211,9 @@ function renderImportNoteQueue(queue) {
   section.setAttribute("aria-live", "polite");
   const header = document.createElement("header");
   header.className = "smart-import-notes__header";
-  header.append(createElement("strong", "Building chapter notes"));
+  const completedCount = queue.rows.filter((row) => row.status === "done").length;
+  const failedCount = queue.rows.filter((row) => row.status === "failed").length;
+  header.append(createElement("strong", "Building chapter resources"));
   const dismiss = document.createElement("button");
   dismiss.type = "button";
   dismiss.className = "text-button smart-import-notes__dismiss";
@@ -2003,6 +2221,12 @@ function renderImportNoteQueue(queue) {
   dismiss.addEventListener("click", () => dismissImportNoteQueue(queue.id));
   header.append(dismiss);
   section.append(header);
+  const progress = document.createElement("progress");
+  progress.className = "smart-import-notes__progress";
+  progress.max = Math.max(1, queue.rows.length);
+  progress.value = completedCount + failedCount;
+  progress.setAttribute("aria-label", "Automatic chapter resource generation progress");
+  section.append(progress);
 
   const list = document.createElement("div");
   list.className = "smart-import-notes__list";
@@ -2017,11 +2241,11 @@ function renderImportNoteQueue(queue) {
       createElement("span", row.message, `smart-import-notes__status smart-import-notes__status--${row.status}`)
     );
     item.append(copy);
-    if (row.status === "failed") {
+    if (["failed", "done"].includes(row.status)) {
       const retry = document.createElement("button");
       retry.type = "button";
       retry.className = "secondary compact-button smart-import-notes__retry";
-      retry.textContent = "Retry";
+      retry.textContent = row.status === "done" ? "Regenerate" : "Retry";
       retry.disabled = queue.running;
       retry.addEventListener("click", () => void retryImportNoteChapter(queue.id, row.chapterId));
       item.append(retry);
@@ -2045,13 +2269,22 @@ function dismissImportNoteQueue(queueId) {
 async function retryImportNoteChapter(queueId, chapterId) {
   const queue = state.importNoteQueue;
   if (!queue || queue.id !== queueId || queue.dismissed || queue.running) return;
-  const row = queue.rows.find((item) => item.chapterId === chapterId && item.status === "failed");
+  const row = queue.rows.find((item) => item.chapterId === chapterId && ["failed", "done"].includes(item.status));
   if (!row) return;
   queue.running = true;
   renderImportNoteQueue(queue);
   await runImportNoteQueueRow(queue, row);
   queue.running = false;
   renderImportNoteQueue(queue);
+}
+
+function updateImportChapterResourceStatus(chapterId, resourceStatus, resourceError = "") {
+  return mutateJourney("JOURNEY_UPDATE_CHAPTER_STATUS", {
+    chapterId,
+    processingStatus: "completed",
+    resourceStatus,
+    resourceError
+  });
 }
 
 async function detectActiveSource() {
@@ -3366,9 +3599,11 @@ async function createStudyNote(input) {
   }
 
   const normalizedCheatSheet = normalizeStudyCheatSheet(note, input);
+  const automaticResources = buildAutomaticStudyResources({ ...note, cheatSheet: normalizedCheatSheet }, input);
   return {
     ...note,
     cheatSheet: normalizedCheatSheet,
+    ...automaticResources,
     id: crypto.randomUUID(),
     kind: "note",
     artifactType: "study",
@@ -3464,6 +3699,15 @@ function buildStudySourceBinding(input) {
     sourceSnapshot: input.sourceSnapshot || null,
     documentType: String(input.documentType || "").slice(0, 20),
     pageCount: Math.max(0, Math.min(10000, Number(input.pageCount) || 0)),
+    pageStart: Math.max(0, Math.min(10000, Number(input.pageStart) || 0)),
+    pageEnd: Math.max(0, Math.min(10000, Number(input.pageEnd) || 0)),
+    fileId: String(input.fileId || "").slice(0, 120),
+    fileName: String(input.fileName || "").slice(0, 180),
+    fileSize: Math.max(0, Number(input.fileSize) || 0),
+    fileFingerprint: String(input.fileFingerprint || "").slice(0, 120),
+    importKey: String(input.importKey || "").slice(0, 180),
+    importedChapterTitle: String(input.importedChapterTitle || "").slice(0, 140),
+    importedChapterOrder: Math.max(0, Number(input.importedChapterOrder) || 0),
     durationMs: Math.max(0, Number(input.durationMs) || 0),
     chapterId: String(input.chapterId || "").slice(0, 100),
     chapter: String(input.chapterTitle || "Current chapter").slice(0, 140),
@@ -3482,13 +3726,6 @@ function buildStudySourceBinding(input) {
 async function createAndRecordStudyArtifact(input) {
   const generationToken = Number.isSafeInteger(input.generationToken) ? input.generationToken : state.generationToken;
   const note = await createStudyNote(input);
-  if (input.requireAiBackend
-    && note.usedLocalFallback
-    && isImportNoteBackendUnavailable(note.generationError)) {
-    const error = new Error("The AI backend is unavailable. Generate this chapter later with Build lesson.");
-    error.code = "IMPORT_NOTE_BACKEND_UNAVAILABLE";
-    throw error;
-  }
   if (generationToken !== state.generationToken) return null;
   const sourceBinding = buildStudySourceBinding(input);
   const artifact = {
@@ -3558,12 +3795,6 @@ async function createAndRecordStudyArtifact(input) {
   await persistCurrentSessionDraft();
   renderNote(artifact);
   return artifact;
-}
-
-function isImportNoteBackendUnavailable(message) {
-  return /failed to fetch|load failed|network|connection refused|econnrefused|api key|access token|token is required|backend could not|backend unavailable|provider unavailable/i.test(
-    String(message || "")
-  );
 }
 
 async function generateNotesWithBackend(endpoint, input, settings = {}) {
@@ -3789,7 +4020,7 @@ async function handleGenerateRecoveryQuiz() {
     return;
   }
   elements.startRecoveryQuizButton.disabled = true;
-  startProgress(`Building recovery practice for ${weakest.label}â€¦`, 12);
+  startProgress(`Building recovery practice for ${weakest.label}\u2026`, 12);
   try {
     const input = await resolveQuizSourceInput(session);
     const recoveryRequest = {
@@ -4334,6 +4565,88 @@ function generateLocalStudyNote({ title, sourceType, sourceUrl, rawText, collect
       "Mark unclear terms for deeper revision."
     ],
     generator: "local"
+  };
+}
+
+function buildAutomaticStudyResources(note, input) {
+  const cleanedText = normalizeText(input?.rawText || "");
+  const sentences = getSentences(cleanedText);
+  const rawTerms = (Array.isArray(note?.terms) && note.terms.length
+    ? note.terms
+    : getImportantTerms(cleanedText).slice(0, 12).map(toTitleCase))
+    .map((term) => String(term || "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .slice(0, 12);
+  const keyConcepts = (note?.visualLesson?.visualModel?.nodes || []).slice(0, 12).map((node, index) => ({
+    id: String(node?.id || `concept-${index + 1}`).slice(0, 100),
+    label: String(node?.label || rawTerms[index] || `Concept ${index + 1}`).slice(0, 120),
+    detail: String(node?.detail || node?.why || "").slice(0, 360),
+    sourcePage: Math.max(0, Math.round(Number(node?.sourcePage || node?.sourceRef?.sourcePage) || 0))
+  }));
+  const definitions = rawTerms.map((term, index) => {
+    const sentence = sentences.find((candidate) => hasWholeWord(candidate, term))
+      || keyConcepts[index]?.detail
+      || "";
+    return sentence ? {
+      term,
+      definition: compactSummaryItem(sentence, 260),
+      sourcePage: input?.documentType === "pdf"
+        ? inferClientEvidencePage({ sourceText: sentence }, input)
+        : 0
+    } : null;
+  }).filter(Boolean).slice(0, 12);
+  const formulas = sentences
+    .filter((sentence) => /(?:[A-Za-z0-9)]\s*=\s*[^=]|[+\-\u00d7\u00f7*/^]\s*\d|\b(?:formula|equation|ratio|rate|percentage)\b)/i.test(sentence))
+    .map((sentence) => compactSummaryItem(sentence, 280))
+    .slice(0, 8);
+  const examples = sentences
+    .filter((sentence) => /\b(?:for example|for instance|such as|e\.g\.|example|suppose|consider)\b/i.test(sentence)
+      || /\b\d+(?:\.\d+)?\b/.test(sentence))
+    .map((sentence) => compactSummaryItem(sentence, 280))
+    .slice(0, 8);
+  let reviewQuestions = buildConceptQuestions(
+    cleanedText,
+    sentences,
+    Array.isArray(note?.summary) ? note.summary : [],
+    5,
+    "normal",
+    "mixed"
+  ).slice(0, 5).map((question) => ({
+    id: String(question.id || crypto.randomUUID()).slice(0, 100),
+    prompt: String(question.prompt || "").slice(0, 500),
+    choices: (Array.isArray(question.choices) ? question.choices : []).map((choice) => String(choice).slice(0, 300)).slice(0, 4),
+    answer: String(question.answer || "").slice(0, 300),
+    explanation: String(question.explanation || question.sourceText || "").slice(0, 600),
+    sourcePage: input?.documentType === "pdf" ? inferClientEvidencePage(question, input) : 0
+  }));
+  if (!reviewQuestions.length && note?.summary?.[0]) {
+    reviewQuestions = [{
+      id: crypto.randomUUID(),
+      prompt: `Explain the main idea behind ${keyConcepts[0]?.label || rawTerms[0] || "this chapter"}.`,
+      choices: [],
+      answer: String(note.summary[0]).slice(0, 300),
+      explanation: String(note.summary[0]).slice(0, 600),
+      sourcePage: input?.documentType === "pdf" ? inferClientEvidencePage({ sourceText: note.summary[0] }, input) : 0
+    }];
+  }
+  const generatedAt = new Date().toISOString();
+  const hasCheatSheet = Boolean(note?.cheatSheet?.rows?.length);
+  return {
+    keyConcepts,
+    definitions,
+    formulas,
+    examples,
+    reviewQuestions,
+    resourceManifest: {
+      visualNote: { status: note?.visualLesson?.visualModel?.nodes?.length ? "completed" : "empty", generatedAt },
+      cheatSheet: { status: hasCheatSheet ? "completed" : "empty", generatedAt },
+      summary: { status: note?.summary?.length ? "completed" : "empty", generatedAt },
+      keyConcepts: { status: keyConcepts.length ? "completed" : "empty", generatedAt },
+      definitions: { status: definitions.length ? "completed" : "empty", generatedAt },
+      formulas: { status: formulas.length ? "completed" : "empty", generatedAt },
+      examples: { status: examples.length ? "completed" : "empty", generatedAt },
+      practice: { status: reviewQuestions.length ? "completed" : "empty", generatedAt }
+    }
   };
 }
 
@@ -9312,6 +9625,16 @@ function buildJourneySourceFromStudyInput(input, item) {
     text: input.sourceType === "webpage" ? input.rawText : "",
     documentType: input.sourceType === "webpage" ? String(input.documentType || "html").slice(0, 20) : "",
     pageCount: input.sourceType === "webpage" ? Math.max(0, Number(input.pageCount) || 0) : 0,
+    pageStart: input.sourceType === "webpage" ? Math.max(0, Number(input.pageStart) || 0) : 0,
+    pageEnd: input.sourceType === "webpage" ? Math.max(0, Number(input.pageEnd) || 0) : 0,
+    fileId: input.fileId || "",
+    fileName: input.fileName || "",
+    fileSize: input.fileSize || 0,
+    fileFingerprint: input.fileFingerprint || "",
+    importKey: input.importKey || "",
+    importedChapterTitle: input.importedChapterTitle || "",
+    importedChapterOrder: input.importedChapterOrder || 0,
+    detectionMethod: input.detectionMethod || "",
     segments: input.sourceType === "video" ? input.videoSegments : [],
     durationMs: input.sourceType === "video" ? input.videoSegments?.at?.(-1)?.endMs || 0 : 0,
     mediaId: input.videoMediaId || "",
@@ -9582,9 +9905,10 @@ async function renderJourney() {
   const averageTone = getJourneyPerformanceTone(metrics.averageScore, "average");
   const progressSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.progressPercent, "progress");
   const averageSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.averageScore, "average");
+  const focusMinutesToday = sumTodayFocusMinutes(focusHistory);
   const focusTone = {
     key: "focus",
-    label: metrics.focusMinutes ? "Focused time logged" : "Ready for a focus block",
+    label: focusMinutesToday ? "Focused today" : "Ready for a focus block",
     color: "#5b5fe8",
     wash: "#eef0ff",
     imageFilter: "none"
@@ -9609,13 +9933,13 @@ async function renderJourney() {
     renderJourneyMetric({
       kind: "focus",
       label: "Focus",
-      value: `${metrics.focusMinutes}m`,
+      value: `${focusMinutesToday}m`,
       detail: focusTone.label,
       tone: focusTone,
-      hasMetricValue: metrics.focusMinutes > 0,
+      hasMetricValue: focusMinutesToday > 0,
       focusDial: {
-        fraction: Math.max(0, Math.min(1, metrics.focusMinutes / (journeyStudyGoal?.dailyMinutes || 20))),
-        minutes: metrics.focusMinutes,
+        fraction: Math.max(0, Math.min(1, focusMinutesToday / (journeyStudyGoal?.dailyMinutes || 20))),
+        minutes: focusMinutesToday,
         goalMinutes: journeyStudyGoal?.dailyMinutes || 20
       }
     })
@@ -9874,7 +10198,8 @@ function getJourneyPerformanceTone(value, artworkBase) {
 function animateMetricValue(element, targetText) {
   const parsed = /^(\d+)(.*)$/.exec(String(targetText));
   const prefersReducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!parsed || prefersReducedMotion || typeof requestAnimationFrame !== "function") {
+  const pageHidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+  if (!parsed || prefersReducedMotion || pageHidden || typeof requestAnimationFrame !== "function") {
     element.textContent = targetText;
     return;
   }
@@ -9882,12 +10207,19 @@ function animateMetricValue(element, targetText) {
   const suffix = parsed[2];
   element.textContent = `0${suffix}`;
   const startedAt = performance.now();
+  const settle = setTimeout(() => {
+    if (!element.dataset.liveValue) element.textContent = targetText;
+  }, 1400);
   const step = (now) => {
-    if (element.dataset.liveValue) return;
+    if (element.dataset.liveValue) {
+      clearTimeout(settle);
+      return;
+    }
     const ratio = Math.min(1, (now - startedAt) / 850);
     const eased = 1 - Math.pow(1 - ratio, 3);
     element.textContent = `${Math.round(target * eased)}${suffix}`;
     if (ratio < 1) requestAnimationFrame(step);
+    else clearTimeout(settle);
   };
   requestAnimationFrame(step);
 }
@@ -9973,6 +10305,17 @@ function buildJourneyGauge(percent, tone) {
   return gauge;
 }
 
+function sumTodayFocusMinutes(history) {
+  const journeyUtils = globalThis.ExamCramJourney;
+  if (!journeyUtils || !Array.isArray(history)) return 0;
+  const todayKey = journeyUtils.localDayKey(new Date());
+  return Math.round(history.reduce((total, item) => {
+    const endedAt = Number(item?.endedAt);
+    if (!Number.isFinite(endedAt) || journeyUtils.localDayKey(new Date(endedAt)) !== todayKey) return total;
+    return total + Math.max(0, Number(item?.elapsedMinutes) || (Number(item?.elapsedMs) || 0) / 60000);
+  }, 0));
+}
+
 function updateJourneyFocusInstrument(focus) {
   const card = document.querySelector("#journeyView .journey-metric--focus");
   if (!card) return;
@@ -9994,13 +10337,16 @@ function updateJourneyFocusInstrument(focus) {
     valueElement.textContent = formatTimestamp(Math.ceil(remaining / 1000));
     detailElement.textContent = onBreak ? "Break running — session resumes soon" : "Focus session in progress";
   } else {
-    const loggedMinutes = Number(card.dataset.loggedMinutes) || 0;
     const goalMinutes = Number(card.dataset.goalMinutes) || 20;
+    const loggedMinutes = Array.isArray(focus?.history)
+      ? sumTodayFocusMinutes(focus.history)
+      : Number(card.dataset.loggedMinutes) || 0;
+    card.dataset.loggedMinutes = String(loggedMinutes);
     delete valueElement.dataset.liveValue;
     dial.classList.toggle("is-charged", loggedMinutes > 0);
     dial.style.setProperty("--journey-focus-sweep", `${Math.round(Math.max(0, Math.min(1, loggedMinutes / goalMinutes)) * 360)}deg`);
     valueElement.textContent = `${loggedMinutes}m`;
-    detailElement.textContent = loggedMinutes > 0 ? "Focused time logged" : "Ready for a focus block";
+    detailElement.textContent = loggedMinutes > 0 ? "Focused today" : "Ready for a focus block";
   }
 }
 
@@ -10372,7 +10718,6 @@ async function handleBuildChapterLesson(chapterId, options = {}) {
       sourceSnapshotCount: collection.sourceSnapshotCount,
       collectionSources: collection.sources,
       collectionCondensed: collection.condensed,
-      requireAiBackend: Boolean(options.requireAiBackend),
       generationToken
     });
     finishProgress("Chapter visual note ready.");

@@ -17,6 +17,7 @@
     REMOVE_SESSION: "JOURNEY_REMOVE_SESSION",
     RENAME_SESSION: "JOURNEY_RENAME_SESSION",
     UPSERT_SESSION: "JOURNEY_UPSERT_SESSION",
+    UPDATE_CHAPTER_STATUS: "JOURNEY_UPDATE_CHAPTER_STATUS",
     CLEAR_LEARNING_MEMORY: "JOURNEY_CLEAR_LEARNING_MEMORY",
     SAVE_SUMMARY: "JOURNEY_SAVE_SUMMARY",
     FINALIZE_COLLECTION: "JOURNEY_FINALIZE_COLLECTION"
@@ -219,6 +220,18 @@
           duplicateAttemptCount: attemptResult?.duplicateCount || 0,
           ...sourceResult
         };
+        break;
+      }
+      case MESSAGE_TYPES.UPDATE_CHAPTER_STATUS: {
+        const chapterId = String(payload.chapterId || "").trim();
+        if (!chapterId) throw new JourneyOperationError("INVALID_CHAPTER", "Updating chapter progress requires a chapter id.");
+        const updated = Journey.updateChapterProcessingStatus(journey, chapterId, {
+          processingStatus: payload.processingStatus,
+          resourceStatus: payload.resourceStatus,
+          resourceError: payload.resourceError
+        }, now);
+        next = updated.journey;
+        result = { chapterId, updated: updated.updated };
         break;
       }
       case MESSAGE_TYPES.CLEAR_LEARNING_MEMORY: {

@@ -196,3 +196,44 @@ test("adversarial PDF text items stop at the output budget instead of building a
   assert.ok(result.text.length <= Reader.MAX_EXTRACTED_TEXT);
   assert.ok(yielded < 20, `expected early item cutoff, received ${yielded}`);
 });
+
+test("detects ordered PDF chapters from bookmarks, headings, and a whole-document fallback", () => {
+  const pageTexts = [
+    "Chapter 1\nCell structure and membranes introduce the course.",
+    "Cells exchange matter with their environment.",
+    "Chapter 2: Energy Transfer\nATP couples reactions inside cells.",
+    "Enzymes reduce activation energy."
+  ];
+  const bookmarked = Reader.detectPdfChapters({
+    title: "Biology handbook",
+    pageTexts,
+    pageCount: 4,
+    outline: [
+      { title: "Chapter 1", pageNumber: 1, method: "bookmark" },
+      { title: "Chapter 2: Energy Transfer", pageNumber: 3, method: "bookmark" }
+    ]
+  });
+
+  assert.deepEqual(bookmarked.map(({ title, pageStart, pageEnd, detectionMethod }) => ({
+    title, pageStart, pageEnd, detectionMethod
+  })), [
+    { title: "Chapter 1", pageStart: 1, pageEnd: 2, detectionMethod: "bookmark" },
+    { title: "Chapter 2: Energy Transfer", pageStart: 3, pageEnd: 4, detectionMethod: "bookmark" }
+  ]);
+  assert.match(bookmarked[1].text, /^Page 3\n/);
+  assert.doesNotMatch(bookmarked[1].text, /Cell structure/);
+
+  const detectedFromHeadings = Reader.detectPdfChapters({ title: "Biology", pageTexts, pageCount: 4 });
+  assert.equal(detectedFromHeadings.length, 2);
+  assert.equal(detectedFromHeadings[0].title, "Chapter 1");
+  assert.equal(detectedFromHeadings[1].pageStart, 3);
+
+  const fallback = Reader.detectPdfChapters({
+    title: "Chapter 1",
+    pageTexts: ["A complete document with readable course material."],
+    pageCount: 1
+  });
+  assert.deepEqual(fallback.map(({ title, pageStart, pageEnd, detectionMethod }) => ({
+    title, pageStart, pageEnd, detectionMethod
+  })), [{ title: "Chapter 1", pageStart: 1, pageEnd: 1, detectionMethod: "whole-document" }]);
+});

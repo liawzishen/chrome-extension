@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "journey.html"), "utf8");
@@ -339,6 +340,32 @@ test("redesigns chapter evidence and Journey summary inside one accessible drawe
   assert.match(styles, /\.forest-drawer\.is-open/);
 });
 
+test("Full Trail exposes retained local PDF text with a bounded reader", () => {
+  const helperStart = script.indexOf("function getSourceContentForDisplay(source)");
+  const helperEnd = script.indexOf("function renderSourceCard(source)", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helpers = vm.runInNewContext(`(() => {
+    ${script.slice(helperStart, helperEnd)}
+    return { getSourceContentForDisplay, getSourceContentPreview };
+  })()`);
+  const content = helpers.getSourceContentForDisplay({
+    documentType: "pdf",
+    text: "Page 1 Cell membranes control transport. Page 2 Active transport requires energy."
+  });
+  assert.equal(content, "Page 1 Cell membranes control transport.\n\nPage 2 Active transport requires energy.");
+  assert.match(helpers.getSourceContentPreview(`${content} ${"detail ".repeat(80)}`, 80), /…$/);
+
+  const cardStart = script.indexOf("function renderSourceCard(source)");
+  const cardEnd = script.indexOf("function renderSummary(summary)", cardStart);
+  const sourceCard = script.slice(cardStart, cardEnd);
+  assert.match(sourceCard, /getSourceContentForDisplay\(source\)/);
+  assert.match(sourceCard, /source-leaf__preview/);
+  assert.match(sourceCard, /Read extracted PDF content/);
+  assert.match(sourceCard, /source-leaf__local-badge/);
+  assert.match(sourceCard, /pageCount[\s\S]*?pageCount === 1 \? "page" : "pages"/);
+  assert.match(styles, /\.source-leaf__content-body \{[^}]*max-height:[^}]*overflow: auto;[^}]*overscroll-behavior: contain;[^}]*white-space: pre-wrap;/);
+});
+
 test("zooms to a Visual Tutor Note branch and opens its exact artifact in the bottom drawer", () => {
   assert.match(html, /id="forestDrawer"[^>]*tabindex="-1"/);
   assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?selectedVisualNoteId\s*=\s*artifactId[\s\S]*?openDrawer\("chapter"\)/);
@@ -384,7 +411,7 @@ test("uses progressive disclosure, responsive regions, and a user-controlled mot
   assert.match(html, /class="forest-topbar__meta"/);
   assert.match(html, /id="toggleForestMotion"[^>]*aria-pressed="false"[^>]*>Pause motion</);
   assert.match(html, /<kbd>Drag<\/kbd> orbit[\s\S]*<kbd>Scroll<\/kbd> zoom/);
-  assert.match(script, /onSelectTree\(\{\s*treeId\s*\}\) \{[\s\S]*?renderDetails\(\);\s*closeDrawer\(\);/);
+  assert.match(script, /onSelectTree\(\{\s*treeId\s*\}\) \{[\s\S]*?renderDetails\(\);\s*openDrawer\("chapter"\);/);
   assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?openDrawer\("chapter"\)/);
   assert.match(script, /function updateMotionControl\(\)[\s\S]*?Resume motion[\s\S]*?Pause motion/);
   assert.match(script, /function rememberDrawerReturnFocus\(preferred\)/);
@@ -433,4 +460,19 @@ test("bundles Three.js locally through the extension's existing build", () => {
   assert.ok(packageJson.scripts.build.includes("build:journey"));
   assert.match(packageJson.scripts["build:journey"], /build-journey-tree\.mjs/);
   assert.ok(fs.statSync(path.join(root, "journey-tree.bundle.js")).size > 100_000);
+});
+
+test("adds a file-to-chapter outline, chapter workspace, and persistent Focus panel to the Learning Tree", () => {
+  assert.match(html, /id="chapterFocusPanel"[\s\S]*?id="chapterFocusTotal"[\s\S]*?id="chapterFocusCurrent"[\s\S]*?id="chapterFocusSession"/);
+  assert.match(html, /id="startChapterFocus"[\s\S]*?id="pauseChapterFocus"[\s\S]*?id="resumeChapterFocus"/);
+  assert.match(html, /id="learningOutline"/);
+  assert.match(script, /function renderLearningOutline\(\)[\s\S]*?importedFileId[\s\S]*?learning-outline__file[\s\S]*?renderOutlineChapterNode/);
+  assert.match(script, /function renderChapterWorkspace\([\s\S]*?"Source"[\s\S]*?"Visual Note"[\s\S]*?"Cheat Sheet"[\s\S]*?"Summary"[\s\S]*?"Practice"/);
+  assert.match(script, /requestChapterResourceGeneration\(chapter, available \? "regenerate" : "retry"\)/);
+  assert.match(script, /handleChapterFocusVisibilityChange[\s\S]*?pauseSelectedChapterFocus\("hidden"\)/);
+  assert.match(script, /CHAPTER_MESSAGE_TYPES\.SELECT[\s\S]*?CHAPTER_MESSAGE_TYPES\.START[\s\S]*?CHAPTER_MESSAGE_TYPES\.PAUSE/);
+  assert.match(styles, /\.forest-study-rail[\s\S]*?overflow:\s*auto/);
+  assert.match(styles, /\.learning-outline__chapter::before/);
+  assert.match(styles, /\.chapter-workspace__tabs[\s\S]*?overflow-x:\s*auto/);
+  assert.match(styles, /\.chapter-workspace__panel[\s\S]*?overflow-wrap:\s*anywhere/);
 });

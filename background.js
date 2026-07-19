@@ -7,6 +7,7 @@ const Journey = globalThis.ExamCramJourney;
 const JourneyWorker = globalThis.ExamCramJourneyWorker;
 const Video = globalThis.ExamCramVideo;
 const FOCUS_MESSAGE_TYPES = new Set(Object.values(Focus.MESSAGE_TYPES));
+const CHAPTER_FOCUS_MESSAGE_TYPES = new Set(Object.values(Focus.CHAPTER_MESSAGE_TYPES || {}));
 const JOURNEY_MESSAGE_TYPES = new Set(Object.values(JourneyWorker.MESSAGE_TYPES));
 const VIDEO_REQUEST_TYPES = new Set([
   "VIDEO_CAPTURE_ARM",
@@ -48,6 +49,9 @@ chrome.runtime.onInstalled.addListener(() => {
     return reconcileFocusState("installed");
   }).then(broadcastFocusState).catch((error) => logFocusError("install reconciliation", error));
   void enqueueVideoOperation(() => reconcileVideoCaptureState("extension update")).catch(() => undefined);
+  void enqueueOperation(() => reconcileChapterFocusState("installed"))
+    .then(broadcastChapterFocusState)
+    .catch((error) => logFocusError("chapter focus install reconciliation", error));
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -56,6 +60,9 @@ chrome.runtime.onStartup.addListener(() => {
     .then(broadcastFocusState)
     .catch((error) => logFocusError("startup reconciliation", error));
   void enqueueVideoOperation(() => reconcileVideoCaptureState("browser restart")).catch(() => undefined);
+  void enqueueOperation(() => reconcileChapterFocusState("browser startup"))
+    .then(broadcastChapterFocusState)
+    .catch((error) => logFocusError("chapter focus startup reconciliation", error));
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -82,6 +89,12 @@ chrome.action.onClicked.addListener((tab) => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm?.name === Focus.CHAPTER_IDLE_ALARM) {
+    void enqueueOperation(() => reconcileChapterFocusState("idle alarm"))
+      .then(broadcastChapterFocusState)
+      .catch((error) => logFocusError("chapter idle reconciliation", error));
+    return;
+  }
   if (![Focus.END_ALARM, Focus.BREAK_ALARM].includes(alarm?.name)) return;
   void enqueueOperation(() => reconcileFocusState(`alarm ${alarm.name}`))
     .then(broadcastFocusState)
@@ -96,6 +109,9 @@ chrome.permissions.onRemoved.addListener(() => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status !== "loading" && !changeInfo.url) return;
+  void enqueueOperation(() => pauseChapterFocusForOwnedTab(tabId, "hidden"))
+    .then((state) => state && broadcastChapterFocusState(state))
+    .catch(() => undefined);
   // Revoke one-shot stream ids immediately, even when capture state has not
   // been persisted yet. The epoch also prevents an in-flight authorization
   // from committing after this navigation event.
@@ -120,6 +136,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       await stopVideoCapture("navigation", true);
     }
   }).catch(() => undefined);
+  void enqueueOperation(() => pauseChapterFocusForOwnedTab(tabId, "closed"))
+    .then((state) => state && broadcastChapterFocusState(state))
+    .catch(() => undefined);
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -138,6 +157,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void enqueueOperation(() => handleFocusMessage(message))
       .then((state) => {
         void broadcastFocusState(state);
+        sendResponse({ ok: true, state });
+      })
+      .catch((error) => sendResponse({ ok: false, error: serializeFocusError(error) }));
+    return true;
+  }
+  if (CHAPTER_FOCUS_MESSAGE_TYPES.has(message?.type)) {
+    void enqueueOperation(() => handleChapterFocusMessage(message, sender))
+      .then((state) => {
+        void broadcastChapterFocusState(state);
         sendResponse({ ok: true, state });
       })
       .catch((error) => sendResponse({ ok: false, error: serializeFocusError(error) }));
@@ -190,6 +218,9 @@ void enqueueOperation(async () => {
 }).then(broadcastFocusState).catch((error) => logFocusError("worker reconciliation", error));
 void configureGlobalSidePanel("worker start");
 void enqueueVideoOperation(() => reconcileVideoCaptureState("worker restart")).catch(() => undefined);
+void enqueueOperation(() => reconcileChapterFocusState("worker restart"))
+  .then(broadcastChapterFocusState)
+  .catch((error) => logFocusError("chapter focus worker reconciliation", error));
 
 async function configureGlobalSidePanel(reason) {
   if (typeof chrome.sidePanel?.setPanelBehavior !== "function") {
@@ -1311,6 +1342,14 @@ async function broadcastFocusState(state) {
   }
 }
 
+async function broadcastChapterFocusState(state) {
+  try {
+    await chrome.runtime.sendMessage({ type: "CHAPTER_FOCUS_STATE_CHANGED", state });
+  } catch {
+    // No Learning Tree page is open.
+  }
+}
+
 function isVideoOffscreenSender(sender) {
   const expected = chrome.runtime.getURL("offscreen.html");
   return sender?.id === chrome.runtime.id && String(sender?.url || "") === expected;
@@ -1450,6 +1489,81 @@ async function handleFocusMessage(message) {
     default:
       throw new Focus.FocusError("UNKNOWN_MESSAGE", "Unknown Focus mode request.");
   }
+}
+
+async function handleChapterFocusMessage(message, sender) {
+  const now = Date.now();
+  const reconciled = await reconcileChapterFocusState("chapter timer request");
+  let next = reconciled;
+  const input = {
+    chapterId: message.chapterId,
+    chapterTitle: message.chapterTitle,
+    ownerId: message.ownerId,
+    ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : null
+  };
+  switch (message.type) {
+    case Focus.CHAPTER_MESSAGE_TYPES.GET_STATE:
+      return reconciled;
+    case Focus.CHAPTER_MESSAGE_TYPES.SELECT:
+      next = Focus.selectChapterFocusState(reconciled, input, now);
+      break;
+    case Focus.CHAPTER_MESSAGE_TYPES.START:
+    case Focus.CHAPTER_MESSAGE_TYPES.RESUME:
+      next = Focus.startChapterFocusState(reconciled, input, now, createSessionId());
+      break;
+    case Focus.CHAPTER_MESSAGE_TYPES.PAUSE:
+      if (!reconciled.active || reconciled.ownerId === String(message.ownerId || "")) {
+        next = Focus.pauseChapterFocusState(reconciled, now, message.outcome || "paused");
+      }
+      break;
+    case Focus.CHAPTER_MESSAGE_TYPES.ACTIVITY:
+      next = Focus.recordChapterFocusActivity(reconciled, input, now);
+      break;
+    default:
+      throw new Focus.FocusError("UNKNOWN_MESSAGE", "Unknown chapter Focus request.");
+  }
+  if (JSON.stringify(next) !== JSON.stringify(reconciled)) await saveChapterFocusState(next);
+  await syncChapterFocusAlarm(next);
+  return Focus.normalizeChapterFocusState(next, now);
+}
+
+async function loadChapterFocusState() {
+  const result = await chrome.storage.local.get(Focus.CHAPTER_STORAGE_KEY);
+  return Focus.normalizeChapterFocusState(result?.[Focus.CHAPTER_STORAGE_KEY], Date.now());
+}
+
+async function saveChapterFocusState(state) {
+  const normalized = Focus.normalizeChapterFocusState(state, Date.now());
+  await chrome.storage.local.set({ [Focus.CHAPTER_STORAGE_KEY]: normalized });
+  return normalized;
+}
+
+async function reconcileChapterFocusState(reason) {
+  const now = Date.now();
+  const stored = await loadChapterFocusState();
+  const reconciled = Focus.reconcileChapterFocusState(stored, now);
+  if (reconciled.changed) await saveChapterFocusState(reconciled.state);
+  await syncChapterFocusAlarm(reconciled.state);
+  void reason;
+  return Focus.normalizeChapterFocusState(reconciled.state, now);
+}
+
+async function pauseChapterFocusForOwnedTab(tabId, outcome = "closed") {
+  const stored = await loadChapterFocusState();
+  if (!stored.active || stored.ownerTabId !== tabId) return null;
+  const next = Focus.pauseChapterFocusState(stored, Date.now(), outcome);
+  await saveChapterFocusState(next);
+  await syncChapterFocusAlarm(next);
+  return next;
+}
+
+async function syncChapterFocusAlarm(stateValue) {
+  await chrome.alarms.clear(Focus.CHAPTER_IDLE_ALARM);
+  const state = Focus.normalizeChapterFocusState(stateValue, Date.now());
+  if (!state.active || state.lastActivityAt === null) return;
+  await chrome.alarms.create(Focus.CHAPTER_IDLE_ALARM, {
+    when: state.lastActivityAt + Focus.CHAPTER_IDLE_TIMEOUT_MS
+  });
 }
 
 async function startFocus(message) {

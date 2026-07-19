@@ -1,8 +1,10 @@
 const STORAGE = {
   journey: "examCramLearningJourney",
   focus: "examCramFocusState",
+  chapterFocus: "examCramChapterFocusState",
   sessions: "examCramSessions",
-  sessionDraft: "examCramSessionDraft"
+  sessionDraft: "examCramSessionDraft",
+  pendingChapterAction: "examCramPendingChapterAction"
 };
 
 const page = {
@@ -31,11 +33,23 @@ const page = {
   summarize: document.getElementById("pageSummarizeButton"),
   summary: document.getElementById("pageJourneySummary"),
   createNote: document.getElementById("pageCreateNoteButton"),
-  createNoteHelp: document.getElementById("pageCreateNoteHelp")
+  createNoteHelp: document.getElementById("pageCreateNoteHelp"),
+  chapterFocusPanel: document.getElementById("chapterFocusPanel"),
+  chapterFocusStatus: document.getElementById("chapterFocusStatus"),
+  chapterFocusTotal: document.getElementById("chapterFocusTotal"),
+  chapterFocusCurrent: document.getElementById("chapterFocusCurrent"),
+  chapterFocusSession: document.getElementById("chapterFocusSession"),
+  chapterFocusStudied: document.getElementById("chapterFocusStudied"),
+  chapterFocusMessage: document.getElementById("chapterFocusMessage"),
+  startChapterFocus: document.getElementById("startChapterFocus"),
+  pauseChapterFocus: document.getElementById("pauseChapterFocus"),
+  resumeChapterFocus: document.getElementById("resumeChapterFocus"),
+  learningOutline: document.getElementById("learningOutline")
 };
 
 let journey = globalThis.ExamCramJourney.createJourney();
 let focusState = globalThis.ExamCramFocus?.createDefaultFocusState?.() || {};
+let chapterFocusState = globalThis.ExamCramFocus?.createDefaultChapterFocusState?.() || {};
 let savedArtifacts = [];
 let forestRecords = [];
 let selectedChapterId = "";
@@ -43,13 +57,17 @@ let selectedVisualNoteId = "";
 let forestMode = "loading";
 let drawerReturnFocus = null;
 let motionPaused = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+const chapterFocusOwnerId = globalThis.crypto?.randomUUID?.() || `journey-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+let chapterFocusRenderTimer = null;
+let lastChapterFocusActivitySentAt = 0;
 
 const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
   onSelectTree({ treeId }) {
     selectedChapterId = treeId;
     selectedVisualNoteId = "";
     renderDetails();
-    closeDrawer();
+    openDrawer("chapter");
+    void selectChapterForFocus(treeId);
   },
   onSelectVisualNote({ treeId, artifactId }) {
     rememberDrawerReturnFocus();
@@ -60,6 +78,7 @@ const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
     page.drawer.scrollTop = 0;
     page.drawer.focus({ preventScroll: true });
     requestAnimationFrame(revealSelectedVisualNoteMessage);
+    void selectChapterForFocus(treeId);
   },
   onModeChange({ mode, treeId }) {
     forestMode = mode;
@@ -98,8 +117,15 @@ page.motion.addEventListener("click", () => {
 });
 page.chapterTab.addEventListener("click", () => setDrawerTab("chapter"));
 page.summaryTab.addEventListener("click", () => setDrawerTab("summary"));
+page.startChapterFocus?.addEventListener("click", () => void startSelectedChapterFocus("start"));
+page.pauseChapterFocus?.addEventListener("click", () => void pauseSelectedChapterFocus("paused"));
+page.resumeChapterFocus?.addEventListener("click", () => void startSelectedChapterFocus("resume"));
 window.addEventListener("beforeunload", handleBeforeUnload, { once: true });
 window.addEventListener("keydown", handlePageKeyDown);
+document.addEventListener("visibilitychange", handleChapterFocusVisibilityChange);
+["pointerdown", "keydown", "wheel", "touchstart"].forEach((eventName) => {
+  document.addEventListener(eventName, handleChapterFocusActivity, { passive: true });
+});
 
 if (globalThis.chrome?.storage?.onChanged) {
   globalThis.chrome.storage.onChanged.addListener(handleStorageChanged);
@@ -110,15 +136,17 @@ void load();
 async function load() {
   setLoadState("loading", "Loading your learning forest...");
   try {
-    const [storedJourney, storedFocus, storedArtifacts] = await Promise.all([
+    const [storedJourney, storedFocus, storedChapterFocus, storedArtifacts] = await Promise.all([
       getStorage(STORAGE.journey, null),
       getStorage(STORAGE.focus, null),
+      getStorage(STORAGE.chapterFocus, null),
       getStorage(STORAGE.sessions, [])
     ]);
     journey = globalThis.ExamCramJourney.normalizeJourney(
       storedJourney || globalThis.ExamCramJourney.createJourney()
     );
     focusState = storedFocus || {};
+    chapterFocusState = globalThis.ExamCramFocus?.normalizeChapterFocusState?.(storedChapterFocus) || storedChapterFocus || {};
     savedArtifacts = normalizeSavedArtifacts(storedArtifacts);
     if (journey.summary?.range && page.range.querySelector(`option[value="${journey.summary.range}"]`)) {
       page.range.value = journey.summary.range;
@@ -139,6 +167,297 @@ function renderHeaderMetrics() {
   page.focus.textContent = `${metrics.focusMinutes}m`;
 }
 
+function renderStudyRail() {
+  renderChapterFocusPanel();
+  renderLearningOutline();
+}
+
+function renderChapterFocusPanel() {
+  if (!page.chapterFocusPanel || !globalThis.ExamCramFocus) return;
+  chapterFocusState = globalThis.ExamCramFocus.normalizeChapterFocusState(chapterFocusState, Date.now());
+  const selectedChapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
+  const active = Boolean(chapterFocusState.active);
+  const ownedHere = active && chapterFocusState.ownerId === chapterFocusOwnerId;
+  const canResume = !active && chapterFocusState.status === "paused"
+    && chapterFocusState.chapterId === selectedChapter?.id;
+  const sessionMs = active
+    ? globalThis.ExamCramFocus.getChapterFocusElapsedMs(chapterFocusState, Date.now())
+    : canResume ? chapterFocusState.lastSessionDurationMs || 0 : 0;
+  const totalMs = globalThis.ExamCramFocus.getTotalChapterFocusedMs(chapterFocusState, Date.now());
+  const studiedCount = Object.values(chapterFocusState.chapterTotals || {}).filter((duration) => Number(duration) > 0).length
+    + (active && !(chapterFocusState.chapterTotals?.[chapterFocusState.chapterId] > 0) ? 1 : 0);
+  page.chapterFocusStatus.textContent = active
+    ? ownedHere ? "Running" : "Running in another tab"
+    : canResume ? "Paused" : "Not running";
+  page.chapterFocusStatus.dataset.state = active ? "running" : canResume ? "paused" : "idle";
+  page.chapterFocusTotal.textContent = formatFocusedDuration(totalMs);
+  page.chapterFocusCurrent.textContent = active
+    ? chapterFocusState.chapterTitle || "Current chapter"
+    : selectedChapter?.importedChapterTitle || selectedChapter?.title || "Choose a chapter";
+  page.chapterFocusSession.textContent = formatTimerDuration(sessionMs);
+  page.chapterFocusStudied.textContent = String(studiedCount);
+  page.startChapterFocus.hidden = active && ownedHere || canResume;
+  page.startChapterFocus.disabled = !selectedChapter;
+  page.startChapterFocus.textContent = active && !ownedHere ? "Start here" : "Start";
+  page.pauseChapterFocus.hidden = !ownedHere;
+  page.resumeChapterFocus.hidden = !canResume;
+  page.chapterFocusMessage.textContent = active
+    ? ownedHere
+      ? "Timing this chapter. Switching chapters, hiding this page, or being inactive pauses it automatically."
+      : "One chapter timer is already running in another Learning Tree tab. Start here only if you want to transfer it."
+    : canResume
+      ? "This chapter timer is paused. Resume when you continue studying."
+      : selectedChapter
+        ? "Ready to record focused study time for this chapter."
+        : "Select a chapter in the outline, then start when you begin studying.";
+  scheduleChapterFocusRender(active);
+}
+
+function scheduleChapterFocusRender(active) {
+  if (!active) {
+    if (chapterFocusRenderTimer) clearInterval(chapterFocusRenderTimer);
+    chapterFocusRenderTimer = null;
+    return;
+  }
+  if (chapterFocusRenderTimer) return;
+  chapterFocusRenderTimer = setInterval(() => {
+    const reconciled = globalThis.ExamCramFocus.reconcileChapterFocusState(chapterFocusState, Date.now());
+    if (reconciled.changed) {
+      chapterFocusState = reconciled.state;
+      void pauseSelectedChapterFocus("inactive");
+      return;
+    }
+    renderChapterFocusPanel();
+    renderLearningOutline();
+  }, 1000);
+}
+
+function renderLearningOutline() {
+  if (!page.learningOutline) return;
+  if (!journey.chapters.length) {
+    page.learningOutline.replaceChildren(createText("p", "No uploaded files or chapters yet. Import a PDF to build this outline."));
+    return;
+  }
+  const groups = new Map();
+  journey.chapters.forEach((chapter) => {
+    const key = chapter.importedFileId || "manual";
+    const group = groups.get(key) || {
+      id: key,
+      title: chapter.importedFileName || "Other learning chapters",
+      size: chapter.importedFileSize || 0,
+      imported: Boolean(chapter.importedFileId),
+      chapters: []
+    };
+    group.chapters.push(chapter);
+    groups.set(key, group);
+  });
+  const nodes = [...groups.values()].map((group) => {
+    const wrapper = document.createElement("section");
+    wrapper.className = "learning-outline__file";
+    const heading = document.createElement("div");
+    heading.className = "learning-outline__file-heading";
+    heading.append(
+      createText("strong", group.title),
+      createText("span", group.imported
+        ? `${formatFileSize(group.size)} \u00b7 ${group.chapters.length} ${group.chapters.length === 1 ? "chapter" : "chapters"}`
+        : `${group.chapters.length} ${group.chapters.length === 1 ? "chapter" : "chapters"}`)
+    );
+    const list = document.createElement("div");
+    list.className = "learning-outline__chapters";
+    group.chapters
+      .sort((first, second) => (first.importedChapterOrder || 0) - (second.importedChapterOrder || 0)
+        || first.title.localeCompare(second.title))
+      .forEach((chapter) => list.append(renderOutlineChapterNode(chapter)));
+    wrapper.append(heading, list);
+    return wrapper;
+  });
+  page.learningOutline.replaceChildren(...nodes);
+}
+
+function renderOutlineChapterNode(chapter) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `learning-outline__chapter${chapter.id === selectedChapterId ? " is-selected" : ""}`;
+  button.setAttribute("aria-current", chapter.id === selectedChapterId ? "true" : "false");
+  const title = chapter.importedChapterTitle || chapter.title;
+  const status = getChapterWorkspaceStatus(chapter);
+  const progress = getChapterWorkspaceProgress(chapter);
+  const focusedMs = globalThis.ExamCramFocus?.getChapterFocusedMs?.(chapterFocusState, chapter.id, Date.now()) || 0;
+  button.append(
+    createText("strong", title),
+    createText("span", `${status} \u00b7 ${progress}% \u00b7 ${formatFocusedDuration(focusedMs)} focused`)
+  );
+  if (chapter.pageStart) {
+    button.append(createText("small", `Pages ${chapter.pageStart}${chapter.pageEnd > chapter.pageStart ? `\u2013${chapter.pageEnd}` : ""}`));
+  }
+  button.addEventListener("click", () => {
+    rememberDrawerReturnFocus(button);
+    selectedChapterId = chapter.id;
+    selectedVisualNoteId = "";
+    if (forestController.isWebGLAvailable) forestController.focusTree(chapter.id);
+    renderDetails();
+    renderStudyRail();
+    openDrawer("chapter");
+    void selectChapterForFocus(chapter.id);
+  });
+  return button;
+}
+
+function getChapterWorkspaceStatus(chapter) {
+  const status = chapter?.resourceStatus || (chapter?.sessions?.some((session) => session.hasVisualNote) ? "completed" : "waiting");
+  return {
+    waiting: "Waiting for generation",
+    generating: "Generating resources",
+    completed: "Resources ready",
+    partially_completed: "Partially completed",
+    failed: "Generation failed",
+    empty: "Empty content",
+    outdated: "Update available"
+  }[status] || formatStatus(globalThis.ExamCramJourney.getChapterStatus(chapter));
+}
+
+function getChapterWorkspaceProgress(chapter) {
+  if (chapter?.resourceStatus === "completed") {
+    return globalThis.ExamCramJourney.getChapterStatus(chapter) === "completed" ? 100 : 75;
+  }
+  if (chapter?.resourceStatus === "partially_completed") return 55;
+  if (chapter?.resourceStatus === "generating") return 35;
+  if (chapter?.resourceStatus === "failed" || chapter?.resourceStatus === "empty") return 10;
+  return chapter?.sources?.length ? 20 : 0;
+}
+
+async function selectChapterForFocus(chapterId) {
+  const chapter = globalThis.ExamCramJourney.findChapter(journey, chapterId);
+  if (!chapter) return;
+  try {
+    chapterFocusState = await sendChapterFocusMessage({
+      type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.SELECT,
+      chapterId: chapter.id,
+      chapterTitle: chapter.importedChapterTitle || chapter.title,
+      ownerId: chapterFocusOwnerId
+    });
+    renderStudyRail();
+  } catch (error) {
+    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not switch chapters.";
+  }
+}
+
+async function startSelectedChapterFocus(action) {
+  const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
+  if (!chapter) {
+    page.chapterFocusMessage.textContent = "Choose a chapter before starting the timer.";
+    return;
+  }
+  try {
+    chapterFocusState = await sendChapterFocusMessage({
+      type: action === "resume"
+        ? globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.RESUME
+        : globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.START,
+      chapterId: chapter.id,
+      chapterTitle: chapter.importedChapterTitle || chapter.title,
+      ownerId: chapterFocusOwnerId
+    });
+    lastChapterFocusActivitySentAt = Date.now();
+    renderStudyRail();
+  } catch (error) {
+    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not start.";
+  }
+}
+
+async function pauseSelectedChapterFocus(outcome = "paused") {
+  try {
+    chapterFocusState = await sendChapterFocusMessage({
+      type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.PAUSE,
+      chapterId: chapterFocusState.chapterId,
+      ownerId: chapterFocusOwnerId,
+      outcome
+    });
+    renderStudyRail();
+  } catch (error) {
+    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not pause.";
+  }
+}
+
+function handleChapterFocusVisibilityChange() {
+  if (document.visibilityState === "hidden" && chapterFocusState.active
+    && chapterFocusState.ownerId === chapterFocusOwnerId) {
+    void pauseSelectedChapterFocus("hidden");
+  }
+}
+
+function handleChapterFocusActivity() {
+  const now = Date.now();
+  if (!chapterFocusState.active || chapterFocusState.ownerId !== chapterFocusOwnerId
+    || document.visibilityState === "hidden" || now - lastChapterFocusActivitySentAt < 15000) return;
+  lastChapterFocusActivitySentAt = now;
+  void sendChapterFocusMessage({
+    type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.ACTIVITY,
+    chapterId: chapterFocusState.chapterId,
+    ownerId: chapterFocusOwnerId
+  }).then((next) => {
+    chapterFocusState = next;
+  }).catch(() => {});
+}
+
+function sendChapterFocusMessage(message) {
+  if (globalThis.chrome?.runtime?.sendMessage) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        const runtimeError = chrome.runtime?.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message || "Could not contact the chapter timer."));
+          return;
+        }
+        if (!response?.ok) {
+          reject(new Error(response?.error?.message || "The chapter timer could not complete that action."));
+          return;
+        }
+        resolve(globalThis.ExamCramFocus.normalizeChapterFocusState(response.state, Date.now()));
+      });
+    });
+  }
+  return getStorage(STORAGE.chapterFocus, null).then(async (stored) => {
+    const now = Date.now();
+    let next = globalThis.ExamCramFocus.reconcileChapterFocusState(stored, now).state;
+    const input = { ...message, ownerTabId: null };
+    if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.SELECT) {
+      next = globalThis.ExamCramFocus.selectChapterFocusState(next, input, now);
+    } else if ([globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.START, globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.RESUME].includes(message.type)) {
+      next = globalThis.ExamCramFocus.startChapterFocusState(next, input, now, globalThis.crypto?.randomUUID?.() || `focus-${now}`);
+    } else if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.PAUSE) {
+      next = globalThis.ExamCramFocus.pauseChapterFocusState(next, now, message.outcome || "paused");
+    } else if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.ACTIVITY) {
+      next = globalThis.ExamCramFocus.recordChapterFocusActivity(next, input, now);
+    }
+    await setStorage(STORAGE.chapterFocus, next);
+    return next;
+  });
+}
+
+function formatTimerDuration(value) {
+  const seconds = Math.max(0, Math.floor((Number(value) || 0) / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = seconds % 60;
+  return hours
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
+    : `${minutes}:${String(remainder).padStart(2, "0")}`;
+}
+
+function formatFocusedDuration(value) {
+  const minutes = Math.floor(Math.max(0, Number(value) || 0) / 60000);
+  if (minutes < 1) return "0m";
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
+}
+
+function formatFileSize(value) {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (!bytes) return "Local file";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function render() {
   renderHeaderMetrics();
   forestRecords = globalThis.ExamCramLearningForestData.buildForestRecords(
@@ -156,6 +475,7 @@ function render() {
   }
   if (forestRecords.length === 1) selectedChapterId = forestRecords[0].id;
   renderFallback();
+  renderStudyRail();
   renderDetails();
   renderSummary(journey.summary || globalThis.ExamCramJourney.summarize(journey, { range: page.range.value }));
   forestController.setTrees(forestRecords);
@@ -184,6 +504,7 @@ function renderFallback() {
       if (forestController.isWebGLAvailable) forestController.focusTree(record.id);
       renderDetails();
       openDrawer("chapter");
+      void selectChapterForFocus(record.id);
     });
     return button;
   }));
@@ -224,6 +545,8 @@ function openDrawer(tab = "chapter") {
   page.drawer.classList.add("is-open");
   page.drawer.setAttribute("aria-hidden", "false");
   page.root.dataset.drawer = "open";
+  const activePanel = tab === "summary" ? page.summaryPanel : page.chapterPanel;
+  activePanel.scrollTop = 0;
 }
 
 function closeDrawer() {
@@ -326,7 +649,19 @@ function renderStudyContext() {
     return;
   }
   page.context.hidden = false;
-  const lastSource = journey.lastStudySource;
+  const storedLastSource = journey.lastStudySource?.chapterId === chapter.id ? journey.lastStudySource : null;
+  const chapterSource = [...(chapter.sources || [])]
+    .sort((first, second) => Date.parse(second.capturedAt || 0) - Date.parse(first.capturedAt || 0))[0] || null;
+  const lastSource = storedLastSource || (chapterSource ? {
+    title: chapterSource.title || chapterSource.fileName || chapter.title,
+    domain: chapterSource.fileName || getSourceDomain(chapterSource.url) || (chapterSource.documentType === "pdf" ? "Local PDF" : "Saved source"),
+    type: chapterSource.type || "webpage",
+    documentType: chapterSource.documentType || "",
+    chapterId: chapter.id,
+    chapter: chapter.title,
+    url: chapterSource.url || "",
+    capturedAt: chapterSource.capturedAt
+  } : null);
   const hasSavedEvidence = Boolean(chapter.sources?.length || chapter.sessions?.length);
   const copy = document.createElement("div");
   copy.className = "study-context-copy";
@@ -340,9 +675,9 @@ function renderStudyContext() {
     return;
   }
   copy.append(
-    createText("span", "Latest learning context", "study-context-label"),
+    createText("span", storedLastSource ? "Latest learning context" : "Selected chapter source", "study-context-label"),
     createText("h3", `${lastSource.title} · ${lastSource.domain}`),
-    createText("p", `Saved to ${lastSource.chapter} · ${formatSourceType(lastSource.type)} · ${formatDate(lastSource.capturedAt)}`, "study-context-meta")
+    createText("p", `Saved to ${lastSource.chapter} · ${formatSourceType(lastSource.type, lastSource.documentType)} · ${formatDate(lastSource.capturedAt)}`, "study-context-meta")
   );
   if (!hasSavedEvidence) {
     copy.append(createText("p", `${chapter.title} has no saved evidence yet.`, "chapter-source-state"));
@@ -455,17 +790,205 @@ function renderInspector() {
   chapter.sources.forEach((source) => sourceList.append(renderSourceCard(source)));
   sources.append(sourceList);
 
-  page.inspector.replaceChildren(
-    ...[
-      header,
-      notePreview,
-      sourceState,
-      evidence,
-      visualNotes,
-      artifacts,
-      chapter.sources.length ? sources : null
-    ].filter(Boolean)
-  );
+  const workspace = renderChapterWorkspace(chapter, record, {
+    notePreview,
+    sourceState,
+    evidence,
+    visualNotes,
+    artifacts,
+    sources: chapter.sources.length ? sources : null
+  });
+  page.inspector.replaceChildren(header, workspace);
+}
+
+function renderChapterWorkspace(chapter, record, sections) {
+  const workspace = document.createElement("section");
+  workspace.className = "chapter-workspace";
+  workspace.setAttribute("aria-label", `${chapter.importedChapterTitle || chapter.title} learning workspace`);
+  const artifact = getExactChapterArtifact(record);
+  const tabs = [
+    { id: "source", label: "Source" },
+    { id: "visual", label: "Visual Note" },
+    { id: "cheat", label: "Cheat Sheet" },
+    { id: "summary", label: "Summary" },
+    { id: "practice", label: "Practice" }
+  ];
+  const tabList = document.createElement("div");
+  tabList.className = "chapter-workspace__tabs";
+  tabList.setAttribute("role", "tablist");
+  tabList.setAttribute("aria-label", "Chapter resources");
+  const panels = new Map();
+  tabs.forEach((tab, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.id = `chapter-workspace-tab-${chapter.id}-${tab.id}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", String(index === 0));
+    button.setAttribute("aria-controls", `chapter-workspace-panel-${chapter.id}-${tab.id}`);
+    button.tabIndex = index === 0 ? 0 : -1;
+    button.textContent = tab.label;
+    button.addEventListener("click", () => selectChapterWorkspaceTab(tab.id, tabList, panels));
+    button.addEventListener("keydown", (event) => handleChapterWorkspaceTabKeydown(event, tabs, tabList, panels));
+    tabList.append(button);
+
+    const panel = document.createElement("section");
+    panel.id = `chapter-workspace-panel-${chapter.id}-${tab.id}`;
+    panel.className = "chapter-workspace__panel";
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", button.id);
+    panel.dataset.workspacePanel = tab.id;
+    panel.hidden = index !== 0;
+    panels.set(tab.id, panel);
+  });
+
+  const sourcePanel = panels.get("source");
+  sourcePanel.append(...[sections.sourceState, sections.evidence, sections.sources].filter(Boolean));
+  if (!sourcePanel.childElementCount) {
+    sourcePanel.append(renderWorkspaceEmptyState(chapter, "No source content is available for this chapter yet."));
+  }
+
+  const visualPanel = panels.get("visual");
+  visualPanel.append(renderWorkspaceResourceHeader(chapter, "Visual Note", Boolean(sections.notePreview)));
+  visualPanel.append(...[sections.notePreview, sections.visualNotes, sections.artifacts].filter(Boolean));
+
+  const cheatPanel = panels.get("cheat");
+  const cheatSheet = normalizeChapterCheatSheet(artifact);
+  cheatPanel.append(renderWorkspaceResourceHeader(
+    chapter,
+    "Cheat Sheet",
+    Boolean(globalThis.ExamCramCheatSheet?.hasUsableCheatSheet?.(cheatSheet))
+  ));
+  if (globalThis.ExamCramCheatSheet?.hasUsableCheatSheet?.(cheatSheet)) {
+    cheatPanel.append(renderChapterCheatSheet(cheatSheet));
+  } else {
+    cheatPanel.append(renderWorkspaceEmptyState(chapter, "The Cheat Sheet has not been generated yet."));
+  }
+
+  const summaryPanel = panels.get("summary");
+  summaryPanel.append(renderWorkspaceResourceHeader(chapter, "Summary & concepts", Boolean(artifact?.summary?.length)));
+  summaryPanel.append(renderArtifactSummaryResources(chapter, artifact));
+
+  const practicePanel = panels.get("practice");
+  practicePanel.append(renderWorkspaceResourceHeader(chapter, "Practice", Boolean(artifact?.reviewQuestions?.length)));
+  practicePanel.append(renderArtifactPractice(chapter, artifact));
+
+  workspace.append(tabList, ...panels.values());
+  return workspace;
+}
+
+function selectChapterWorkspaceTab(tabId, tabList, panels) {
+  tabList.querySelectorAll('[role="tab"]').forEach((button) => {
+    const selected = button.getAttribute("aria-controls")?.endsWith(`-${tabId}`);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  panels.forEach((panel, id) => { panel.hidden = id !== tabId; });
+}
+
+function handleChapterWorkspaceTabKeydown(event, tabs, tabList, panels) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const buttons = [...tabList.querySelectorAll('[role="tab"]')];
+  const current = buttons.indexOf(event.currentTarget);
+  const next = event.key === "Home" ? 0
+    : event.key === "End" ? buttons.length - 1
+      : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+  selectChapterWorkspaceTab(tabs[next].id, tabList, panels);
+  buttons[next].focus();
+}
+
+function renderWorkspaceResourceHeader(chapter, label, available) {
+  const header = document.createElement("header");
+  header.className = "chapter-workspace__resource-header";
+  const copy = document.createElement("div");
+  const status = available
+    ? chapter.resourceStatus === "outdated" ? "Update available" : "Ready"
+    : chapter.resourceStatus === "failed" ? "Failed" : chapter.resourceStatus === "generating" ? "Generating" : "Not generated";
+  copy.append(createText("h3", label), createText("span", status));
+  const action = document.createElement("button");
+  action.type = "button";
+  action.textContent = available ? "Regenerate" : chapter.resourceStatus === "failed" ? "Retry" : "Generate";
+  action.disabled = chapter.resourceStatus === "generating";
+  action.addEventListener("click", () => void requestChapterResourceGeneration(chapter, available ? "regenerate" : "retry"));
+  header.append(copy, action);
+  if (chapter.resourceError) header.append(createText("p", chapter.resourceError, "chapter-workspace__error"));
+  return header;
+}
+
+function renderWorkspaceEmptyState(chapter, message) {
+  const state = document.createElement("div");
+  state.className = "chapter-workspace__empty";
+  state.append(createText("p", message));
+  if (chapter.resourceStatus === "failed" && chapter.resourceError) {
+    state.append(createText("p", chapter.resourceError, "chapter-workspace__error"));
+  }
+  return state;
+}
+
+function renderArtifactSummaryResources(chapter, artifact) {
+  if (!artifact) return renderWorkspaceEmptyState(chapter, "The Summary and concept resources have not been generated yet.");
+  const wrapper = document.createElement("div");
+  wrapper.className = "chapter-summary-resources";
+  const addList = (title, values, mapValue = (value) => value) => {
+    if (!Array.isArray(values) || !values.length) return;
+    const section = document.createElement("section");
+    section.append(createText("h4", title));
+    const list = document.createElement("ul");
+    values.forEach((value) => list.append(createText("li", mapValue(value))));
+    section.append(list);
+    wrapper.append(section);
+  };
+  addList("Summary", artifact.summary);
+  addList("Key concepts", artifact.keyConcepts, (concept) => `${concept.label}${concept.detail ? ` \u2014 ${concept.detail}` : ""}`);
+  addList("Definitions", artifact.definitions, (definition) => `${definition.term}: ${definition.definition}`);
+  addList("Formulas", artifact.formulas);
+  addList("Examples", artifact.examples);
+  if (!wrapper.childElementCount) wrapper.append(renderWorkspaceEmptyState(chapter, "No summary content was returned for this chapter."));
+  return wrapper;
+}
+
+function renderArtifactPractice(chapter, artifact) {
+  const questions = Array.isArray(artifact?.reviewQuestions) ? artifact.reviewQuestions : [];
+  if (!questions.length) return renderWorkspaceEmptyState(chapter, "Review questions have not been generated yet.");
+  const list = document.createElement("ol");
+  list.className = "chapter-practice-list";
+  questions.forEach((question) => {
+    const item = document.createElement("li");
+    item.append(createText("strong", question.prompt));
+    if (question.choices?.length) {
+      const choices = document.createElement("ul");
+      question.choices.forEach((choice) => choices.append(createText("li", choice)));
+      item.append(choices);
+    }
+    const answer = document.createElement("details");
+    answer.append(
+      createText("summary", "Show answer"),
+      createText("p", question.answer || question.explanation || "Use the chapter evidence to check your response.")
+    );
+    item.append(answer);
+    list.append(item);
+  });
+  return list;
+}
+
+async function requestChapterResourceGeneration(chapter, action) {
+  const sidePanelOpen = globalThis.chrome?.sidePanel?.open ? openSidePanelFromGesture() : null;
+  await setStorage(STORAGE.pendingChapterAction, {
+    id: globalThis.crypto?.randomUUID?.() || `chapter-action-${Date.now()}`,
+    chapterId: chapter.id,
+    action,
+    requestedAt: Date.now()
+  });
+  if (sidePanelOpen) {
+    try {
+      await sidePanelOpen;
+      setArtifactStatus(`${action === "regenerate" ? "Regeneration" : "Retry"} queued for ${chapter.importedChapterTitle || chapter.title}.`, false);
+    } catch (error) {
+      setArtifactStatus(error?.message || "Open Exam-Cram to generate this chapter's resources.", true);
+    }
+  } else {
+    setArtifactStatus("Resource generation is queued. Open Exam-Cram to continue.", false);
+  }
 }
 
 function revealSelectedVisualNoteMessage() {
@@ -631,6 +1154,13 @@ function handleStorageChanged(changes, area) {
     focusState = changes[STORAGE.focus].newValue || {};
     metricsChanged = true;
   }
+  if (changes[STORAGE.chapterFocus]) {
+    chapterFocusState = globalThis.ExamCramFocus.normalizeChapterFocusState(
+      changes[STORAGE.chapterFocus].newValue,
+      Date.now()
+    );
+    renderStudyRail();
+  }
   if (changes[STORAGE.sessions]) {
     savedArtifacts = normalizeSavedArtifacts(changes[STORAGE.sessions].newValue);
     shouldRender = true;
@@ -641,6 +1171,11 @@ function handleStorageChanged(changes, area) {
 
 function handleBeforeUnload() {
   window.removeEventListener("keydown", handlePageKeyDown);
+  document.removeEventListener("visibilitychange", handleChapterFocusVisibilityChange);
+  ["pointerdown", "keydown", "wheel", "touchstart"].forEach((eventName) => {
+    document.removeEventListener(eventName, handleChapterFocusActivity);
+  });
+  if (chapterFocusRenderTimer) clearInterval(chapterFocusRenderTimer);
   globalThis.chrome?.storage?.onChanged?.removeListener?.(handleStorageChanged);
   forestController.destroy();
 }
@@ -734,24 +1269,75 @@ function renderArtifactCard(session) {
   return card;
 }
 
+function getSourceContentForDisplay(source) {
+  const rawText = String(source?.text || source?.excerpt || source?.rawText || "")
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .slice(0, 14000);
+  if (!rawText || source?.documentType !== "pdf") return rawText;
+  return rawText.replace(/\s+(?=Page\s+\d+\b)/g, "\n\n");
+}
+
+function getSourceContentPreview(content, maxLength = 280) {
+  const compact = String(content || "").replace(/\s+/g, " ").trim();
+  if (compact.length <= maxLength) return compact;
+  const clipped = compact.slice(0, maxLength + 1);
+  const lastSpace = clipped.lastIndexOf(" ");
+  return `${clipped.slice(0, lastSpace > maxLength * 0.65 ? lastSpace : maxLength).trimEnd()}…`;
+}
+
 function renderSourceCard(source) {
   const card = document.createElement("div");
   card.className = "source-leaf";
   const copy = document.createElement("div");
+  copy.className = "source-leaf__copy";
   const title = source.title || source.sourceTitle || getSourceDomain(source.url) || "Saved source";
   const sourceUrl = source.url || source.sourceUrl || "";
+  const isPdf = source.documentType === "pdf";
+  const pageCount = isPdf ? Math.max(0, Math.round(Number(source.pageCount) || 0)) : 0;
+  const pageStart = isPdf ? Math.max(0, Math.round(Number(source.pageStart) || 0)) : 0;
+  const pageEnd = isPdf ? Math.max(pageStart, Math.round(Number(source.pageEnd) || pageStart)) : 0;
+  const sourceContent = getSourceContentForDisplay(source);
+  const metadata = [
+    formatSourceType(source.type || source.sourceType, source.documentType),
+    pageStart ? `pages ${pageStart}${pageEnd > pageStart ? `\u2013${pageEnd}` : ""} of ${pageCount || pageEnd}` : pageCount ? `${pageCount} ${pageCount === 1 ? "page" : "pages"}` : "",
+    source.fileName || "",
+    `saved ${formatDate(source.capturedAt || source.createdAt || source.generatedAt)}`
+  ].filter(Boolean).join(" · ");
   copy.append(
     createText("strong", title),
-    createText("span", `${formatSourceType(source.type || source.sourceType, source.documentType)} · saved ${formatDate(source.capturedAt || source.createdAt || source.generatedAt)}`)
+    createText("span", metadata, "source-leaf__meta")
   );
-  const open = document.createElement("button");
-  open.type = "button";
-  open.textContent = "Open";
-  open.disabled = !sourceUrl;
-  if (sourceUrl && source.title) open.setAttribute("aria-label", `Open ${source.title}`);
-  else open.setAttribute("aria-label", sourceUrl ? `Open ${title}` : `No saved link for ${title}`);
-  open.addEventListener("click", () => openSource(sourceUrl));
-  card.append(copy, open);
+  if (sourceContent) {
+    copy.append(createText("p", getSourceContentPreview(sourceContent), "source-leaf__preview"));
+  }
+
+  let sourceAction;
+  if (sourceUrl) {
+    sourceAction = document.createElement("button");
+    sourceAction.type = "button";
+    sourceAction.textContent = "Open";
+    sourceAction.setAttribute("aria-label", source.title ? `Open ${source.title}` : `Open ${title}`);
+    sourceAction.addEventListener("click", () => openSource(sourceUrl));
+  } else {
+    sourceAction = createText("span", isPdf ? "Local PDF" : "Local source", "source-leaf__local-badge");
+  }
+  card.append(copy, sourceAction);
+
+  if (sourceContent) {
+    const content = document.createElement("details");
+    content.className = "source-leaf__content";
+    const summary = createText(
+      "summary",
+      isPdf ? "Read extracted PDF content" : "Read saved source content",
+      "source-leaf__content-toggle"
+    );
+    const body = createText("div", sourceContent, "source-leaf__content-body");
+    body.setAttribute("role", "region");
+    body.setAttribute("aria-label", `${title} ${isPdf ? "extracted PDF" : "saved source"} content`);
+    content.append(summary, body);
+    card.append(content);
+  }
   return card;
 }
 

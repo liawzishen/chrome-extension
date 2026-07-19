@@ -38,7 +38,8 @@ test("Smart Import sends only excerpt data to the source classifier", () => {
 
 test("Smart Import passes all assignments through the capacity planner", () => {
   assert.match(script, /ExamCramJourney\.planBulkFiling\(plannedAssignments, journey\)/);
-  assert.match(script, /state\.pendingImport = \{[\s\S]*?files,[\s\S]*?assignments: plannedAssignments,[\s\S]*?plan/);
+  assert.match(script, /state\.pendingImport = \{[\s\S]*?files,[\s\S]*?plan: globalThis\.ExamCramJourney\.planBulkFiling\(assignments, journey\)/);
+  assert.match(script, /pending\.assignments = plannedAssignments;[\s\S]*?pending\.plan = plan;/);
 });
 
 test("backend endpoint rewriting supports source classification", () => {
@@ -53,8 +54,9 @@ test("Smart Import re-plans capacity whenever a chapter dropdown changes", () =>
 });
 
 test("Smart Import cannot confirm while chapter-cap rows remain blocked", () => {
-  assert.match(script, /confirm\.disabled = retryingCount > 0 \|\| pending\.plan\.blockedCount > 0 \|\| importableCount === 0/);
+  assert.match(script, /confirm\.disabled = retryingCount > 0 \|\| processingCount > 0 \|\| pending\.plan\.blockedCount > 0 \|\| importableCount === 0/);
   assert.match(script, /async function handleConfirmImport\(\)[\s\S]*?if \(pending\.plan\.blockedCount > 0\) \{[\s\S]*?return;/);
+  assert.match(script, /pending\.files\.some\(\(file\) => \["uploading", "reading", "detecting", "retrying"\]\.includes\(file\.status\)\)/);
   assert.match(script, /if \(!pending\.plan\.rows\.some\(\(row\) => !row\.skipped && !row\.blocked\)\)/);
   assert.match(script, /section\?\.querySelectorAll\("button, select"\)\.forEach\(\(control\) => \{\s*control\.disabled = true;/);
   assert.match(script, /footerSummary\.textContent = "Importing files…"/);
@@ -63,7 +65,9 @@ test("Smart Import cannot confirm while chapter-cap rows remain blocked", () => 
 
 test("Smart Import confirms sources through the existing Journey add-source operation", () => {
   assert.match(script, /function saveImportedSourceToChapter\(chapterTitle, source, journey\)[\s\S]*?mutateJourney\("JOURNEY_ADD_SOURCE"/);
-  assert.match(script, /const added = await saveImportedSourceToChapter\([\s\S]*?row\.finalChapterTitle,[\s\S]*?file\.source/);
+  assert.match(script, /const source = buildImportedChapterSource\(file, detectedChapter\)/);
+  assert.match(script, /const added = await saveImportedSourceToChapter\(chapterTitle, source, pending\.journey\)/);
+  assert.match(script, /findImportChapterByKey\(pending\.journey, source\.importKey\)/);
   assert.match(script, /startImportNoteQueue\(\[\.\.\.affectedChapterIds\]\)/);
 });
 
@@ -179,19 +183,61 @@ test("Smart Import generates affected chapter notes sequentially", () => {
   assert.match(script, /async function runImportNoteQueueRow\(queue, row\)[\s\S]*?await handleBuildChapterLesson\(row\.chapterId, \{[\s\S]*?rethrow: true/);
   assert.match(script, /handleBuildChapterLesson\(row\.chapterId, \{[\s\S]*?quietStatus: true/);
   assert.match(script, /if \(!options\.quietStatus\) showStatus\(error\.message, true\)/);
-  assert.match(script, /if \(outcome === "backend-unavailable"\) \{[\s\S]*?showStatus\("All imported sources are saved in their chapters\. Generate each chapter's visual note later with Build chapter visual note\."\)/);
+  assert.doesNotMatch(script, /requireAiBackend|IMPORT_NOTE_BACKEND_UNAVAILABLE/);
 });
 
 test("Smart Import note failures expose a single-chapter Retry control", () => {
-  assert.match(script, /if \(row\.status === "failed"\) \{[\s\S]*?retry\.textContent = "Retry"[\s\S]*?retryImportNoteChapter\(queue\.id, row\.chapterId\)/);
+  assert.match(script, /if \(\["failed", "done"\]\.includes\(row\.status\)\) \{[\s\S]*?retry\.textContent = row\.status === "done" \? "Regenerate" : "Retry"[\s\S]*?retryImportNoteChapter\(queue\.id, row\.chapterId\)/);
   assert.match(script, /async function retryImportNoteChapter\(queueId, chapterId\)[\s\S]*?await runImportNoteQueueRow\(queue, row\)/);
+  assert.match(script, /\["failed", "done"\]\.includes\(item\.status\)/);
 });
 
-test("Smart Import stops queued AI work safely when dismissed or unavailable", () => {
-  assert.match(script, /if \(queue\.dismissed\) break/);
-  assert.match(script, /IMPORT_NOTE_BACKEND_UNAVAILABLE[\s\S]*?Generate later with Build lesson/);
+test("Smart Import saves a local fallback note instead of leaving a source-only tree", async () => {
+  const queueStart = script.indexOf("async function startImportNoteQueue(chapterIds)");
+  const queueEnd = script.indexOf("async function runImportNoteQueueRow(queue, row)", queueStart);
+  const rowStart = queueEnd;
+  const rowEnd = script.indexOf("function renderImportNoteQueue(queue)", rowStart);
+  assert.ok(queueStart >= 0 && queueEnd > queueStart && rowEnd > rowStart);
+
+  const queueSource = script.slice(queueStart, queueEnd);
+  assert.match(queueSource, /if \(queue\.dismissed\) break/);
+  assert.doesNotMatch(queueSource, /getConfiguredApiEndpoint|Generate .* later/);
+
+  const buildCalls = [];
+  const renders = [];
+  const runRow = vm.runInNewContext(`(${script.slice(rowStart, rowEnd).trim()})`, {
+    handleBuildChapterLesson: async (chapterId, options) => {
+      buildCalls.push({ chapterId, options });
+      return { id: "local-note", usedLocalFallback: true };
+    },
+    updateImportChapterResourceStatus: async () => {},
+    renderImportNoteQueue: (queue) => renders.push(queue)
+  });
+  const queue = { id: "queue-local" };
+  const row = { chapterId: "chapter-pdf", status: "pending", message: "Waiting" };
+  const outcome = await runRow(queue, row);
+
+  assert.equal(outcome, "local-fallback");
+  assert.equal(row.status, "done");
+  assert.equal(row.message, "Local backup learning resources saved");
+  assert.equal(buildCalls.length, 1);
+  assert.equal(buildCalls[0].chapterId, "chapter-pdf");
+  assert.equal(buildCalls[0].options.rethrow, true);
+  assert.equal(buildCalls[0].options.quietStatus, true);
+  assert.equal(Object.hasOwn(buildCalls[0].options, "requireAiBackend"), false);
+  assert.ok(renders.length >= 2);
   assert.match(script, /dismissImportNoteQueue\(queue\.id\)/);
   assert.match(styles, /\.smart-import-notes\s*\{[\s\S]*?background:\s*var\(--ui-surface-elevated\);/);
+});
+
+test("Smart Import splits PDFs into stable chapter records and retries only missing ranges", () => {
+  assert.match(script, /detectedChapters: normalizeImportedChapterCandidates\(source\)/);
+  assert.match(script, /for \(const detectedChapter of detectedChapters\)/);
+  assert.match(script, /pageStart,[\s\S]*?pageEnd,[\s\S]*?fileId,[\s\S]*?fileFingerprint,[\s\S]*?importKey/);
+  assert.match(script, /importKeys\.every\(\(importKey\) => Boolean\(findImportChapterByKey\(journey, importKey\)\)\)/);
+  assert.match(script, /const fileId = `file-\$\{makeContentFingerprint\(fileFingerprint \|\| file\?\.fileName \|\| "document"\)\}`/);
+  assert.match(script, /processedChapterCount \+= 1[\s\S]*?importProgress\.value = processedChapterCount/);
+  assert.match(script, /buildAutomaticStudyResources[\s\S]*?keyConcepts,[\s\S]*?definitions,[\s\S]*?formulas,[\s\S]*?examples,[\s\S]*?reviewQuestions/);
 });
 
 test("compact Journey artifacts use separate readable title and provenance fields", () => {

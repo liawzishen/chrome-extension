@@ -2,7 +2,7 @@
   "use strict";
 
   const SCHEMA_VERSION = 3;
-  const MAX_CHAPTERS = 24;
+  const MAX_CHAPTERS = 120;
   const MAX_SOURCES_PER_CHAPTER = 8;
   const MAX_SESSIONS_PER_CHAPTER = 30;
   const MAX_DISPLAYED_ARTIFACTS_PER_CHAPTER = 8;
@@ -157,6 +157,10 @@
     const safeUrl = canonicalUrl(source?.url || source?.canonicalUrl, type);
     const contentFingerprint = cleanText(source?.fingerprint, 100)
       || fingerprint(segments.length ? JSON.stringify(segments) : text);
+    const pageCount = documentType === "pdf" ? Math.max(0, Math.min(10000, Math.round(Number(source?.pageCount) || 0))) : 0;
+    const pageStart = documentType === "pdf" ? normalizePositiveInteger(source?.pageStart, pageCount || 10000) : 0;
+    const suppliedPageEnd = documentType === "pdf" ? normalizePositiveInteger(source?.pageEnd, pageCount || 10000) : 0;
+    const pageEnd = pageStart ? Math.max(pageStart, suppliedPageEnd || pageStart) : suppliedPageEnd;
     return {
       id: cleanText(source?.id, 100) || makeId("source"),
       type,
@@ -166,7 +170,17 @@
       fingerprint: contentFingerprint,
       text,
       documentType,
-      pageCount: documentType === "pdf" ? Math.max(0, Math.min(10000, Math.round(Number(source?.pageCount) || 0))) : 0,
+      pageCount,
+      pageStart,
+      pageEnd,
+      fileId: cleanText(source?.fileId, 120),
+      fileName: cleanText(source?.fileName, 180),
+      fileSize: Math.max(0, Math.min(100 * 1024 * 1024, Math.round(Number(source?.fileSize) || 0))),
+      fileFingerprint: cleanText(source?.fileFingerprint, 120),
+      importKey: cleanText(source?.importKey, 180),
+      importedChapterTitle: cleanText(source?.importedChapterTitle || source?.chapterTitle, 140),
+      importedChapterOrder: Math.max(0, Math.min(MAX_CHAPTERS, Math.round(Number(source?.importedChapterOrder || source?.chapterOrder) || 0))),
+      detectionMethod: cleanText(source?.detectionMethod, 40),
       language: cleanText(source?.language, 40),
       durationMs: Math.max(0, Math.round(Number(source?.durationMs) || 0)),
       mediaId: cleanText(source?.mediaId, 220),
@@ -523,14 +537,28 @@
     const chapters = (Array.isArray(base.chapters) ? base.chapters : [])
       .map((chapter) => {
         const chapterCreatedAt = normalizeIsoDate(chapter?.createdAt, createdAt);
+        const sources = (Array.isArray(chapter?.sources) ? chapter.sources : [])
+          .map((source) => normalizeSource(source, chapterCreatedAt))
+          .slice(0, MAX_SOURCES_PER_CHAPTER);
+        const importedSource = sources.find((source) => source.importKey || source.fileId) || null;
         return {
           id: cleanText(chapter?.id, 100) || makeId("chapter"),
           title: cleanText(chapter?.title, 140) || "Untitled chapter",
+          importKey: cleanText(chapter?.importKey || importedSource?.importKey, 180),
+          importedFileId: cleanText(chapter?.importedFileId || importedSource?.fileId, 120),
+          importedFileName: cleanText(chapter?.importedFileName || importedSource?.fileName, 180),
+          importedFileSize: Math.max(0, Math.min(100 * 1024 * 1024, Math.round(Number(chapter?.importedFileSize || importedSource?.fileSize) || 0))),
+          importedChapterTitle: cleanText(chapter?.importedChapterTitle || importedSource?.importedChapterTitle, 140),
+          importedChapterOrder: Math.max(0, Math.min(MAX_CHAPTERS, Math.round(Number(chapter?.importedChapterOrder || importedSource?.importedChapterOrder) || 0))),
+          pageStart: normalizePositiveInteger(chapter?.pageStart || importedSource?.pageStart, 10000),
+          pageEnd: normalizePositiveInteger(chapter?.pageEnd || importedSource?.pageEnd, 10000),
+          processingStatus: normalizeChapterProcessingStatus(chapter?.processingStatus, importedSource ? "completed" : ""),
+          resourceStatus: normalizeChapterResourceStatus(chapter?.resourceStatus, importedSource ? "waiting" : ""),
+          resourceError: cleanText(chapter?.resourceError, 240),
+          resourceUpdatedAt: normalizeOptionalIsoDate(chapter?.resourceUpdatedAt),
           createdAt: chapterCreatedAt,
           updatedAt: normalizeIsoDate(chapter?.updatedAt, chapterCreatedAt),
-          sources: (Array.isArray(chapter?.sources) ? chapter.sources : [])
-            .map((source) => normalizeSource(source, chapterCreatedAt))
-            .slice(0, MAX_SOURCES_PER_CHAPTER),
+          sources,
           sessions: (Array.isArray(chapter?.sessions) ? chapter.sessions : [])
             .map((session) => normalizeSessionRecord(session, {
               sourceSchemaVersion,
@@ -559,6 +587,20 @@
       learningMemory: normalizeLearningMemory(base.learningMemory),
       appliedOperations: normalizeAppliedOperations(base.appliedOperations)
     };
+  }
+
+  function normalizeChapterProcessingStatus(value, fallback = "") {
+    const status = cleanText(value || fallback, 40).toLowerCase();
+    return ["waiting", "uploading", "detecting", "completed", "partially_completed", "failed", "empty"].includes(status)
+      ? status
+      : "";
+  }
+
+  function normalizeChapterResourceStatus(value, fallback = "") {
+    const status = cleanText(value || fallback, 40).toLowerCase();
+    return ["waiting", "generating", "completed", "partially_completed", "failed", "empty", "outdated"].includes(status)
+      ? status
+      : "";
   }
 
   function normalizeChapterTitleProposal(title, existingTitles = []) {
@@ -1141,6 +1183,7 @@
       }
       const refreshed = { ...normalized, id: duplicate.id };
       chapter.sources[duplicateIndex] = refreshed;
+      syncImportedChapterMetadata(chapter, refreshed, now);
       chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
       setLastStudySource(journey, refreshed, chapter, now);
       addEvent(journey, { type: "recaptured", chapterId: chapter.id, sourceId: refreshed.id }, now);
@@ -1151,6 +1194,7 @@
       throw new Error(`A chapter can contain up to ${MAX_SOURCES_PER_CHAPTER} saved sources.`);
     }
     chapter.sources.push(normalized);
+    syncImportedChapterMetadata(chapter, normalized, now);
     chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
     setLastStudySource(journey, normalized, chapter, now);
     addEvent(journey, { type: "captured", chapterId: chapter.id, sourceId: normalized.id }, now);
@@ -1158,8 +1202,25 @@
     return { journey, chapterId: chapter.id, sourceId: normalized.id, duplicate: false, updated: false };
   }
 
+  function syncImportedChapterMetadata(chapter, source, now = Date.now()) {
+    if (!chapter || !source || (!source.importKey && !source.fileId)) return chapter;
+    chapter.importKey = source.importKey || chapter.importKey || "";
+    chapter.importedFileId = source.fileId || chapter.importedFileId || "";
+    chapter.importedFileName = source.fileName || chapter.importedFileName || "";
+    chapter.importedFileSize = source.fileSize || chapter.importedFileSize || 0;
+    chapter.importedChapterTitle = source.importedChapterTitle || chapter.importedChapterTitle || chapter.title;
+    chapter.importedChapterOrder = source.importedChapterOrder || chapter.importedChapterOrder || 1;
+    chapter.pageStart = source.pageStart || chapter.pageStart || 0;
+    chapter.pageEnd = source.pageEnd || chapter.pageEnd || chapter.pageStart || 0;
+    chapter.processingStatus = normalizeChapterProcessingStatus(chapter.processingStatus, "completed");
+    chapter.resourceStatus = normalizeChapterResourceStatus(chapter.resourceStatus, "waiting");
+    chapter.resourceUpdatedAt ||= normalizeIsoDate(now);
+    return chapter;
+  }
+
   function sourceIdentityMatches(existing, incoming) {
     if (!existing || !incoming || existing.type !== incoming.type) return false;
+    if (incoming.importKey && existing.importKey) return incoming.importKey === existing.importKey;
     if (incoming.type === "webpage") {
       if (incoming.url) return existing.url === incoming.url && existing.fingerprint === incoming.fingerprint;
       return !existing.url && existing.fingerprint === incoming.fingerprint;
@@ -1247,6 +1308,12 @@
       .sort((first, second) => sessionActivityTime(second) - sessionActivityTime(first))
       .slice(0, MAX_SESSIONS_PER_CHAPTER);
     chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
+    if (chapter.importKey && record.hasVisualNote) {
+      chapter.processingStatus = "completed";
+      chapter.resourceStatus = "completed";
+      chapter.resourceError = "";
+      chapter.resourceUpdatedAt = normalizeIsoDate(now);
+    }
     const sourceBinding = session?.sourceBinding && typeof session.sourceBinding === "object"
       ? session.sourceBinding
       : {};
@@ -1279,6 +1346,33 @@
     }, now);
     touchJourney(journey, now);
     return { journey, chapterId: chapter.id, sessionId: record.id };
+  }
+
+  function updateChapterProcessingStatus(value, chapterId, updates = {}, now = Date.now()) {
+    const journey = normalizeJourney(value);
+    const chapter = findChapter(journey, chapterId);
+    if (!chapter) return { journey, updated: false };
+    const nextProcessingStatus = updates.processingStatus === undefined
+      ? chapter.processingStatus
+      : normalizeChapterProcessingStatus(updates.processingStatus);
+    const nextResourceStatus = updates.resourceStatus === undefined
+      ? chapter.resourceStatus
+      : normalizeChapterResourceStatus(updates.resourceStatus);
+    const nextError = updates.resourceError === undefined
+      ? chapter.resourceError
+      : cleanText(updates.resourceError, 240);
+    if (nextProcessingStatus === chapter.processingStatus
+      && nextResourceStatus === chapter.resourceStatus
+      && nextError === chapter.resourceError) {
+      return { journey, updated: false };
+    }
+    chapter.processingStatus = nextProcessingStatus;
+    chapter.resourceStatus = nextResourceStatus;
+    chapter.resourceError = nextError;
+    chapter.resourceUpdatedAt = normalizeIsoDate(now);
+    chapter.updatedAt = normalizeIsoDate(now, chapter.updatedAt);
+    touchJourney(journey, now);
+    return { journey, updated: true };
   }
 
   function recordQuestionAttempts(value, attempts, quizResult = {}) {
@@ -2621,6 +2715,7 @@
     removeSession,
     renameSession,
     recordSession,
+    updateChapterProcessingStatus,
     recordQuestionAttempts,
     rankWeakConcepts,
     effectiveStrength,
