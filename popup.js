@@ -406,6 +406,15 @@ async function consumePendingChapterAction(providedAction = null) {
     showStatus("That chapter is no longer available in the Learning Tree.", true);
     return false;
   }
+  if (action.action === "save-external-source") {
+    switchView("pageView");
+    selectChapterAcrossControls(chapter.id);
+    state.importedDocument = null;
+    await detectActiveSource();
+    const concept = String(action.concept || "").trim();
+    showStatus(`External suggestion${concept ? ` for ${concept}` : ""} opened. It is not evidence-checked yet. Review the page, allow site access if asked, then choose Save source to chapter. Once saved, it enters the grounded loop.`);
+    return true;
+  }
   switchView("journeyView");
   selectChapterAcrossControls(chapter.id);
   showStatus(action.action === "regenerate"
@@ -4103,16 +4112,84 @@ async function handleGenerateRecoveryQuiz() {
   }
 }
 
+function normalizeRecoveryConceptText(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function getRecoveryNodeEvidence(node) {
+  return normalizeRecoveryConceptText([
+    node?.sourceAnchor,
+    node?.sourceRef?.quote,
+    node?.detail,
+    node?.why,
+    node?.example
+  ].filter(Boolean).join(" "));
+}
+
+function recoveryEvidenceMentionsConcept(evidence, node) {
+  const label = normalizeRecoveryConceptText(node?.label || node?.id);
+  return label.length >= 3 && ` ${evidence} `.includes(` ${label} `);
+}
+
+function getRecoverySourceCooccurrenceScore(target, candidate) {
+  const targetEvidence = getRecoveryNodeEvidence(target);
+  const candidateEvidence = getRecoveryNodeEvidence(candidate);
+  let score = 0;
+  if (recoveryEvidenceMentionsConcept(targetEvidence, candidate)) score += 4;
+  if (recoveryEvidenceMentionsConcept(candidateEvidence, target)) score += 4;
+
+  const targetSourceId = String(target?.sourceId || target?.sourceRef?.sourceId || "").trim();
+  const candidateSourceId = String(candidate?.sourceId || candidate?.sourceRef?.sourceId || "").trim();
+  const sameSource = targetSourceId && targetSourceId === candidateSourceId;
+  const targetSegmentId = String(target?.sourceSegmentId || target?.sourceRef?.segmentId || "").trim();
+  const candidateSegmentId = String(candidate?.sourceSegmentId || candidate?.sourceRef?.segmentId || "").trim();
+  if (targetSegmentId && targetSegmentId === candidateSegmentId && (!targetSourceId || sameSource)) score += 6;
+
+  const targetPage = Math.max(0, Math.round(Number(target?.sourcePage || target?.sourceRef?.sourcePage) || 0));
+  const candidatePage = Math.max(0, Math.round(Number(candidate?.sourcePage || candidate?.sourceRef?.sourcePage) || 0));
+  if (sameSource && targetPage > 0 && targetPage === candidatePage) score += 5;
+
+  const targetAnchor = normalizeRecoveryConceptText(target?.sourceAnchor || target?.sourceRef?.quote);
+  const candidateAnchor = normalizeRecoveryConceptText(candidate?.sourceAnchor || candidate?.sourceRef?.quote);
+  if (targetAnchor.length >= 20 && targetAnchor === candidateAnchor) score += 5;
+  return score;
+}
+
 function getClientRecoveryComposition(visualModel, targetConceptId) {
-  const nodeIds = new Set((visualModel?.nodes || []).map((node) => node.id));
-  const prerequisiteConceptIds = [...new Set((visualModel?.edges || [])
+  const nodes = Array.isArray(visualModel?.nodes) ? visualModel.nodes : [];
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const target = nodes.find((node) => node.id === targetConceptId);
+  const directedPrerequisiteConceptIds = [...new Set((visualModel?.edges || [])
     .filter((edge) => normalizeClientVisualEdgeType(edge.type) === "prerequisite_of" && edge.to === targetConceptId && nodeIds.has(edge.from))
     .map((edge) => edge.from))];
   const relatedConceptIds = [...new Set((visualModel?.edges || [])
     .filter((edge) => normalizeClientVisualEdgeType(edge.type) === "related" && (edge.from === targetConceptId || edge.to === targetConceptId))
     .map((edge) => edge.from === targetConceptId ? edge.to : edge.from)
-    .filter((id) => id !== targetConceptId && nodeIds.has(id) && !prerequisiteConceptIds.includes(id)))];
-  const prerequisiteQuestionCount = Math.min(2, prerequisiteConceptIds.length);
+    .filter((id) => id !== targetConceptId && nodeIds.has(id) && !directedPrerequisiteConceptIds.includes(id)))];
+  const excludedConceptIds = new Set([targetConceptId, ...directedPrerequisiteConceptIds, ...relatedConceptIds]);
+  const sourceInferredPrerequisiteConceptIds = target
+    ? nodes
+      .map((node, index) => ({
+        id: node.id,
+        index,
+        score: excludedConceptIds.has(node.id) ? 0 : getRecoverySourceCooccurrenceScore(target, node)
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .sort((first, second) => second.score - first.score || first.index - second.index)
+      .map((candidate) => candidate.id)
+    : [];
+  const directedPrerequisiteQuestionCount = Math.min(2, directedPrerequisiteConceptIds.length);
+  const sourceInferredPrerequisiteQuestionCount = Math.min(
+    2 - directedPrerequisiteQuestionCount,
+    sourceInferredPrerequisiteConceptIds.length
+  );
+  const prerequisiteQuestionCount = directedPrerequisiteQuestionCount + sourceInferredPrerequisiteQuestionCount;
+  const prerequisiteConceptIds = [...directedPrerequisiteConceptIds, ...sourceInferredPrerequisiteConceptIds];
   const relatedQuestionCount = Math.min(2 - prerequisiteQuestionCount, relatedConceptIds.length);
   const extraTargetQuestionCount = 2 - prerequisiteQuestionCount - relatedQuestionCount;
   const targetQuestionCount = 3 + extraTargetQuestionCount;
@@ -4122,16 +4199,21 @@ function getClientRecoveryComposition(visualModel, targetConceptId) {
     ...Array(relatedQuestionCount).fill(null).map((_, index) => relatedConceptIds[index % relatedConceptIds.length])
   ];
   const parts = [`${targetQuestionCount} target`];
-  if (prerequisiteQuestionCount) parts.push(`${prerequisiteQuestionCount} prerequisite`);
+  if (directedPrerequisiteQuestionCount) parts.push(`${directedPrerequisiteQuestionCount} directed prerequisite`);
+  if (sourceInferredPrerequisiteQuestionCount) parts.push(`${sourceInferredPrerequisiteQuestionCount} source-inferred prerequisite`);
   if (relatedQuestionCount) parts.push(`${relatedQuestionCount} related`);
   if (extraTargetQuestionCount) parts.push(`${extraTargetQuestionCount} extra target fallback`);
   return {
     targetConceptId,
     targetQuestionCount,
     prerequisiteQuestionCount,
+    directedPrerequisiteQuestionCount,
+    sourceInferredPrerequisiteQuestionCount,
     relatedQuestionCount,
     extraTargetQuestionCount,
     prerequisiteConceptIds,
+    directedPrerequisiteConceptIds,
+    sourceInferredPrerequisiteConceptIds,
     relatedConceptIds,
     primaryConceptIds,
     description: `Actual recovery composition: ${parts.join(", ")}.`
@@ -4208,10 +4290,12 @@ function assertClientRecoveryComposition(quiz, input) {
   const composition = getClientRecoveryComposition(input.visualModel, input.targetConceptId);
   const questions = quiz.questions || [];
   const target = questions.filter((question) => question.primaryConceptId === input.targetConceptId).length;
-  const prerequisites = questions.filter((question) => composition.prerequisiteConceptIds.includes(question.primaryConceptId)).length;
+  const directedPrerequisites = questions.filter((question) => composition.directedPrerequisiteConceptIds.includes(question.primaryConceptId)).length;
+  const sourceInferredPrerequisites = questions.filter((question) => composition.sourceInferredPrerequisiteConceptIds.includes(question.primaryConceptId)).length;
   const related = questions.filter((question) => composition.relatedConceptIds.includes(question.primaryConceptId)).length;
   if (target !== composition.targetQuestionCount
-    || prerequisites !== composition.prerequisiteQuestionCount
+    || directedPrerequisites !== composition.directedPrerequisiteQuestionCount
+    || sourceInferredPrerequisites !== composition.sourceInferredPrerequisiteQuestionCount
     || related !== composition.relatedQuestionCount) {
     throw new Error(`Recovery quiz does not match its disclosed composition. ${composition.description}`);
   }
@@ -4291,14 +4375,6 @@ const QUIZ_GROUNDING_STOP_WORDS = new Set([
   "option", "question", "saved", "source", "statement", "student", "the", "to", "was", "what", "will"
 ]);
 
-const QUIZ_GENERIC_ANSWER_TERMS = new Set([
-  "above", "all", "below", "both", "cannot", "change", "changes", "continue", "continues",
-  "decrease", "decreased", "decreases", "determined", "enough", "false", "faster", "first",
-  "higher", "increase", "increased", "increases", "information", "insufficient", "last", "less",
-  "lower", "more", "neither", "never", "no", "none", "process", "rate", "remains", "same", "slower",
-  "stays", "stops", "true", "unchanged", "unknown", "value", "values", "yes"
-]);
-
 function getQuizGroundingTerms(value) {
   return [...new Set(String(value || "").toLocaleLowerCase()
     .split(/[^\p{L}\p{N}]+/u)
@@ -4355,8 +4431,7 @@ function isQuizAnswerSupported(sourceText, evidenceText, answerText) {
     .split(/[^\p{L}\p{N}]+/u)
     .filter((term) => term && !QUIZ_GROUNDING_STOP_WORDS.has(term));
   if (!answerTerms.length) return false;
-  if (answerTerms.some((term) => sourceTerms.has(term))) return true;
-  return answerTerms.every((term) => QUIZ_GENERIC_ANSWER_TERMS.has(term));
+  return answerTerms.some((term) => sourceTerms.has(term));
 }
 
 function assertQuizGroundedInSource(quiz, sourceText, label = "Quiz") {
@@ -4512,6 +4587,22 @@ function assertQuizIdentityAndConceptLinks(quiz, input, label) {
   return quiz;
 }
 
+function assertQuizSemanticVerification(quiz, label = "Quiz service") {
+  const verification = quiz?.groundingVerification;
+  const questionCount = Array.isArray(quiz?.questions) ? quiz.questions.length : 0;
+  const provider = String(verification?.provider || "").toLocaleLowerCase();
+  if (
+    verification?.lexical !== "passed"
+    || verification?.semantic !== "passed"
+    || Number(verification?.checkedAnswers) !== questionCount
+    || !["openai", "gemini"].includes(provider)
+    || !String(verification?.model || "").trim()
+  ) {
+    throw new Error(`${label} did not provide semantic grounding verification for every quiz answer.`);
+  }
+  return quiz;
+}
+
 async function generateQuizWithBackend(endpoint, input, settings = {}) {
   const stopProgress = startSimulatedProgress(35, 88, "Generating source-grounded questions…");
   let response;
@@ -4526,7 +4617,10 @@ async function generateQuizWithBackend(endpoint, input, settings = {}) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || "The quiz service could not generate questions.");
-  return validateGeneratedQuiz(payload, input, "The quiz service");
+  return assertQuizSemanticVerification(
+    validateGeneratedQuiz(payload, input, "The quiz service"),
+    "The quiz service"
+  );
 }
 
 function generateLocalQuizArtifact(input) {

@@ -1,6 +1,6 @@
 # Exam-Cram Assistant
 
-Exam-Cram is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker.
+Exam-Cram is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker. Backend-generated quizzes must pass lexical evidence checks and a provider-backed semantic check of every answer against its quoted evidence before the client accepts them.
 
 The project is available under the [MIT License](LICENSE).
 
@@ -22,12 +22,12 @@ This is intentionally not another general-purpose browser chatbot. Broad assista
 
 For the fastest end-to-end evaluation, run `npm ci`, then `npm run preview`, and open `http://127.0.0.1:8788`.
 
-1. Select **Notes** and choose **Try 60-sec math demo**.
+1. From **Dashboard**, choose **Create**, then **Paste Notes**, then **Try 60-sec math demo**.
 2. Inspect one visual concept and its quoted source evidence; the source banner shows an explicit **Evidence checked** status.
 3. Select **Start 1-question check**, choose `x = 6`, and submit.
 4. Open **Journey** to see the stable **Demo - Linear Equations** chapter update.
 
-The curated route uses no API key, browser permission, extension setup, or database cleanup. See [the system architecture](ARCHITECTURE.md) for component boundaries and data contracts, and [the Devpost handoff](hackathon/DEVPOST_SUBMISSION.md) for the five-line summary, video beat sheet, and pilot metrics.
+The preview starts on **Dashboard**. Choose **Create**, then **Paste Notes**, then **Try 60-sec math demo**. The curated route uses no API key, browser permission, extension setup, or database cleanup. See [the system architecture](ARCHITECTURE.md) for component boundaries and data contracts, and [the Devpost handoff](hackathon/DEVPOST_SUBMISSION.md) for the ready-to-paste description, video beat sheet, and pilot-measurement plan.
 
 ## OpenAI Build Week Submission Evidence
 
@@ -50,6 +50,9 @@ A separate [design-test conversation](feedback/2026-07-16-design-test-review-md-
 | Extension platform | Chrome Manifest V3, Chrome 116+ |
 | Local runtime | Node.js 18+ |
 | Learning structure | One stable Journey chapter ID = one independent Learning Forest tree |
+| Grounding | Lexical source checks for all quizzes; backend quizzes additionally require provider semantic verification of every answer against its quoted evidence |
+| Review scheduling | Per-concept SM-2-lite intervals use the cumulative wrong-answer ratio; difficult concepts return sooner than mastered concepts |
+| External study | Opt-in external suggestions remain visibly separate from saved evidence until the learner explicitly saves a page to the chapter |
 | Unpacked build | `release/exam-cram-extension` |
 | Verification | Build, syntax, test, secret-scan, dependency-audit, and package commands are documented below |
 | Publication safety | The extension packager copies an explicit runtime allowlist and excludes local credentials |
@@ -79,7 +82,7 @@ The side panel applies Apple Human Interface Guidelines as cross-platform web pr
 
 | Need | Exam-Cram approach |
 |---|---|
-| Trust | Every generated question and visual concept carries a source excerpt, saved-source link, or transcript segment. |
+| Trust | Visual concepts and quiz questions retain source evidence; backend quiz answers additionally require a provider semantic verdict against their quoted evidence. |
 | Active learning | Quiz generation validates option quality and records submitted performance separately from passive activity. |
 | Persistence | Notes, quizzes, sources, timestamps, and demonstrated progress survive outside a disposable chat. |
 | Cross-site study | A chapter combines explicitly selected sources without crawling unrelated tabs or links. |
@@ -145,7 +148,7 @@ No payment or quota system is implemented in this repository. The proposed model
 
 - captionless-video processing, because it has direct media-compute cost
 - larger source collections and higher AI-generation limits
-- advanced practice such as typed recall, answer evaluation, and adaptive spaced review
+- advanced practice such as typed recall and answer evaluation beyond the existing adaptive review interval
 - scheduled/rolling Focus rules and optional strict mode
 - team, classroom, and institution administration after privacy and teacher controls mature
 
@@ -219,7 +222,7 @@ Run the local interface preview in another terminal:
 npm run preview
 ```
 
-Open `http://127.0.0.1:8788`, select **Notes**, and choose **Try 60-sec math demo**. It loads a curated source, an evidence-linked visual note, and a one-question check without backend configuration. Open `http://127.0.0.1:8788/journey.html` to inspect the full Learning Forest route. Browser tab reading, blocking, timestamp jumping, the persistent side panel, and tab-audio capture require the loaded extension.
+Open `http://127.0.0.1:8788`, choose **Create** from Dashboard, select **Paste Notes**, and choose **Try 60-sec math demo**. It loads a curated source, an evidence-linked visual note, and a one-question check without backend configuration. Open `http://127.0.0.1:8788/journey.html` to inspect the full Learning Forest route. Browser tab reading, blocking, timestamp jumping, the persistent side panel, and tab-audio capture require the loaded extension.
 
 ## Side Panel And Page Access
 
@@ -283,6 +286,10 @@ Selecting a document prepares it as the current source; choose **Create note fro
 - all included sources receive an even bounded excerpt instead of silently dropping later sources
 - the server requires every generated citation to name a supplied source ID and overlap that source's evidence
 - finalization rechecks the chapter source revision atomically
+
+### Explore further without blurring evidence
+
+When a chapter has weak concepts, Journey offers a collapsed **Explore further (external)** lane for each one. These are opt-in links to external study searches and are labelled as external, not evidence-checked, and styled separately from source-backed artifacts. Choosing **Open and prepare to save** opens the page and preselects the same chapter in Exam-Cram; the learner must review it and explicitly choose **Save source to chapter**. Only then does the page become a bounded source snapshot and enter the normal grounding loop.
 
 ### Study a video
 
@@ -394,7 +401,7 @@ No application can be guaranteed impossible to compromise. Exam-Cram reduces exp
 - The bundled backend listens only on `127.0.0.1`. Tokenless API access requires both a loopback socket and an exact configured extension Origin. Other allowed clients must present the generated or configured bearer token, which is compared in constant time.
 - API posts must use JSON. Declared and streamed bodies are bounded, provider requests have timeouts, concurrent work is capped, and a per-origin/address minute bucket returns `429` when the configured limit is exceeded.
 - Backend and preview responses set no-store/MIME/framing/referrer/permissions protections and restrictive CSP headers. Server errors redact configured keys, tokens, authorization values, and credential query parameters before logging or returning a generic failure.
-- Page text, notes, transcripts, and collection blocks are handled as untrusted source data rather than executable instructions. Generated structures are schema checked and evidence checked before storage.
+- Page text, notes, transcripts, and collection blocks are handled as untrusted source data rather than executable instructions. Generated structures are schema checked and evidence checked before storage. Backend quiz answers additionally require a separate provider-backed semantic verdict against their quoted evidence; missing, malformed, or unsupported verdicts fail closed. The no-key local and curated paths remain deterministic/extractive and lexically checked.
 
 ### Secrets and local configuration
 
@@ -445,7 +452,7 @@ Protected routes (exact allowlisted loopback extension Origin, or a valid bearer
 - `POST /api/transcript-chunk`
 - `POST /api/transcript-preflight`
 
-`POST /api/notes` accepts `webpage`, `notes`, `video`, or `collection` source types, returns a visual note plus its five-column grounded cheat sheet, and never returns quiz questions. `POST /api/quiz` requires a saved note ID plus the same source fingerprint and returns questions only. `POST /api/study-session` remains the legacy combined adapter. Video requests carry stable transcript segment IDs; collection requests carry bounded source blocks and saved-source IDs.
+`POST /api/notes` accepts `webpage`, `notes`, `video`, or `collection` source types, returns a visual note plus its five-column grounded cheat sheet, and never returns quiz questions. `POST /api/quiz` requires a saved note ID plus the same source fingerprint and returns questions only after lexical checks and a provider-backed semantic verification pass covers every answer against its quoted evidence. `POST /api/study-session` remains the legacy combined adapter and uses the same quiz verification when it generates questions. Video requests carry stable transcript segment IDs; collection requests carry bounded source blocks and saved-source IDs.
 
 ## Verification
 
@@ -458,7 +465,7 @@ npm run security:audit
 npm run package:extension
 ```
 
-The complete automated suite covers real DOCX/PDF exports, grounded cheat-sheet sanitization and responsive semantics, PDF-backed source labels, multi-frame/open-shadow HTML extraction, multilingual readability, adversarial HTML/PDF bounds, genuine PDF text parsing, PDF-specific failure states, per-site and file-permission contracts, Focus-rule lifecycle, empty stable-ID chapter creation, duplicate-name resolution, cross-chapter isolation, Journey schema migration and document metadata, exact artifact handoff, Learning Forest saved-unit growth stages, persistent stage-accurate overviews, exact-count ribbon entries, stable Visual Tutor Note branch IDs, responsive bottom-drawer behavior, motion pausing, stable 360-degree orbit dragging, reliable branch activation, connected 3/5/8-concept mind maps, keyboard/reflow behavior, non-obscuring narrow action controls, collection provenance and deduplication, quiz isolation, endpoint-bound tokens, exact-origin loopback authentication, wrong-token and wrong-origin rejection, JSON-only API posts, defensive response headers, visible-caption and public-YouTube routing, stable video identity, executable service-worker action authorization, expiry and changed-page rejection, source-bound one-use stream reservations, reply-before-teardown behavior, live audio health/progress, explicit zero-segment failure, transcript binding, audio chunk limits, timestamp mapping, and WAV encoding.
+The complete automated suite covers real DOCX/PDF exports, grounded cheat-sheet sanitization and responsive semantics, PDF-backed source labels, multi-frame/open-shadow HTML extraction, multilingual readability, adversarial HTML/PDF bounds, genuine PDF text parsing, PDF-specific failure states, per-site and file-permission contracts, Focus-rule lifecycle, empty stable-ID chapter creation, duplicate-name resolution, cross-chapter isolation, Journey schema migration and document metadata, per-concept ease-factor scheduling, difficult-versus-mastered review intervals, exact artifact handoff, Learning Forest saved-unit growth stages, external-resource separation and save-to-chapter handoff, persistent stage-accurate overviews, exact-count ribbon entries, stable Visual Tutor Note branch IDs, responsive bottom-drawer behavior, motion pausing, stable 360-degree orbit dragging, reliable branch activation, connected 3/5/8-concept mind maps, keyboard/reflow behavior, non-obscuring narrow action controls, collection provenance and deduplication, lexical and provider-semantic quiz verification, quiz isolation, endpoint-bound tokens, exact-origin loopback authentication, wrong-token and wrong-origin rejection, JSON-only API posts, defensive response headers, visible-caption and public-YouTube routing, stable video identity, executable service-worker action authorization, expiry and changed-page rejection, source-bound one-use stream reservations, reply-before-teardown behavior, live audio health/progress, explicit zero-segment failure, transcript binding, audio chunk limits, timestamp mapping, and WAV encoding.
 
 ## Market-Informed Roadmap
 
@@ -466,7 +473,7 @@ Priority order:
 
 1. Continue trust work: visible evidence chips, coverage indicators, bad-question reporting, and evaluation fixtures for factual/citation accuracy.
 2. Improve active recall: typed answers, explain-in-your-own-words prompts, better distractor evaluation, and optional answer editing.
-3. Turn weak concepts into scheduled Journey review recommendations rather than another static quiz.
+3. Extend the current adaptive review interval with typed recall and learner-selected reminder delivery.
 4. Add transparent AI usage metering without restricting saved work.
 5. Add optional research unlocks, rolling per-site allowances, weekday schedules, and strict Focus mode.
 6. Consider Firefox only after the Chrome capture, storage, and permission paths are stable.

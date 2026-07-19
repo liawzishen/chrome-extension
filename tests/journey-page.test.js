@@ -340,6 +340,35 @@ test("redesigns chapter evidence and Journey summary inside one accessible drawe
   assert.match(styles, /\.forest-drawer\.is-open/);
 });
 
+test("keeps opt-in external study suggestions separate until the learner saves a source", () => {
+  const helperStart = script.indexOf("function normalizeExternalConceptLabel(value)");
+  const helperEnd = script.indexOf("function renderExploreFurther(chapter, weakTopics)", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helpers = vm.runInNewContext(`(() => {
+    ${script.slice(helperStart, helperEnd)}
+    return { getChapterWeakConceptLabels, buildExternalStudySuggestions };
+  })()`);
+  const weak = helpers.getChapterWeakConceptLabels({
+    sessions: [{ id: "note-1", weakTopics: ["  Linear equations  ", "linear equations"] }]
+  }, {
+    concepts: [{ noteId: "note-1", conceptId: "inverse", conceptLabel: "Inverse operations", state: "weak" }]
+  });
+  assert.deepEqual([...weak], ["Linear equations", "Inverse operations"]);
+  const suggestions = helpers.buildExternalStudySuggestions("x & y");
+  assert.equal(suggestions.length, 2);
+  suggestions.forEach((suggestion) => assert.match(suggestion.url, /^https:\/\//));
+  assert.ok(suggestions.every((suggestion) => suggestion.url.includes("x%20%26%20y")));
+
+  assert.match(script, /dataset\.contentOrigin = "external-unverified"/);
+  assert.match(script, /Explore further \(external\)/);
+  assert.match(script, /not evidence-checked and never mix with saved evidence/);
+  assert.match(script, /action: "save-external-source"/);
+  assert.match(script, /page\.inspector\.replaceChildren\(header, workspace,[\s\S]*?exploreFurther/);
+  assert.match(popupScript, /action\.action === "save-external-source"[\s\S]*?switchView\("pageView"\)[\s\S]*?selectChapterAcrossControls\(chapter\.id\)[\s\S]*?Save source to chapter/);
+  assert.match(styles, /\.external-study-suggestions \{[\s\S]*?border: 1px dashed/);
+  assert.match(styles, /\.external-study-card button \{[\s\S]*?min-height: 40px/);
+});
+
 test("Full Trail exposes retained local PDF text with a bounded reader", () => {
   const helperStart = script.indexOf("function getSourceContentForDisplay(source)");
   const helperEnd = script.indexOf("function renderSourceCard(source)", helperStart);
@@ -411,7 +440,7 @@ test("uses progressive disclosure, responsive regions, and a user-controlled mot
   assert.match(html, /class="forest-topbar__meta"/);
   assert.match(html, /id="toggleForestMotion"[^>]*aria-pressed="false"[^>]*>Pause motion</);
   assert.match(html, /<kbd>Drag<\/kbd> orbit[\s\S]*<kbd>Scroll<\/kbd> zoom/);
-  assert.match(script, /onSelectTree\(\{\s*treeId\s*\}\) \{[\s\S]*?renderDetails\(\);\s*openDrawer\("chapter"\);/);
+  assert.match(script, /onSelectTree\(\{\s*treeId\s*\}\) \{[\s\S]*?renderDetails\(\);[\s\S]*?openDrawer\("chapter"\);/);
   assert.match(script, /onSelectVisualNote\(\{\s*treeId,\s*artifactId\s*\}\)[\s\S]*?openDrawer\("chapter"\)/);
   assert.match(script, /function updateMotionControl\(\)[\s\S]*?Resume motion[\s\S]*?Pause motion/);
   assert.match(script, /function rememberDrawerReturnFocus\(preferred\)/);
@@ -462,17 +491,33 @@ test("bundles Three.js locally through the extension's existing build", () => {
   assert.ok(fs.statSync(path.join(root, "journey-tree.bundle.js")).size > 100_000);
 });
 
-test("adds a file-to-chapter outline, chapter workspace, and persistent Focus panel to the Learning Tree", () => {
-  assert.match(html, /id="chapterFocusPanel"[\s\S]*?id="chapterFocusTotal"[\s\S]*?id="chapterFocusCurrent"[\s\S]*?id="chapterFocusSession"/);
-  assert.match(html, /id="startChapterFocus"[\s\S]*?id="pauseChapterFocus"[\s\S]*?id="resumeChapterFocus"/);
+test("adds a file-to-chapter outline and chapter workspace inside a collapsible study rail", () => {
   assert.match(html, /id="learningOutline"/);
   assert.match(script, /function renderLearningOutline\(\)[\s\S]*?importedFileId[\s\S]*?learning-outline__file[\s\S]*?renderOutlineChapterNode/);
   assert.match(script, /function renderChapterWorkspace\([\s\S]*?"Source"[\s\S]*?"Visual Note"[\s\S]*?"Cheat Sheet"[\s\S]*?"Summary"[\s\S]*?"Practice"/);
   assert.match(script, /requestChapterResourceGeneration\(chapter, available \? "regenerate" : "retry"\)/);
-  assert.match(script, /handleChapterFocusVisibilityChange[\s\S]*?pauseSelectedChapterFocus\("hidden"\)/);
-  assert.match(script, /CHAPTER_MESSAGE_TYPES\.SELECT[\s\S]*?CHAPTER_MESSAGE_TYPES\.START[\s\S]*?CHAPTER_MESSAGE_TYPES\.PAUSE/);
   assert.match(styles, /\.forest-study-rail[\s\S]*?overflow:\s*auto/);
   assert.match(styles, /\.learning-outline__chapter::before/);
   assert.match(styles, /\.chapter-workspace__tabs[\s\S]*?overflow-x:\s*auto/);
   assert.match(styles, /\.chapter-workspace__panel[\s\S]*?overflow-wrap:\s*anywhere/);
+});
+
+test("removes the in-forest chapter study timer and lets the learner close or reopen the study rail", () => {
+  assert.doesNotMatch(html, /id="chapterFocusPanel"|id="startChapterFocus"|id="pauseChapterFocus"|id="resumeChapterFocus"|Chapter study timer/);
+  assert.doesNotMatch(script, /chapterFocusState|CHAPTER_MESSAGE_TYPES|sendChapterFocusMessage|selectChapterForFocus/);
+  assert.match(html, /id="closeStudyRail"[^>]*aria-label="Close the course outline"/);
+  assert.match(html, /id="openStudyRail"[^>]*hidden[^>]*aria-label="Open the course outline"/);
+  assert.match(script, /page\.closeStudyRail\?\.addEventListener\("click", \(\) => setStudyRailCollapsed\(true\)\)/);
+  assert.match(script, /page\.openStudyRail\?\.addEventListener\("click", \(\) => setStudyRailCollapsed\(false\)\)/);
+  assert.match(script, /function setStudyRailCollapsed\(collapsed\)[\s\S]*?localStorage\.setItem\(STUDY_RAIL_COLLAPSED_KEY/);
+  assert.match(script, /function applyStudyRailState\(\)[\s\S]*?page\.studyRail\.hidden = studyRailCollapsed[\s\S]*?page\.openStudyRail\.hidden = !studyRailCollapsed/);
+  assert.match(styles, /\.forest-study-rail__close/);
+  assert.match(styles, /\.forest-study-rail__opener/);
+});
+
+test("feeds the top-bar Focus stat from externally recorded focus sessions, live for an active session", () => {
+  assert.match(html, /id="pageFocusTime"/);
+  assert.match(script, /function getLiveFocusMetrics\([\s\S]*?reconcileFocusState[\s\S]*?activeMinutes/);
+  assert.match(script, /page\.focus\.textContent = `\$\{metrics\.focusMinutes \+ liveFocus\.activeMinutes\}m`/);
+  assert.match(script, /function scheduleFocusMetricsRender\(active\)[\s\S]*?setInterval\(renderHeaderMetrics/);
 });

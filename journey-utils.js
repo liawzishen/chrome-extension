@@ -13,6 +13,8 @@
   const MAX_APPLIED_OPERATIONS = 120;
   const MAX_LEARNING_ATTEMPTS = 20;
   const DAY_MS = 86400000;
+  const MIN_CONCEPT_EASE_FACTOR = 1.3;
+  const MAX_CONCEPT_EASE_FACTOR = 2.5;
 
   function clone(value) {
     if (value == null) return value;
@@ -346,6 +348,19 @@
     return Math.max(1, Math.min(60, Number.isFinite(numeric) ? numeric : 1));
   }
 
+  function getWrongAnswerRatio(timesWrong, timesTested) {
+    if (!timesTested) return 0;
+    return Math.max(0, Math.min(1, timesWrong / timesTested));
+  }
+
+  function deriveConceptEaseFactor(timesWrong, timesTested) {
+    const wrongAnswerRatio = getWrongAnswerRatio(timesWrong, timesTested);
+    return Number(Math.max(
+      MIN_CONCEPT_EASE_FACTOR,
+      Math.min(MAX_CONCEPT_EASE_FACTOR, MAX_CONCEPT_EASE_FACTOR - 1.2 * wrongAnswerRatio)
+    ).toFixed(2));
+  }
+
   function normalizeConceptMemory(value) {
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const noteId = cleanText(value.noteId, 100);
@@ -356,6 +371,8 @@
     const state = ["weak", "recovering", "stable"].includes(value.state) ? value.state : timesWrong ? "weak" : "stable";
     const strength = normalizeConceptStrength(value.strength, state);
     const intervalDays = normalizeIntervalDays(value.intervalDays);
+    const wrongAnswerRatio = Number(getWrongAnswerRatio(timesWrong, timesTested).toFixed(4));
+    const easeFactor = deriveConceptEaseFactor(timesWrong, timesTested);
     const lastAttemptAt = normalizeOptionalIsoDate(value.lastAttemptAt);
     const nextReviewAt = normalizeOptionalIsoDate(value.nextReviewAt)
       || (lastAttemptAt ? new Date(dateTimestamp(lastAttemptAt) + intervalDays * DAY_MS).toISOString() : null);
@@ -370,6 +387,8 @@
       lastAttemptAt,
       strength,
       intervalDays,
+      wrongAnswerRatio,
+      easeFactor,
       nextReviewAt
     };
   }
@@ -393,10 +412,13 @@
       const incomingTime = dateTimestamp(concept.lastAttemptAt) ?? -1;
       const latest = incomingTime >= existingTime ? concept : existing;
       const mergedTimesTested = Math.max(existing.timesTested, concept.timesTested);
+      const mergedTimesWrong = Math.min(mergedTimesTested, Math.max(existing.timesWrong, concept.timesWrong));
       conceptMap.set(key, {
         ...latest,
         timesTested: mergedTimesTested,
-        timesWrong: Math.min(mergedTimesTested, Math.max(existing.timesWrong, concept.timesWrong))
+        timesWrong: mergedTimesWrong,
+        wrongAnswerRatio: Number(getWrongAnswerRatio(mergedTimesWrong, mergedTimesTested).toFixed(4)),
+        easeFactor: deriveConceptEaseFactor(mergedTimesWrong, mergedTimesTested)
       });
     });
     const concepts = [...conceptMap.values()]
@@ -1419,6 +1441,8 @@
         lastAttemptAt: null,
         strength: 50,
         intervalDays: 1,
+        wrongAnswerRatio: 0,
+        easeFactor: MAX_CONCEPT_EASE_FACTOR,
         nextReviewAt: null
       };
       record.sourceFingerprint = attempt.sourceFingerprint || record.sourceFingerprint;
@@ -1431,6 +1455,8 @@
       if ((dateTimestamp(attempt.answeredAt) ?? 0) >= (dateTimestamp(record.lastAttemptAt) ?? -1)) {
         record.lastAttemptAt = attempt.answeredAt;
       }
+      record.wrongAnswerRatio = Number(getWrongAnswerRatio(record.timesWrong, record.timesTested).toFixed(4));
+      record.easeFactor = deriveConceptEaseFactor(record.timesWrong, record.timesTested);
       conceptMap.set(key, record);
       const group = batchByConcept.get(key) || [];
       group.push(attempt);
@@ -1502,7 +1528,7 @@
         const nextReviewTimestamp = dateTimestamp(record.nextReviewAt);
         const wasDue = nextReviewTimestamp !== null && answeredAtMs >= nextReviewTimestamp;
         record.strength = Math.min(100, Math.round(record.strength + 20 + (wasDue ? 5 : 0)));
-        record.intervalDays = Math.min(60, record.intervalDays * 2);
+        record.intervalDays = Math.min(60, Math.max(1, Math.round(record.intervalDays * record.easeFactor)));
         record.nextReviewAt = new Date(answeredAtMs + record.intervalDays * DAY_MS).toISOString();
       } else {
         record.strength = Math.max(0, Math.round(record.strength - 30));

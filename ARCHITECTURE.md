@@ -33,8 +33,8 @@ The curated Mathematics route never depends on the backend or a provider key. It
 | --- | --- | --- |
 | Side panel (**popup.js**) | User interaction, rendering, study-loop orchestration, and presentation state | Provider keys, broad browser permission decisions, or direct cross-origin access |
 | Source utilities | Bounded extraction and normalization for notes, pages, documents, and video evidence | Journey progress policy or UI state |
-| Artifact validation | Schema checks, source-quote matching, and source identity propagation | Silent evidence invention |
-| Journey domain (**journey-utils.js**) | Stable chapter IDs, source ownership, saved artifacts, quiz outcomes, and next-step data | Transient visual state or provider calls |
+| Artifact validation | Schema checks, source-quote matching, source identity propagation, and provider semantic answer verification for backend quizzes | Silent evidence invention |
+| Journey domain (**journey-utils.js**) | Stable chapter IDs, source ownership, saved artifacts, quiz outcomes, adaptive per-concept review intervals, and next-step data | Transient visual state or provider calls |
 | Service worker (**background.js**) | Serialized privileged browser work, storage coordination, Focus state, and video authorization | Rendering or unvalidated study artifacts |
 | Loopback backend (**server.js**) | Bounded request handling, authorization, provider isolation, structured output normalization, and rate limits | Long-lived learner state or browser credentials |
 
@@ -46,7 +46,8 @@ The contracts below are the architectural center of the product. A title alone i
 | --- | --- | --- |
 | Source snapshot | **sourceId**, source fingerprint, source type, normalized source text or timestamped segment | Every downstream artifact stays attached to this exact snapshot. |
 | Visual claim | Claim text plus source quote/reference | The quote must be present in the saved source before the claim is presented as evidence-linked. |
-| Quiz question | Source ID/fingerprint and supporting source text | The question is validated against the source before it is saved or scored. |
+| Quiz question | Source ID/fingerprint and supporting source text | Lexical evidence checks run before persistence; backend-generated answers also require a provider semantic pass against their quoted evidence. |
+| External suggestion | Weak concept plus safe external URL | It is visibly marked external and not evidence-linked; it becomes source evidence only after the learner explicitly saves the opened page to a chapter. |
 | Journey record | Stable **chapterId**, source ID, artifact/session ID | A rerun updates the same chapter/source rather than creating ambiguous duplicate ownership. |
 | Unsupported-claim report | Claim identifier and supporting quote only | Reports remain local and do not overwrite the source or alter mastery. |
 
@@ -77,10 +78,17 @@ sequenceDiagram
 1. The learner explicitly selects a chapter and captures a bounded source.
 2. The extension normalizes the source into a fingerprinted snapshot.
 3. A local deterministic path or optional backend returns a structured study artifact.
-4. Validation binds each visual claim and quiz question to the source snapshot before persistence.
-5. The Journey records the saved source and submitted quiz result under the selected stable chapter.
+4. Validation binds each visual claim and quiz question to the source snapshot before persistence. Backend-generated quiz answers also receive a separate provider semantic verdict against their quoted evidence; failure is rejected rather than saved.
+5. The Journey records the saved source and submitted quiz result under the selected stable chapter, then schedules each concept with an ease factor derived from its cumulative wrong-answer ratio.
 
 If optional generation is unavailable, the interface preserves the source binding and labels the fallback state; it does not present unavailable provider output as verified.
+
+### Optional external study
+
+1. Journey shows a collapsed, visually distinct external-suggestion lane only for weak concepts.
+2. The learner opts in to open a suggestion; this does not create an evidence-linked artifact.
+3. The extension preselects the chapter and asks the learner to explicitly save the opened page.
+4. Once saved, the page is a normal bounded source snapshot and follows the same grounding contracts as any other source.
 
 ## Security and privacy boundaries
 

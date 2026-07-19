@@ -1,6 +1,6 @@
 {
   "name": "exam-cram-assistant",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Chrome study extension with visual lessons, focus controls, video learning, and a persistent learning journey.",
   "scripts": {

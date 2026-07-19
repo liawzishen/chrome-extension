@@ -1,6 +1,6 @@
 # OpenAI Build Week Submission Evidence
 
-> Updated 2026-07-17. This is an evidence package, not a legal eligibility determination. The [Official Rules](https://openai.devpost.com/rules) and [Build Week FAQ](https://openai.devpost.com/details/faqs) control if any detail differs.
+> Updated 2026-07-20. This is an evidence package, not a legal eligibility determination. The [Official Rules](https://openai.devpost.com/rules) and [Build Week FAQ](https://openai.devpost.com/details/faqs) control if any detail differs.
 
 ## Primary `/feedback` Session ID
 
@@ -35,7 +35,7 @@ The official submission period runs from **2026-07-13 09:00 PDT** through **2026
 | Detailed project description | Product summary, scope, PRD, and technical specification are linked from `hackathon/README.md`. | Ready |
 | Explain Codex/GPT-5.6 collaboration | Root README, hackathon README, and the builder-led collaboration report document the builder’s direction, review process, and Codex implementation support. | Ready |
 | Public YouTube demo under 3 minutes with audio | Record a working demo with a specific voiceover on the user problem, product flow, Codex work, and GPT-5.6 build use. | Pending |
-| Judge-accessible repository | Use a public repository with an appropriate license, or a private repository shared with the addresses in the Official Rules. | Pending |
+| Judge-accessible repository | [liawzishen/chrome-extension](https://github.com/liawzishen/chrome-extension) was checked while signed out on 2026-07-20; it is public and includes the MIT [LICENSE](../LICENSE). | Verified |
 | Setup and test guidance | Root README documents installation and verification commands. | Ready |
 | Third-party usage rights | Confirm that any SDKs, APIs, data, trademarks, music, and images used in the submission are authorized. | Entrant action |
 
@@ -66,5 +66,5 @@ The linked [design-test session](2026-07-16-design-test-review-md-files-and-impl
 
 1. Select **Education** in Devpost and paste the primary Session ID exactly as shown above.
 2. Publish a public YouTube demo under three minutes. Use voiceover to explain the working study flow, how Codex was used, and the GPT-5.6 build workflow.
-3. Make the repository judge-accessible. If it is public, add an appropriate license; no `LICENSE*` file was found during this review. If it is private, share it using the official-rule instructions.
-4. Re-read the official rules immediately before submitting because the organizer can amend them.
+3. Add the public demo-video URL and the submitted Devpost project URL to the final entry; neither URL is represented in this repository yet.
+4. Confirm third-party usage rights and re-read the official rules immediately before submitting because the organizer can amend them.

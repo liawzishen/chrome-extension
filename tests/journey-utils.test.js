@@ -951,11 +951,13 @@ test("migrates legacy concept memory with strength, interval, and review default
   memory.concepts.forEach((concept) => {
     assert.equal(concept.strength, expectedStrengths[concept.conceptId]);
     assert.equal(concept.intervalDays, 1);
+    assert.equal(concept.wrongAnswerRatio, concept.conceptId === "stable-concept" ? 0 : 0.3333);
+    assert.equal(concept.easeFactor, concept.conceptId === "stable-concept" ? 2.5 : 2.1);
     assert.equal(concept.nextReviewAt, "2026-07-11T10:00:00.000Z");
   });
 });
 
-test("raises strength and doubles the interval after a fully correct batch", () => {
+test("raises strength and applies the concept ease factor after a fully correct batch", () => {
   const answeredAt = "2026-07-15T10:00:00.000Z";
   const recorded = Journey.recordQuestionAttempts(
     Journey.createJourney("Strength", "2026-07-15T00:00:00.000Z"),
@@ -965,8 +967,84 @@ test("raises strength and doubles the interval after a fully correct batch", () 
   const concept = recorded.journey.learningMemory.concepts[0];
 
   assert.equal(concept.strength, 70);
-  assert.equal(concept.intervalDays, 2);
-  assert.equal(concept.nextReviewAt, "2026-07-17T10:00:00.000Z");
+  assert.equal(concept.wrongAnswerRatio, 0);
+  assert.equal(concept.easeFactor, 2.5);
+  assert.equal(concept.intervalDays, 3);
+  assert.equal(concept.nextReviewAt, "2026-07-18T10:00:00.000Z");
+});
+
+test("normalizes tampered difficulty fields from bounded attempt counts", () => {
+  const [concept] = Journey.normalizeLearningMemory({
+    concepts: [{
+      noteId: "note-memory",
+      conceptId: "concept-alpha",
+      timesTested: 4,
+      timesWrong: 99,
+      wrongAnswerRatio: -5,
+      easeFactor: 99
+    }]
+  }).concepts;
+
+  assert.equal(concept.timesWrong, 4);
+  assert.equal(concept.wrongAnswerRatio, 1);
+  assert.equal(concept.easeFactor, 1.3);
+});
+
+test("difficult concepts resurface earlier than mastered concepts after the same correct review", () => {
+  const answeredAt = "2026-07-15T10:00:00.000Z";
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Adaptive intervals", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-memory",
+        conceptId: "mastered",
+        conceptLabel: "Mastered",
+        timesTested: 8,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-14T10:00:00.000Z",
+        strength: 80,
+        intervalDays: 4,
+        nextReviewAt: answeredAt
+      }, {
+        noteId: "note-memory",
+        conceptId: "difficult",
+        conceptLabel: "Difficult",
+        timesTested: 8,
+        timesWrong: 6,
+        state: "weak",
+        lastAttemptAt: "2026-07-14T10:00:00.000Z",
+        strength: 35,
+        intervalDays: 4,
+        nextReviewAt: answeredAt
+      }]
+    }
+  });
+  const recorded = Journey.recordQuestionAttempts(journey, [
+    questionAttempt(106, {
+      primaryConceptId: "mastered",
+      conceptLabel: "Mastered",
+      answeredAt
+    }),
+    questionAttempt(107, {
+      primaryConceptId: "difficult",
+      conceptLabel: "Difficult",
+      answeredAt
+    })
+  ], { score: 100, submittedAt: answeredAt });
+  const byId = new Map(recorded.journey.learningMemory.concepts.map((concept) => [concept.conceptId, concept]));
+  const mastered = byId.get("mastered");
+  const difficult = byId.get("difficult");
+
+  assert.equal(mastered.wrongAnswerRatio, 0);
+  assert.equal(mastered.easeFactor, 2.5);
+  assert.equal(mastered.intervalDays, 10);
+  assert.equal(mastered.nextReviewAt, "2026-07-25T10:00:00.000Z");
+  assert.equal(difficult.wrongAnswerRatio, 0.6667);
+  assert.equal(difficult.easeFactor, 1.7);
+  assert.equal(difficult.intervalDays, 7);
+  assert.equal(difficult.nextReviewAt, "2026-07-22T10:00:00.000Z");
+  assert.ok(Date.parse(difficult.nextReviewAt) < Date.parse(mastered.nextReviewAt));
 });
 
 test("adds the due-date strength bonus only on or after the review time", () => {
@@ -1030,6 +1108,8 @@ test("reduces strength and resets the interval when a batch contains a wrong ans
 
   assert.equal(concept.strength, 50);
   assert.equal(concept.intervalDays, 1);
+  assert.equal(concept.wrongAnswerRatio, 0.25);
+  assert.equal(concept.easeFactor, 2.2);
   assert.equal(concept.nextReviewAt, "2026-07-16T10:00:00.000Z");
 });
 

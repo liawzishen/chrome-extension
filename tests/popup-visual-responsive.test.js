@@ -84,7 +84,7 @@ test("640 pixel panels use two readable branches and detail content remains in n
 
 test("mind map height wins the cascade and reserves every branch before concept detail", () => {
   const genericSceneSizing = styles.indexOf("/* Professional visual-note hierarchy");
-  const mindMapFlowOverride = styles.indexOf("/*\n * Mind maps grow with their branch grid");
+  const mindMapFlowOverride = styles.search(/\/\*\r?\n \* Mind maps grow with their branch grid/);
   assert.ok(genericSceneSizing >= 0);
   assert.ok(mindMapFlowOverride > genericSceneSizing);
   const finalMindMapStyles = styles.slice(mindMapFlowOverride);

@@ -1,5 +1,7 @@
 # Exam-Cram Assistant Chrome Extension
 
+> Historical MVP ideation record. It describes the original scope, not the current shipped capability set; see the root README and architecture document for the release behavior.
+
 ## Product Idea
 
 Exam-Cram Assistant is a Chrome extension that helps students prepare quickly for upcoming exams by turning webpages, notes, and study materials into summaries, quizzes, weak-topic reports, highlights, bookmarks, and future study goals.

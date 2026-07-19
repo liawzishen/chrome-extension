@@ -15,12 +15,16 @@ function sourceBetween(startMarker, endMarker) {
   return popup.slice(start, end).trim();
 }
 
-test("client recovery composition uses only directed prerequisites, then related fallback", () => {
-  const harness = vm.runInNewContext(`(() => {
-    ${sourceBetween("function getClientRecoveryComposition", "function generateLocalRecoveryQuizArtifact")}
+function getRecoveryHarness() {
+  return vm.runInNewContext(`(() => {
+    ${sourceBetween("function normalizeRecoveryConceptText", "function generateLocalRecoveryQuizArtifact")}
     ${sourceBetween("function normalizeClientVisualEdgeType", "function normalizeVisualScenario")}
     return { getClientRecoveryComposition };
   })()`);
+}
+
+test("client recovery composition uses directed prerequisites, then related fallback", () => {
+  const harness = getRecoveryHarness();
   const visualModel = {
     nodes: ["target", "prereq", "reverse", "related"].map((id) => ({ id })),
     edges: [
@@ -31,9 +35,48 @@ test("client recovery composition uses only directed prerequisites, then related
   };
   const composition = harness.getClientRecoveryComposition(visualModel, "target");
   assert.deepEqual([...composition.prerequisiteConceptIds], ["prereq"]);
+  assert.equal(composition.directedPrerequisiteQuestionCount, 1);
+  assert.equal(composition.sourceInferredPrerequisiteQuestionCount, 0);
   assert.deepEqual([...composition.relatedConceptIds], ["related"]);
   assert.equal(composition.targetQuestionCount, 3);
-  assert.equal(composition.description, "Actual recovery composition: 3 target, 1 prerequisite, 1 related.");
+  assert.equal(composition.description, "Actual recovery composition: 3 target, 1 directed prerequisite, 1 related.");
+});
+
+test("client recovery composition uses co-occurring source concepts before target repetition", () => {
+  const harness = getRecoveryHarness();
+  const visualModel = {
+    nodes: [{
+      id: "target",
+      label: "Target concept",
+      sourceSegmentId: "segment-1",
+      sourceAnchor: "Foundation A and the target concept appear together."
+    }, {
+      id: "foundation-a",
+      label: "Foundation A",
+      sourceSegmentId: "segment-1",
+      sourceAnchor: "Foundation A establishes the first step."
+    }, {
+      id: "foundation-b",
+      label: "Foundation B",
+      sourceSegmentId: "segment-1",
+      sourceAnchor: "Foundation B establishes the second step."
+    }, {
+      id: "same-source-only",
+      label: "Same source only",
+      sourceId: "source-note",
+      sourceAnchor: "A separate source section."
+    }],
+    edges: []
+  };
+  const composition = harness.getClientRecoveryComposition(visualModel, "target");
+
+  assert.deepEqual([...composition.sourceInferredPrerequisiteConceptIds], ["foundation-a", "foundation-b"]);
+  assert.deepEqual([...composition.primaryConceptIds], [
+    "target", "target", "target", "foundation-a", "foundation-b"
+  ]);
+  assert.equal(composition.targetQuestionCount, 3);
+  assert.equal(composition.extraTargetQuestionCount, 0);
+  assert.equal(composition.description, "Actual recovery composition: 3 target, 2 source-inferred prerequisite.");
 });
 
 test("question definitions remain static while submission creates rich attempt records", () => {

@@ -24,7 +24,7 @@
           <div class="forest-topbar__meta">
             <div class="forest-topbar__stats" aria-label="Journey metrics">
               <span><strong id="pageProgress">0%</strong> progress</span>
-              <span><strong id="pageFocusTime">0m</strong> focus</span>
+              <span title="Focus time recorded by Focus sessions while you browse"><strong id="pageFocusTime">0m</strong> focus</span>
             </div>
             <span id="forestParticleCount" class="forest-particle-count" role="status">Generating forest</span>
           </div>
@@ -37,37 +37,19 @@
         </div>
       </header>
 
-      <aside class="forest-study-rail" aria-label="Learning Tree study controls">
-        <section id="chapterFocusPanel" class="chapter-timer-panel" aria-labelledby="chapterFocusHeading">
-          <header class="chapter-timer-panel__header">
-            <div>
-              <span class="forest-state-card__eyebrow">Focus</span>
-              <h2 id="chapterFocusHeading">Chapter study timer</h2>
-            </div>
-            <span id="chapterFocusStatus" class="chapter-timer-panel__status">Not running</span>
-          </header>
-          <div class="chapter-timer-panel__metrics" aria-live="polite">
-            <div><span>Total focused</span><strong id="chapterFocusTotal">0m</strong></div>
-            <div><span>Current chapter</span><strong id="chapterFocusCurrent">Choose a chapter</strong></div>
-            <div><span>This session</span><strong id="chapterFocusSession">0:00</strong></div>
-            <div><span>Studied chapters</span><strong id="chapterFocusStudied">0</strong></div>
-          </div>
-          <div class="chapter-timer-panel__actions" role="group" aria-label="Chapter timer controls">
-            <button id="startChapterFocus" type="button">Start</button>
-            <button id="pauseChapterFocus" type="button" hidden>Pause</button>
-            <button id="resumeChapterFocus" type="button" hidden>Resume</button>
-          </div>
-          <p id="chapterFocusMessage" class="chapter-timer-panel__message">Select a chapter, then start when you begin studying. The timer pauses on chapter switches, hidden pages, and inactivity.</p>
-        </section>
-
+      <aside id="forestStudyRail" class="forest-study-rail" aria-label="Learning Tree study controls">
         <section class="learning-outline" aria-labelledby="learningOutlineHeading">
           <header>
-            <span class="forest-state-card__eyebrow">Course outline</span>
-            <h2 id="learningOutlineHeading">Uploaded files & chapters</h2>
+            <div>
+              <span class="forest-state-card__eyebrow">Course outline</span>
+              <h2 id="learningOutlineHeading">Uploaded files & chapters</h2>
+            </div>
+            <button id="closeStudyRail" class="forest-study-rail__close" type="button" aria-label="Close the course outline">×</button>
           </header>
           <div id="learningOutline" class="learning-outline__tree"></div>
         </section>
       </aside>
+      <button id="openStudyRail" class="forest-study-rail__opener" type="button" hidden aria-label="Open the course outline">Course outline</button>
 
       <svg id="forestConnectors" class="forest-connectors" aria-hidden="true">
         <defs>

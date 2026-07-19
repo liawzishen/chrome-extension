@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Exam-Cram Assistant",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "minimum_chrome_version": "116",
   "description": "Study pages and videos with source-grounded visual lessons, active recall, focus controls, and a dated learning journey.",
   "action": {

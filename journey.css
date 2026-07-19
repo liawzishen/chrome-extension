@@ -745,7 +745,8 @@ p { margin: 0; }
   scrollbar-gutter: stable;
 }
 
-.chapter-timer-panel,
+.forest-study-rail[hidden] { display: none; }
+
 .learning-outline {
   min-width: 0;
   border: 1px solid rgba(224, 163, 61, 0.2);
@@ -756,7 +757,6 @@ p { margin: 0; }
   backdrop-filter: blur(16px);
 }
 
-.chapter-timer-panel__header,
 .learning-outline > header {
   display: flex;
   align-items: flex-start;
@@ -764,54 +764,50 @@ p { margin: 0; }
   gap: 10px;
 }
 
-.chapter-timer-panel h2,
 .learning-outline h2 {
   margin-top: 4px;
   font-size: 15px;
   letter-spacing: -0.02em;
 }
 
-.chapter-timer-panel__status {
+.forest-study-rail__close {
+  display: grid;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
-  border: 1px solid rgba(224, 163, 61, 0.24);
-  border-radius: 999px;
-  padding: 5px 8px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 19px;
+}
+
+.forest-study-rail__close:hover { color: #fff; }
+
+.forest-study-rail__opener {
+  position: absolute;
+  z-index: 23;
+  top: 94px;
+  left: clamp(12px, 2vw, 28px);
+  min-height: 40px;
+  border: 1px solid rgba(224, 163, 61, 0.34);
+  border-radius: 999px;
+  padding: 9px 14px;
+  background: rgba(7, 8, 8, 0.9);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(16px);
+  color: #edc98f;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  pointer-events: auto;
 }
 
-.chapter-timer-panel__status[data-state="running"] { border-color: rgba(110, 207, 147, 0.48); color: #a9e5bf; }
-.chapter-timer-panel__status[data-state="paused"] { color: #edc98f; }
+.forest-study-rail__opener[hidden] { display: none; }
+.forest-study-rail__opener:hover { color: #fff; }
 
-.chapter-timer-panel__metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 11px;
-}
-
-.chapter-timer-panel__metrics div {
-  min-width: 0;
-  border: 1px solid rgba(224, 163, 61, 0.13);
-  border-radius: 9px;
-  padding: 8px;
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.chapter-timer-panel__metrics span,
-.chapter-timer-panel__metrics strong { display: block; overflow-wrap: anywhere; }
-.chapter-timer-panel__metrics span { color: var(--muted); font-size: 9px; text-transform: uppercase; }
-.chapter-timer-panel__metrics strong { margin-top: 3px; font-size: 12px; }
-
-.chapter-timer-panel__actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 10px;
-}
-
-.chapter-timer-panel__actions button,
 .chapter-workspace__resource-header button {
   min-height: 40px;
   border: 1px solid rgba(224, 163, 61, 0.34);
@@ -821,10 +817,6 @@ p { margin: 0; }
   color: #edc98f;
   font-weight: 800;
 }
-
-.chapter-timer-panel__actions button[hidden] { display: none; }
-.chapter-timer-panel__actions button:disabled { cursor: not-allowed; opacity: 0.52; }
-.chapter-timer-panel__message { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 
 .learning-outline__tree { display: grid; gap: 9px; margin-top: 10px; }
 .learning-outline__tree > p { color: var(--muted); font-size: 12px; line-height: 1.5; }
@@ -1084,6 +1076,27 @@ p { margin: 0; }
 .concept-evidence__item span { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .concept-evidence__item.is-selected { border-left-color: #f2be69; background: rgba(224, 163, 61, 0.12); }
 
+.external-study-suggestions {
+  margin-top: 18px;
+  border: 1px dashed rgba(126, 176, 205, 0.42);
+  border-radius: 12px;
+  padding: 3px 12px;
+  background: rgba(36, 69, 88, 0.16);
+}
+.external-study-suggestions__summary { min-height: 44px; padding: 12px 0; cursor: pointer; color: #b9d9ea; font-size: 13px; font-weight: 800; }
+.external-study-suggestions__summary::marker { color: #83bddb; }
+.external-study-suggestions__body { border-top: 1px solid rgba(126, 176, 205, 0.24); padding: 12px 0 14px; }
+.external-study-suggestions__eyebrow { color: #82bddb; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.external-study-suggestions__notice { margin-top: 6px; color: #b2c4cd; font-size: 12px; line-height: 1.5; }
+.external-study-concept { margin-top: 14px; }
+.external-study-concept h3 { color: #d6e7ef; font-size: 14px; }
+.external-study-concept__list { display: grid; gap: 8px; margin-top: 8px; }
+.external-study-card { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid rgba(126, 176, 205, 0.2); border-radius: 10px; padding: 10px; background: rgba(4, 15, 21, 0.34); }
+.external-study-card > div { min-width: 0; }
+.external-study-card strong { color: #dcecf3; font-size: 12px; }
+.external-study-card p { margin-top: 4px; color: #9fb4bf; font-size: 11px; line-height: 1.4; }
+.external-study-card button { min-height: 40px; flex: 0 0 auto; border-color: rgba(126, 176, 205, 0.36); background: rgba(35, 83, 108, 0.28); color: #b9d9ea; }
+
 .chapter-note-preview {
   margin-top: 15px;
   border-top: 1px solid rgba(224, 163, 61, 0.16);
@@ -1336,6 +1349,7 @@ p { margin: 0; }
   .forest-controls { flex: 0 0 auto; }
   .forest-connector { display: none; }
   .forest-study-rail { top: 124px; max-height: calc(100dvh - 220px); }
+  .forest-study-rail__opener { top: 124px; }
   .forest-ribbon__dock { right: 12px; bottom: 12px; left: 12px; width: calc(100% - 24px); }
   .forest-ribbon__index-button { min-width: 96px; flex-basis: 96px; }
 }
@@ -1374,7 +1388,7 @@ p { margin: 0; }
     width: auto;
     max-height: min(42dvh, 360px);
   }
-  .chapter-timer-panel__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
+  .forest-study-rail__opener { top: 174px; left: 12px; }
   .learning-outline > header { flex-wrap: wrap; }
   .learning-outline h2 { overflow-wrap: anywhere; }
   .learning-outline { max-height: 170px; overflow: auto; }
@@ -1419,6 +1433,8 @@ p { margin: 0; }
   .chapter-workspace__panel { max-height: min(380px, 48vh); }
   .source-leaf { align-items: stretch; flex-direction: column; }
   .source-leaf button { width: 100%; }
+  .external-study-card { align-items: stretch; flex-direction: column; }
+  .external-study-card button { width: 100%; }
   .forest-legend { right: 12px; bottom: 12px; max-width: calc(100% - 24px); flex-wrap: wrap; justify-content: flex-end; }
 }
 

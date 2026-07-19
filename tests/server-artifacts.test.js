@@ -9,6 +9,7 @@ const {
   assertVisualModelUsable,
   buildNotesPrompt,
   buildQuizOnlyPrompt,
+  buildQuizSemanticVerificationPrompt,
   buildRecoveryComposition,
   buildRecoveryQuizPrompt,
   getResponseSchema,
@@ -17,7 +18,9 @@ const {
   normalizeSession,
   prepareQuizArtifactInput,
   prepareStudyNotesInput,
-  stripGeminiUnsupportedSchemaKeywords
+  stripGeminiUnsupportedSchemaKeywords,
+  isQuestionAnswerSupported,
+  verifyQuizAnswersSemantically
 } = require("../server.js");
 
 const videoSegments = [
@@ -426,6 +429,66 @@ test("single-source quizzes require the exact count and reject unrelated questio
   assert.equal(normalized.questions.length, 5);
 });
 
+test("generic answer words no longer bypass lexical grounding", () => {
+  const evidence = "Photosynthesis converts light energy into chemical energy stored in glucose.";
+  assert.equal(isQuestionAnswerSupported(photosynthesisText, evidence, "Glucose"), true);
+  assert.equal(isQuestionAnswerSupported(photosynthesisText, evidence, "Higher"), false);
+  assert.equal(isQuestionAnswerSupported(photosynthesisText, evidence, "True"), false);
+});
+
+test("semantic grounding verification covers every answer and fails closed", async () => {
+  const input = preparePhotosynthesisQuizInput({ sourceId: "source-photosynthesis-note" });
+  const quiz = normalizeQuizArtifact({
+    title: "Photosynthesis quiz",
+    questions: makePhotosynthesisQuestions({ sourceId: "source-photosynthesis-note" })
+  }, input);
+  let providerCall;
+  const passingRequest = async (...args) => {
+    providerCall = args;
+    return JSON.stringify({
+      checks: quiz.questions.map((_, index) => ({
+        questionIndex: index + 1,
+        supported: true,
+        reason: "The quoted evidence directly supports the proposed answer."
+      }))
+    });
+  };
+
+  const verification = await verifyQuizAnswersSemantically(quiz, passingRequest);
+  assert.equal(verification.lexical, "passed");
+  assert.equal(verification.semantic, "passed");
+  assert.equal(verification.checkedAnswers, 5);
+  assert.ok(["openai", "gemini"].includes(verification.provider));
+  assert.ok(verification.model);
+  assert.equal(providerCall[3], "quiz_grounding_verification");
+  assert.match(providerCall[0], /strict semantic grounding verifier/i);
+  assert.match(providerCall[1], /"quotedEvidence":"Photosynthesis converts light energy into chemical energy stored in glucose\."/);
+  assert.equal(buildQuizSemanticVerificationPrompt(quiz), providerCall[1]);
+
+  await assert.rejects(
+    verifyQuizAnswersSemantically(quiz, async () => JSON.stringify({
+      checks: quiz.questions.map((_, index) => ({
+        questionIndex: index + 1,
+        supported: index !== 2,
+        reason: index === 2 ? "The quote does not support this answer." : "Supported."
+      }))
+    })),
+    /rejected unsupported quiz answers at question 3/i
+  );
+  await assert.rejects(
+    verifyQuizAnswersSemantically(quiz, async () => JSON.stringify({
+      checks: [{ questionIndex: 1, supported: true, reason: "Supported." }]
+    })),
+    /exactly one boolean verdict for every quiz answer/i
+  );
+  await assert.rejects(
+    verifyQuizAnswersSemantically(quiz, async () => {
+      throw new Error("provider unavailable");
+    }),
+    /provider unavailable/i
+  );
+});
+
 test("server quiz artifacts receive distinct quiz IDs and globally unique question IDs", () => {
   const input = preparePhotosynthesisQuizInput({ sourceId: "source-photosynthesis-note" });
   const first = normalizeQuizArtifact({
@@ -653,7 +716,7 @@ const recoveryCompositionSkip = typeof buildRecoveryComposition === "function"
   ? false
   : "buildRecoveryComposition must be exported from server.js for direct contract coverage";
 
-test("recovery composition prefers three target questions and two explicit prerequisites", {
+test("recovery composition prefers three target questions and two directed prerequisites", {
   skip: recoveryCompositionSkip
 }, () => {
   const model = makeRecoveryVisualModel([
@@ -666,17 +729,21 @@ test("recovery composition prefers three target questions and two explicit prere
   assert.deepEqual({
     targetQuestionCount: composition.targetQuestionCount,
     prerequisiteQuestionCount: composition.prerequisiteQuestionCount,
+    directedPrerequisiteQuestionCount: composition.directedPrerequisiteQuestionCount,
+    sourceInferredPrerequisiteQuestionCount: composition.sourceInferredPrerequisiteQuestionCount,
     relatedQuestionCount: composition.relatedQuestionCount,
     extraTargetQuestionCount: composition.extraTargetQuestionCount,
     prerequisiteConceptIds: composition.prerequisiteConceptIds
   }, {
     targetQuestionCount: 3,
     prerequisiteQuestionCount: 2,
+    directedPrerequisiteQuestionCount: 2,
+    sourceInferredPrerequisiteQuestionCount: 0,
     relatedQuestionCount: 0,
     extraTargetQuestionCount: 0,
     prerequisiteConceptIds: ["prerequisite-a", "prerequisite-b"]
   });
-  assert.equal(composition.description, "Actual recovery composition: 3 target, 2 prerequisite.");
+  assert.equal(composition.description, "Actual recovery composition: 3 target, 2 directed prerequisite.");
 });
 
 test("recovery composition falls back to related concepts before extra target questions", {
@@ -725,7 +792,56 @@ test("recovery composition falls back to related concepts before extra target qu
   );
 });
 
-test("recovery prerequisites use only prerequisite_of edges directed source to target", {
+test("recovery composition infers prerequisite review from co-occurring source concepts before repeating the target", {
+  skip: recoveryCompositionSkip
+}, () => {
+  const model = {
+    nodes: [{
+      id: "target",
+      label: "Target concept",
+      sourceId: "source-pdf",
+      sourcePage: 2,
+      sourceAnchor: "Foundation A supports the target concept in this worked example."
+    }, {
+      id: "foundation-a",
+      label: "Foundation A",
+      sourceId: "source-pdf",
+      sourcePage: 2,
+      sourceAnchor: "Foundation A establishes the first step."
+    }, {
+      id: "foundation-b",
+      label: "Foundation B",
+      sourceId: "source-pdf",
+      sourcePage: 2,
+      sourceAnchor: "Foundation B establishes the second step."
+    }, {
+      id: "related",
+      label: "Related concept",
+      sourceId: "source-pdf",
+      sourcePage: 2,
+      sourceAnchor: "The related concept appears in the same example."
+    }, {
+      id: "other-page",
+      label: "Other page concept",
+      sourceId: "source-pdf",
+      sourcePage: 3,
+      sourceAnchor: "This concept appears only on another page."
+    }],
+    edges: [{ from: "target", to: "related", type: "related" }]
+  };
+  const composition = buildRecoveryComposition(model, "target");
+
+  assert.deepEqual(composition.directedPrerequisiteConceptIds, []);
+  assert.deepEqual(composition.sourceInferredPrerequisiteConceptIds, ["foundation-a", "foundation-b"]);
+  assert.deepEqual(composition.prerequisiteConceptIds, ["foundation-a", "foundation-b"]);
+  assert.equal(composition.sourceInferredPrerequisiteQuestionCount, 2);
+  assert.equal(composition.relatedQuestionCount, 0);
+  assert.equal(composition.extraTargetQuestionCount, 0);
+  assert.equal(composition.targetQuestionCount, 3);
+  assert.equal(composition.description, "Actual recovery composition: 3 target, 2 source-inferred prerequisite.");
+});
+
+test("directed recovery prerequisites use only prerequisite_of edges from source to target", {
   skip: recoveryCompositionSkip
 }, () => {
   const composition = buildRecoveryComposition(makeRecoveryVisualModel([
@@ -742,7 +858,7 @@ const recoveryPromptSkip = typeof buildRecoveryComposition === "function" && typ
   ? false
   : "buildRecoveryComposition and buildRecoveryQuizPrompt must be exported from server.js";
 
-test("recovery prompt discloses the actual graph-backed composition", {
+test("recovery prompt discloses directed and source-inferred prerequisite bases", {
   skip: recoveryPromptSkip
 }, () => {
   const visualModel = makePhotosynthesisVisualModel();
@@ -758,7 +874,9 @@ test("recovery prompt discloses the actual graph-backed composition", {
   });
 
   assert.match(prompt, new RegExp(`Actual composition disclosure: ${recoveryComposition.description.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
-  assert.match(prompt, /prerequisite_of edge pointing from that concept to glucose/);
+  assert.match(prompt, /directed prerequisite concepts from prerequisite_of edges/);
+  assert.match(prompt, /source-inferred prerequisite concepts whose evidence co-occurs with the target/);
+  assert.match(prompt, /do not claim a stored edge/);
 });
 
 test("condensed quiz prompts keep note evidence and concept IDs but omit an unrelated raw-text tail", () => {
@@ -805,11 +923,18 @@ test("retry correction names concept, grounding, count, and collection-coverage 
 test("notes and quiz-only schemas keep the two generated artifacts separate", () => {
   const notesSchema = getResponseSchema("study_notes");
   const quizOnlySchema = getResponseSchema("quiz_only");
+  const groundingVerificationSchema = getResponseSchema("quiz_grounding_verification");
   const legacySchema = getResponseSchema("quiz_session");
   assert.equal("questions" in notesSchema.properties, false);
   assert.equal("summary" in quizOnlySchema.properties, false);
   assert.equal("visualLesson" in quizOnlySchema.properties, false);
   assert.ok(quizOnlySchema.properties.questions);
+  assert.deepEqual(groundingVerificationSchema.required, ["checks"]);
+  assert.equal(groundingVerificationSchema.properties.checks.maxItems, 15);
+  assert.deepEqual(
+    groundingVerificationSchema.properties.checks.items.required,
+    ["questionIndex", "supported", "reason"]
+  );
   assert.ok(legacySchema.properties.summary);
   assert.ok(legacySchema.properties.visualLesson);
   assert.ok(legacySchema.properties.questions);

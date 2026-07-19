@@ -8,7 +8,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "u
 const backgroundSource = fs.readFileSync(path.join(root, "background.js"), "utf8");
 
 test("manifest exposes a Chrome 116 global side panel instead of a temporary action popup", () => {
-  assert.equal(manifest.version, "0.6.0");
+  assert.equal(manifest.version, "0.7.0");
   assert.ok(Number.parseInt(manifest.minimum_chrome_version, 10) >= 116);
   assert.equal(manifest.side_panel?.default_path, "popup.html");
   assert.ok(manifest.permissions.includes("sidePanel"));

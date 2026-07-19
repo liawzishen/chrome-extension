@@ -35,7 +35,7 @@ function createLocalQuizHarness() {
     ${sourceBetween("const STOP_WORDS = new Set([", "const state = {")}
     ${sourceBetween("const QUIZ_GROUNDING_STOP_WORDS = new Set([", "function validateGeneratedQuiz(")}
     ${sourceBetween("function isLocalBoilerplateText(value)", "function hasChromeTabs()")}
-    return { normalizeText, getSentences, getImportantTerms, buildSummary, buildConceptQuestions, hasWholeWord, makeConceptLabel, assertQuizGroundedInSource };
+    return { normalizeText, getSentences, getImportantTerms, buildSummary, buildConceptQuestions, hasWholeWord, makeConceptLabel, isQuizAnswerSupported, assertQuizGroundedInSource };
   })()`, {
     crypto: { randomUUID: crypto.randomUUID }
   });
@@ -94,9 +94,18 @@ test("local concept labels collapse repeated phrase fragments", () => {
   );
 });
 
+test("client grounding does not auto-pass unsupported generic answer words", () => {
+  const harness = createLocalQuizHarness();
+  const evidence = "Photosynthesis converts light energy into chemical energy stored in glucose.";
+  assert.equal(harness.isQuizAnswerSupported(photosynthesisSource, evidence, "Glucose"), true);
+  assert.equal(harness.isQuizAnswerSupported(photosynthesisSource, evidence, "Higher"), false);
+  assert.equal(harness.isQuizAnswerSupported(photosynthesisSource, evidence, "True"), false);
+});
+
 test("the quiz service boundary rejects partial and ungrounded responses", async () => {
   let responseQuestions = 4;
   let contaminated = false;
+  let semanticVerified = true;
   const quizId = "quiz-service-boundary";
   const groundedQuestion = (index) => ({
     id: `${quizId}-q-${String(index + 1).padStart(3, "0")}`,
@@ -123,6 +132,13 @@ test("the quiz service boundary rejects partial and ungrounded responses", async
       ok: true,
       json: async () => ({
         quizId,
+        groundingVerification: semanticVerified ? {
+          lexical: "passed",
+          semantic: "passed",
+          checkedAnswers: responseQuestions,
+          provider: "openai",
+          model: "test-model"
+        } : undefined,
         questions: Array.from(
           { length: responseQuestions },
           (_, index) => contaminated ? contaminatedQuestion(index) : groundedQuestion(index)
@@ -153,6 +169,13 @@ test("the quiz service boundary rejects partial and ungrounded responses", async
   const result = await harness.generateQuizWithBackend("https://example.test/api/quiz", input, {});
   assert.equal(result.questions.length, 5);
 
+  semanticVerified = false;
+  await assert.rejects(
+    harness.generateQuizWithBackend("https://example.test/api/quiz", input, {}),
+    /did not provide semantic grounding verification for every quiz answer/i
+  );
+
+  semanticVerified = true;
   contaminated = true;
   await assert.rejects(
     harness.generateQuizWithBackend("https://example.test/api/quiz", input, {}),

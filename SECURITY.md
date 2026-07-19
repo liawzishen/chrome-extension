@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Security fixes are applied to the latest `0.6.x` release line. Update to the newest release before reporting an issue that may already be fixed.
+Security fixes are applied to the latest `0.7.x` release line. Update to the newest release before reporting an issue that may already be fixed.
 
 ## Report a vulnerability privately
 

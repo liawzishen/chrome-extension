@@ -1,11 +1,12 @@
 const STORAGE = {
   journey: "examCramLearningJourney",
   focus: "examCramFocusState",
-  chapterFocus: "examCramChapterFocusState",
   sessions: "examCramSessions",
   sessionDraft: "examCramSessionDraft",
   pendingChapterAction: "examCramPendingChapterAction"
 };
+
+const STUDY_RAIL_COLLAPSED_KEY = "examCramForestStudyRailCollapsed";
 
 const page = {
   root: document.getElementById("learningForest"),
@@ -34,22 +35,14 @@ const page = {
   summary: document.getElementById("pageJourneySummary"),
   createNote: document.getElementById("pageCreateNoteButton"),
   createNoteHelp: document.getElementById("pageCreateNoteHelp"),
-  chapterFocusPanel: document.getElementById("chapterFocusPanel"),
-  chapterFocusStatus: document.getElementById("chapterFocusStatus"),
-  chapterFocusTotal: document.getElementById("chapterFocusTotal"),
-  chapterFocusCurrent: document.getElementById("chapterFocusCurrent"),
-  chapterFocusSession: document.getElementById("chapterFocusSession"),
-  chapterFocusStudied: document.getElementById("chapterFocusStudied"),
-  chapterFocusMessage: document.getElementById("chapterFocusMessage"),
-  startChapterFocus: document.getElementById("startChapterFocus"),
-  pauseChapterFocus: document.getElementById("pauseChapterFocus"),
-  resumeChapterFocus: document.getElementById("resumeChapterFocus"),
+  studyRail: document.getElementById("forestStudyRail"),
+  closeStudyRail: document.getElementById("closeStudyRail"),
+  openStudyRail: document.getElementById("openStudyRail"),
   learningOutline: document.getElementById("learningOutline")
 };
 
 let journey = globalThis.ExamCramJourney.createJourney();
 let focusState = globalThis.ExamCramFocus?.createDefaultFocusState?.() || {};
-let chapterFocusState = globalThis.ExamCramFocus?.createDefaultChapterFocusState?.() || {};
 let savedArtifacts = [];
 let forestRecords = [];
 let selectedChapterId = "";
@@ -57,28 +50,27 @@ let selectedVisualNoteId = "";
 let forestMode = "loading";
 let drawerReturnFocus = null;
 let motionPaused = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-const chapterFocusOwnerId = globalThis.crypto?.randomUUID?.() || `journey-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-let chapterFocusRenderTimer = null;
-let lastChapterFocusActivitySentAt = 0;
+let focusMetricsTimer = null;
+let studyRailCollapsed = readStoredStudyRailCollapsed();
 
 const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
   onSelectTree({ treeId }) {
     selectedChapterId = treeId;
     selectedVisualNoteId = "";
     renderDetails();
+    renderStudyRail();
     openDrawer("chapter");
-    void selectChapterForFocus(treeId);
   },
   onSelectVisualNote({ treeId, artifactId }) {
     rememberDrawerReturnFocus();
     selectedChapterId = treeId;
     selectedVisualNoteId = artifactId;
     renderDetails();
+    renderStudyRail();
     openDrawer("chapter");
     page.drawer.scrollTop = 0;
     page.drawer.focus({ preventScroll: true });
     requestAnimationFrame(revealSelectedVisualNoteMessage);
-    void selectChapterForFocus(treeId);
   },
   onModeChange({ mode, treeId }) {
     forestMode = mode;
@@ -117,15 +109,11 @@ page.motion.addEventListener("click", () => {
 });
 page.chapterTab.addEventListener("click", () => setDrawerTab("chapter"));
 page.summaryTab.addEventListener("click", () => setDrawerTab("summary"));
-page.startChapterFocus?.addEventListener("click", () => void startSelectedChapterFocus("start"));
-page.pauseChapterFocus?.addEventListener("click", () => void pauseSelectedChapterFocus("paused"));
-page.resumeChapterFocus?.addEventListener("click", () => void startSelectedChapterFocus("resume"));
+page.closeStudyRail?.addEventListener("click", () => setStudyRailCollapsed(true));
+page.openStudyRail?.addEventListener("click", () => setStudyRailCollapsed(false));
+applyStudyRailState();
 window.addEventListener("beforeunload", handleBeforeUnload, { once: true });
 window.addEventListener("keydown", handlePageKeyDown);
-document.addEventListener("visibilitychange", handleChapterFocusVisibilityChange);
-["pointerdown", "keydown", "wheel", "touchstart"].forEach((eventName) => {
-  document.addEventListener(eventName, handleChapterFocusActivity, { passive: true });
-});
 
 if (globalThis.chrome?.storage?.onChanged) {
   globalThis.chrome.storage.onChanged.addListener(handleStorageChanged);
@@ -136,17 +124,15 @@ void load();
 async function load() {
   setLoadState("loading", "Loading your learning forest...");
   try {
-    const [storedJourney, storedFocus, storedChapterFocus, storedArtifacts] = await Promise.all([
+    const [storedJourney, storedFocus, storedArtifacts] = await Promise.all([
       getStorage(STORAGE.journey, null),
       getStorage(STORAGE.focus, null),
-      getStorage(STORAGE.chapterFocus, null),
       getStorage(STORAGE.sessions, [])
     ]);
     journey = globalThis.ExamCramJourney.normalizeJourney(
       storedJourney || globalThis.ExamCramJourney.createJourney()
     );
     focusState = storedFocus || {};
-    chapterFocusState = globalThis.ExamCramFocus?.normalizeChapterFocusState?.(storedChapterFocus) || storedChapterFocus || {};
     savedArtifacts = normalizeSavedArtifacts(storedArtifacts);
     if (journey.summary?.range && page.range.querySelector(`option[value="${journey.summary.range}"]`)) {
       page.range.value = journey.summary.range;
@@ -160,76 +146,63 @@ async function load() {
 }
 
 function renderHeaderMetrics() {
-  const history = Array.isArray(focusState?.history) ? focusState.history : [];
-  const metrics = globalThis.ExamCramJourney.getMetrics(journey, history);
+  const liveFocus = getLiveFocusMetrics(focusState, Date.now());
+  const metrics = globalThis.ExamCramJourney.getMetrics(journey, liveFocus.history);
   page.title.textContent = journey.title;
   page.progress.textContent = `${metrics.progressPercent}%`;
-  page.focus.textContent = `${metrics.focusMinutes}m`;
+  page.focus.textContent = `${metrics.focusMinutes + liveFocus.activeMinutes}m`;
+  scheduleFocusMetricsRender(liveFocus.active);
+}
+
+function getLiveFocusMetrics(stateValue, now = Date.now()) {
+  const focusApi = globalThis.ExamCramFocus;
+  const reconciled = focusApi?.reconcileFocusState ? focusApi.reconcileFocusState(stateValue, now).state : null;
+  const history = Array.isArray(reconciled?.history)
+    ? reconciled.history
+    : Array.isArray(stateValue?.history) ? stateValue.history : [];
+  const active = Boolean(reconciled?.active && reconciled.startedAt !== null);
+  const activeMs = active ? Math.max(0, Math.min(now, reconciled.endsAt ?? now) - reconciled.startedAt) : 0;
+  return { active, history, activeMinutes: Math.floor(activeMs / 60000) };
+}
+
+function scheduleFocusMetricsRender(active) {
+  if (!active) {
+    if (focusMetricsTimer) clearInterval(focusMetricsTimer);
+    focusMetricsTimer = null;
+    return;
+  }
+  if (focusMetricsTimer) return;
+  focusMetricsTimer = setInterval(renderHeaderMetrics, 30000);
 }
 
 function renderStudyRail() {
-  renderChapterFocusPanel();
   renderLearningOutline();
 }
 
-function renderChapterFocusPanel() {
-  if (!page.chapterFocusPanel || !globalThis.ExamCramFocus) return;
-  chapterFocusState = globalThis.ExamCramFocus.normalizeChapterFocusState(chapterFocusState, Date.now());
-  const selectedChapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
-  const active = Boolean(chapterFocusState.active);
-  const ownedHere = active && chapterFocusState.ownerId === chapterFocusOwnerId;
-  const canResume = !active && chapterFocusState.status === "paused"
-    && chapterFocusState.chapterId === selectedChapter?.id;
-  const sessionMs = active
-    ? globalThis.ExamCramFocus.getChapterFocusElapsedMs(chapterFocusState, Date.now())
-    : canResume ? chapterFocusState.lastSessionDurationMs || 0 : 0;
-  const totalMs = globalThis.ExamCramFocus.getTotalChapterFocusedMs(chapterFocusState, Date.now());
-  const studiedCount = Object.values(chapterFocusState.chapterTotals || {}).filter((duration) => Number(duration) > 0).length
-    + (active && !(chapterFocusState.chapterTotals?.[chapterFocusState.chapterId] > 0) ? 1 : 0);
-  page.chapterFocusStatus.textContent = active
-    ? ownedHere ? "Running" : "Running in another tab"
-    : canResume ? "Paused" : "Not running";
-  page.chapterFocusStatus.dataset.state = active ? "running" : canResume ? "paused" : "idle";
-  page.chapterFocusTotal.textContent = formatFocusedDuration(totalMs);
-  page.chapterFocusCurrent.textContent = active
-    ? chapterFocusState.chapterTitle || "Current chapter"
-    : selectedChapter?.importedChapterTitle || selectedChapter?.title || "Choose a chapter";
-  page.chapterFocusSession.textContent = formatTimerDuration(sessionMs);
-  page.chapterFocusStudied.textContent = String(studiedCount);
-  page.startChapterFocus.hidden = active && ownedHere || canResume;
-  page.startChapterFocus.disabled = !selectedChapter;
-  page.startChapterFocus.textContent = active && !ownedHere ? "Start here" : "Start";
-  page.pauseChapterFocus.hidden = !ownedHere;
-  page.resumeChapterFocus.hidden = !canResume;
-  page.chapterFocusMessage.textContent = active
-    ? ownedHere
-      ? "Timing this chapter. Switching chapters, hiding this page, or being inactive pauses it automatically."
-      : "One chapter timer is already running in another Learning Tree tab. Start here only if you want to transfer it."
-    : canResume
-      ? "This chapter timer is paused. Resume when you continue studying."
-      : selectedChapter
-        ? "Ready to record focused study time for this chapter."
-        : "Select a chapter in the outline, then start when you begin studying.";
-  scheduleChapterFocusRender(active);
+function readStoredStudyRailCollapsed() {
+  try {
+    return localStorage.getItem(STUDY_RAIL_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
-function scheduleChapterFocusRender(active) {
-  if (!active) {
-    if (chapterFocusRenderTimer) clearInterval(chapterFocusRenderTimer);
-    chapterFocusRenderTimer = null;
-    return;
+function setStudyRailCollapsed(collapsed) {
+  studyRailCollapsed = Boolean(collapsed);
+  try {
+    localStorage.setItem(STUDY_RAIL_COLLAPSED_KEY, studyRailCollapsed ? "1" : "0");
+  } catch {
+    // The outline still toggles for this visit when the preference cannot persist.
   }
-  if (chapterFocusRenderTimer) return;
-  chapterFocusRenderTimer = setInterval(() => {
-    const reconciled = globalThis.ExamCramFocus.reconcileChapterFocusState(chapterFocusState, Date.now());
-    if (reconciled.changed) {
-      chapterFocusState = reconciled.state;
-      void pauseSelectedChapterFocus("inactive");
-      return;
-    }
-    renderChapterFocusPanel();
-    renderLearningOutline();
-  }, 1000);
+  applyStudyRailState();
+  const target = studyRailCollapsed ? page.openStudyRail : page.closeStudyRail;
+  target?.focus({ preventScroll: true });
+}
+
+function applyStudyRailState() {
+  if (!page.studyRail || !page.openStudyRail) return;
+  page.studyRail.hidden = studyRailCollapsed;
+  page.openStudyRail.hidden = !studyRailCollapsed;
 }
 
 function renderLearningOutline() {
@@ -282,10 +255,9 @@ function renderOutlineChapterNode(chapter) {
   const title = chapter.importedChapterTitle || chapter.title;
   const status = getChapterWorkspaceStatus(chapter);
   const progress = getChapterWorkspaceProgress(chapter);
-  const focusedMs = globalThis.ExamCramFocus?.getChapterFocusedMs?.(chapterFocusState, chapter.id, Date.now()) || 0;
   button.append(
     createText("strong", title),
-    createText("span", `${status} \u00b7 ${progress}% \u00b7 ${formatFocusedDuration(focusedMs)} focused`)
+    createText("span", `${status} \u00b7 ${progress}%`)
   );
   if (chapter.pageStart) {
     button.append(createText("small", `Pages ${chapter.pageStart}${chapter.pageEnd > chapter.pageStart ? `\u2013${chapter.pageEnd}` : ""}`));
@@ -298,7 +270,6 @@ function renderOutlineChapterNode(chapter) {
     renderDetails();
     renderStudyRail();
     openDrawer("chapter");
-    void selectChapterForFocus(chapter.id);
   });
   return button;
 }
@@ -324,131 +295,6 @@ function getChapterWorkspaceProgress(chapter) {
   if (chapter?.resourceStatus === "generating") return 35;
   if (chapter?.resourceStatus === "failed" || chapter?.resourceStatus === "empty") return 10;
   return chapter?.sources?.length ? 20 : 0;
-}
-
-async function selectChapterForFocus(chapterId) {
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, chapterId);
-  if (!chapter) return;
-  try {
-    chapterFocusState = await sendChapterFocusMessage({
-      type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.SELECT,
-      chapterId: chapter.id,
-      chapterTitle: chapter.importedChapterTitle || chapter.title,
-      ownerId: chapterFocusOwnerId
-    });
-    renderStudyRail();
-  } catch (error) {
-    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not switch chapters.";
-  }
-}
-
-async function startSelectedChapterFocus(action) {
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
-  if (!chapter) {
-    page.chapterFocusMessage.textContent = "Choose a chapter before starting the timer.";
-    return;
-  }
-  try {
-    chapterFocusState = await sendChapterFocusMessage({
-      type: action === "resume"
-        ? globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.RESUME
-        : globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.START,
-      chapterId: chapter.id,
-      chapterTitle: chapter.importedChapterTitle || chapter.title,
-      ownerId: chapterFocusOwnerId
-    });
-    lastChapterFocusActivitySentAt = Date.now();
-    renderStudyRail();
-  } catch (error) {
-    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not start.";
-  }
-}
-
-async function pauseSelectedChapterFocus(outcome = "paused") {
-  try {
-    chapterFocusState = await sendChapterFocusMessage({
-      type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.PAUSE,
-      chapterId: chapterFocusState.chapterId,
-      ownerId: chapterFocusOwnerId,
-      outcome
-    });
-    renderStudyRail();
-  } catch (error) {
-    page.chapterFocusMessage.textContent = error?.message || "The chapter timer could not pause.";
-  }
-}
-
-function handleChapterFocusVisibilityChange() {
-  if (document.visibilityState === "hidden" && chapterFocusState.active
-    && chapterFocusState.ownerId === chapterFocusOwnerId) {
-    void pauseSelectedChapterFocus("hidden");
-  }
-}
-
-function handleChapterFocusActivity() {
-  const now = Date.now();
-  if (!chapterFocusState.active || chapterFocusState.ownerId !== chapterFocusOwnerId
-    || document.visibilityState === "hidden" || now - lastChapterFocusActivitySentAt < 15000) return;
-  lastChapterFocusActivitySentAt = now;
-  void sendChapterFocusMessage({
-    type: globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.ACTIVITY,
-    chapterId: chapterFocusState.chapterId,
-    ownerId: chapterFocusOwnerId
-  }).then((next) => {
-    chapterFocusState = next;
-  }).catch(() => {});
-}
-
-function sendChapterFocusMessage(message) {
-  if (globalThis.chrome?.runtime?.sendMessage) {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response) => {
-        const runtimeError = chrome.runtime?.lastError;
-        if (runtimeError) {
-          reject(new Error(runtimeError.message || "Could not contact the chapter timer."));
-          return;
-        }
-        if (!response?.ok) {
-          reject(new Error(response?.error?.message || "The chapter timer could not complete that action."));
-          return;
-        }
-        resolve(globalThis.ExamCramFocus.normalizeChapterFocusState(response.state, Date.now()));
-      });
-    });
-  }
-  return getStorage(STORAGE.chapterFocus, null).then(async (stored) => {
-    const now = Date.now();
-    let next = globalThis.ExamCramFocus.reconcileChapterFocusState(stored, now).state;
-    const input = { ...message, ownerTabId: null };
-    if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.SELECT) {
-      next = globalThis.ExamCramFocus.selectChapterFocusState(next, input, now);
-    } else if ([globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.START, globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.RESUME].includes(message.type)) {
-      next = globalThis.ExamCramFocus.startChapterFocusState(next, input, now, globalThis.crypto?.randomUUID?.() || `focus-${now}`);
-    } else if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.PAUSE) {
-      next = globalThis.ExamCramFocus.pauseChapterFocusState(next, now, message.outcome || "paused");
-    } else if (message.type === globalThis.ExamCramFocus.CHAPTER_MESSAGE_TYPES.ACTIVITY) {
-      next = globalThis.ExamCramFocus.recordChapterFocusActivity(next, input, now);
-    }
-    await setStorage(STORAGE.chapterFocus, next);
-    return next;
-  });
-}
-
-function formatTimerDuration(value) {
-  const seconds = Math.max(0, Math.floor((Number(value) || 0) / 1000));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const remainder = seconds % 60;
-  return hours
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
-    : `${minutes}:${String(remainder).padStart(2, "0")}`;
-}
-
-function formatFocusedDuration(value) {
-  const minutes = Math.floor(Math.max(0, Number(value) || 0) / 60000);
-  if (minutes < 1) return "0m";
-  const hours = Math.floor(minutes / 60);
-  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
 function formatFileSize(value) {
@@ -503,8 +349,8 @@ function renderFallback() {
       selectedVisualNoteId = "";
       if (forestController.isWebGLAvailable) forestController.focusTree(record.id);
       renderDetails();
+      renderStudyRail();
       openDrawer("chapter");
-      void selectChapterForFocus(record.id);
     });
     return button;
   }));
@@ -712,7 +558,8 @@ function renderInspector() {
     .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
       - globalThis.ExamCramJourney.sessionActivityTime(first))[0];
   const latestScore = latestSubmittedQuiz?.score ?? null;
-  const weakTopics = [...new Set(chapter.sessions.flatMap((session) => session.weakTopics || []))].slice(0, 6);
+  const weakTopics = getChapterWeakConceptLabels(chapter, journey.learningMemory);
+  const weakTopicSummary = weakTopics.slice(0, 6);
   const header = document.createElement("div");
   header.className = "inspector-header";
   const headerCopy = document.createElement("div");
@@ -728,7 +575,9 @@ function renderInspector() {
   evidence.append(
     evidenceItem("Latest score", latestScore == null ? "Not submitted" : `${latestScore}%`),
     evidenceItem("Study sessions", String(chapter.sessions.length)),
-    evidenceItem("Weak topics", weakTopics.length ? weakTopics.join(", ") : "None recorded")
+    evidenceItem("Weak topics", weakTopicSummary.length
+      ? `${weakTopicSummary.join(", ")}${weakTopics.length > weakTopicSummary.length ? ` +${weakTopics.length - weakTopicSummary.length} more` : ""}`
+      : "None recorded")
   );
 
   const visualNotes = document.createElement("section");
@@ -798,7 +647,104 @@ function renderInspector() {
     artifacts,
     sources: chapter.sources.length ? sources : null
   });
-  page.inspector.replaceChildren(header, workspace);
+  const exploreFurther = renderExploreFurther(chapter, weakTopics);
+  page.inspector.replaceChildren(header, workspace, ...(exploreFurther ? [exploreFurther] : []));
+}
+
+function normalizeExternalConceptLabel(value) {
+  return String(value || "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function getChapterWeakConceptLabels(chapter, learningMemory = {}) {
+  const noteIds = new Set((Array.isArray(chapter?.sessions) ? chapter.sessions : [])
+    .flatMap((session) => [session?.id, session?.noteId, session?.artifactId])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean));
+  const labels = [
+    ...(Array.isArray(chapter?.sessions) ? chapter.sessions : [])
+      .flatMap((session) => Array.isArray(session?.weakTopics) ? session.weakTopics : []),
+    ...(Array.isArray(learningMemory?.concepts) ? learningMemory.concepts : [])
+      .filter((concept) => concept?.state === "weak" && noteIds.has(String(concept?.noteId || "")))
+      .map((concept) => concept.conceptLabel || concept.conceptId)
+  ];
+  const seen = new Set();
+  return labels
+    .map(normalizeExternalConceptLabel)
+    .filter((label) => {
+      const key = label.toLocaleLowerCase();
+      if (!label || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function buildExternalStudySuggestions(conceptLabel) {
+  const concept = normalizeExternalConceptLabel(conceptLabel);
+  if (!concept) return [];
+  const query = encodeURIComponent(concept);
+  return [
+    {
+      provider: "Khan Academy",
+      description: "Lessons and practice results for this concept.",
+      url: `https://www.khanacademy.org/search?page_search_query=${query}`
+    },
+    {
+      provider: "Wikipedia",
+      description: "An overview with references for further reading.",
+      url: `https://en.wikipedia.org/w/index.php?search=${query}`
+    }
+  ];
+}
+
+function renderExploreFurther(chapter, weakTopics) {
+  if (!weakTopics.length) return null;
+  const section = document.createElement("section");
+  section.className = "external-study-suggestions";
+  section.dataset.contentOrigin = "external-unverified";
+  section.setAttribute("aria-label", "External study suggestions");
+
+  const disclosure = document.createElement("details");
+  disclosure.className = "external-study-suggestions__disclosure";
+  disclosure.append(createText("summary", "Explore further (external)", "external-study-suggestions__summary"));
+  const body = document.createElement("div");
+  body.className = "external-study-suggestions__body";
+  body.append(
+    createText("span", "Optional external resources", "external-study-suggestions__eyebrow"),
+    createText("p", "These suggestions are not evidence-checked and never mix with saved evidence. Review an opened page, then explicitly save it to this chapter so its content enters the grounded loop.", "external-study-suggestions__notice")
+  );
+
+  weakTopics.forEach((concept) => {
+    const conceptGroup = document.createElement("section");
+    conceptGroup.className = "external-study-concept";
+    conceptGroup.append(createText("h3", concept));
+    const list = document.createElement("div");
+    list.className = "external-study-concept__list";
+    buildExternalStudySuggestions(concept).forEach((suggestion) => {
+      const item = document.createElement("article");
+      item.className = "external-study-card";
+      const copy = document.createElement("div");
+      copy.append(
+        createText("strong", suggestion.provider),
+        createText("p", suggestion.description)
+      );
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = "Open and prepare to save";
+      open.setAttribute("aria-label", `Open ${suggestion.provider} results for ${concept} and prepare to save the page to ${chapter.title}`);
+      open.addEventListener("click", () => void openExternalStudySuggestion(chapter, concept, suggestion, open));
+      item.append(copy, open);
+      list.append(item);
+    });
+    conceptGroup.append(list);
+    body.append(conceptGroup);
+  });
+  disclosure.append(body);
+  section.append(disclosure);
+  return section;
 }
 
 function renderChapterWorkspace(chapter, record, sections) {
@@ -1154,13 +1100,6 @@ function handleStorageChanged(changes, area) {
     focusState = changes[STORAGE.focus].newValue || {};
     metricsChanged = true;
   }
-  if (changes[STORAGE.chapterFocus]) {
-    chapterFocusState = globalThis.ExamCramFocus.normalizeChapterFocusState(
-      changes[STORAGE.chapterFocus].newValue,
-      Date.now()
-    );
-    renderStudyRail();
-  }
   if (changes[STORAGE.sessions]) {
     savedArtifacts = normalizeSavedArtifacts(changes[STORAGE.sessions].newValue);
     shouldRender = true;
@@ -1171,11 +1110,7 @@ function handleStorageChanged(changes, area) {
 
 function handleBeforeUnload() {
   window.removeEventListener("keydown", handlePageKeyDown);
-  document.removeEventListener("visibilitychange", handleChapterFocusVisibilityChange);
-  ["pointerdown", "keydown", "wheel", "touchstart"].forEach((eventName) => {
-    document.removeEventListener(eventName, handleChapterFocusActivity);
-  });
-  if (chapterFocusRenderTimer) clearInterval(chapterFocusRenderTimer);
+  if (focusMetricsTimer) clearInterval(focusMetricsTimer);
   globalThis.chrome?.storage?.onChanged?.removeListener?.(handleStorageChanged);
   forestController.destroy();
 }
@@ -1434,6 +1369,38 @@ async function openSource(url) {
   }
   if (globalThis.chrome?.tabs?.create) await globalThis.chrome.tabs.create({ url: safeUrl });
   else window.open(safeUrl, "_blank", "noopener");
+}
+
+async function openExternalStudySuggestion(chapter, concept, suggestion, button) {
+  const safeUrl = normalizeSafeExternalUrl(suggestion?.url);
+  if (!safeUrl) {
+    setArtifactStatus("This external suggestion is not a safe HTTP or HTTPS URL.", true);
+    return;
+  }
+  if (button) button.disabled = true;
+  const sidePanelOpen = globalThis.chrome?.sidePanel?.open ? openSidePanelFromGesture() : null;
+  try {
+    if (!globalThis.chrome?.tabs?.create) {
+      window.open(safeUrl, "_blank", "noopener");
+      setArtifactStatus("External page opened. In the installed extension, open Exam-Cram on that page and choose Save source to chapter.");
+      return;
+    }
+    await globalThis.chrome.tabs.create({ url: safeUrl, active: true });
+    await setStorage(STORAGE.pendingChapterAction, {
+      id: globalThis.crypto?.randomUUID?.() || `external-source-${Date.now()}`,
+      chapterId: chapter.id,
+      action: "save-external-source",
+      concept: normalizeExternalConceptLabel(concept),
+      expectedUrl: safeUrl,
+      requestedAt: Date.now()
+    });
+    if (sidePanelOpen) await sidePanelOpen;
+    setArtifactStatus(`Opened an external ${suggestion.provider} page. Review it before saving it to ${chapter.title}.`);
+  } catch (error) {
+    setArtifactStatus(error?.message || "The external study suggestion could not be opened.", true);
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function normalizeSafeExternalUrl(value) {
