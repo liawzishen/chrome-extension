@@ -1575,3 +1575,21 @@
     box-shadow: none;
   }
 }
+
+.vintage-planner--panel .dashboard__stat {
+  border-color: var(--planner-brass-soft);
+}
+
+.vintage-planner--panel .dashboard__stat::before {
+  border-color: rgba(74, 49, 28, 0.5);
+  border-radius: calc(var(--planner-radius-card) - 4px);
+}
+
+.vintage-planner--panel .dashboard__stat .dashboard__stat-value,
+.vintage-planner--panel .dashboard__stat-icon {
+  color: var(--planner-ink, #30261e);
+}
+
+.vintage-planner--panel .dashboard__stat-unit {
+  color: var(--planner-ink-soft, #655442);
+}

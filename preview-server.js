@@ -14,6 +14,7 @@ const FILES = new Map([
   ["/assets/page-actions/from-page.png", "assets/page-actions/from-page.png"],
   ["/assets/page-actions/from-video.png", "assets/page-actions/from-video.png"],
   ["/assets/page-actions/import-files.png", "assets/page-actions/import-files.png"],
+  ["/assets/page-actions/paste-notes.png", "assets/page-actions/paste-notes.png"],
   ["/assets/page-actions/save-source.png", "assets/page-actions/save-source.png"],
   ["/assets/journey/hourglass-progress-cropped.png", "assets/journey/hourglass-progress-cropped.png"],
   ["/assets/journey/hourglass-average-cropped.png", "assets/journey/hourglass-average-cropped.png"],

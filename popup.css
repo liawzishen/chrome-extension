@@ -3583,6 +3583,91 @@ menu .primary {
   line-height: 1.2;
 }
 
+.dashboard__stat {
+  position: relative;
+  align-content: start;
+}
+
+.dashboard__stat::before {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border: 1px solid color-mix(in srgb, #4a311c 46%, transparent);
+  border-radius: calc(var(--ui-radius-card) - 4px);
+  pointer-events: none;
+}
+
+.dashboard__stat-figure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 6px 4px;
+}
+
+.dashboard__stat[data-stat="due"] .dashboard__stat-figure {
+  justify-content: flex-start;
+  gap: 18px;
+}
+
+.dashboard__stat-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 46px;
+  color: #3a2c1c;
+}
+
+.dashboard__stat-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+.dashboard__stat-reading {
+  display: grid;
+  justify-items: center;
+  line-height: 1;
+}
+
+.dashboard__stat .dashboard__stat-value {
+  overflow-wrap: normal;
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1.05;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dashboard__stat-unit {
+  font-family: Georgia, Cambria, "Times New Roman", serif;
+  font-size: 13px;
+  color: #655442;
+}
+
+.dashboard__stat-icon--flame[data-streak-tier="0"] {
+  opacity: 0.72;
+}
+
+.dashboard__stat-icon--flame[data-streak-tier="2"] svg path:nth-of-type(2),
+.dashboard__stat-icon--flame[data-streak-tier="3"] svg path:nth-of-type(2),
+.dashboard__stat-icon--flame[data-streak-tier="4"] svg path:nth-of-type(2) {
+  fill: currentColor;
+  fill-opacity: 0.35;
+}
+
+.dashboard__stat-icon--flame[data-streak-tier="3"] svg path:nth-of-type(2) {
+  fill-opacity: 0.55;
+}
+
+.dashboard__stat-icon--flame[data-streak-tier="4"] svg path:nth-of-type(2) {
+  fill-opacity: 0.72;
+}
+
+.dashboard__stat-icon--flame[data-streak-tier="4"] svg {
+  filter: drop-shadow(0 0 3px rgba(178, 58, 37, 0.45));
+}
+
 .dashboard__chapter-chip {
   align-self: center;
   min-height: 32px;
@@ -3967,7 +4052,7 @@ menu .primary {
 }
 
 .journey-hourglass.is-flowing .journey-hourglass__sand {
-  animation: journey-sand-grain-flow 1.7s linear infinite;
+  animation: journey-sand-grain-flow var(--journey-grain-duration, 1.7s) linear infinite;
 }
 
 .journey-hourglass.is-waiting .journey-hourglass__sand {
@@ -3977,7 +4062,7 @@ menu .primary {
 .journey-hourglass__stream {
   position: absolute;
   z-index: 2;
-  width: 5px;
+  width: calc(5px * var(--journey-stream-scale, 1));
   border-radius: 999px;
   background-color: var(--journey-sand-color);
   background-position: center 0;
@@ -3997,7 +4082,7 @@ menu .primary {
 }
 
 .journey-hourglass.is-flowing .journey-hourglass__stream {
-  animation: journey-sand-stream 1.25s ease-in-out infinite;
+  animation: journey-sand-stream var(--journey-flow-duration, 1.25s) ease-in-out infinite;
 }
 
 .journey-hourglass--progress .journey-hourglass__stream {
@@ -4009,7 +4094,7 @@ menu .primary {
 .journey-hourglass--average .journey-hourglass__stream {
   top: 46.8%;
   left: 49.2%;
-  width: 4px;
+  width: calc(4px * var(--journey-stream-scale, 1));
   height: 8.8%;
 }
 
@@ -4148,6 +4233,295 @@ menu .primary {
   #journeyView .journey-metric--focus .journey-metric__visual,
   #journeyView .journey-metric--focus .journey-metric__art {
     width: 162px;
+  }
+}
+
+@property --journey-focus-sweep {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+.journey-hourglass.is-complete .journey-hourglass__sand {
+  animation: journey-sand-settled 2.6s ease-in-out 2;
+}
+
+@keyframes journey-sand-settled {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+
+  50% {
+    filter: brightness(1.14) saturate(1.12);
+  }
+}
+
+@property --journey-arc-sweep {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+.journey-instrument {
+  pointer-events: none;
+}
+
+.journey-instrument__engraving {
+  position: absolute;
+  inset: 0;
+}
+
+.journey-instrument__engraving svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.journey-arc {
+  position: relative;
+  width: 168px;
+  aspect-ratio: 1;
+  margin: 0 16px 12px 0;
+}
+
+.journey-arc::before {
+  content: "";
+  position: absolute;
+  inset: 22px;
+  border-radius: 50%;
+  background: conic-gradient(
+    from 225deg,
+    var(--journey-metric-color) 0deg var(--journey-arc-sweep, 0deg),
+    color-mix(in srgb, var(--journey-metric-color) 15%, transparent) var(--journey-arc-sweep, 0deg) 270deg,
+    transparent 270deg 360deg
+  );
+  transition: --journey-arc-sweep 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+  -webkit-mask-image: radial-gradient(closest-side, transparent calc(100% - 11px), #fff calc(100% - 10px));
+  mask-image: radial-gradient(closest-side, transparent calc(100% - 11px), #fff calc(100% - 10px));
+}
+
+.journey-arc__cap,
+.journey-arc__head {
+  position: absolute;
+  inset: 0;
+}
+
+.journey-arc__cap {
+  transform: rotate(225deg);
+}
+
+.journey-arc__head {
+  transform: rotate(calc(225deg + var(--journey-arc-sweep, 0deg)));
+  transition: transform 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.journey-arc__cap::after,
+.journey-arc__head::after {
+  content: "";
+  position: absolute;
+  top: 21px;
+  left: 50%;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+}
+
+.journey-arc__cap::after {
+  background: color-mix(in srgb, var(--journey-metric-color) 30%, var(--ui-surface, #fffdf8));
+}
+
+.journey-arc__head::after {
+  border: 2px solid var(--ui-surface, #fffdf8);
+  background: var(--journey-metric-color);
+  box-shadow: 0 1px 4px rgba(64, 44, 24, 0.35);
+}
+
+.journey-arc__needle {
+  position: absolute;
+  bottom: 50%;
+  left: 50%;
+  width: 5px;
+  height: 50px;
+  background: color-mix(in srgb, var(--journey-metric-color) 72%, #3a2c1c);
+  clip-path: polygon(50% 0, 100% 76%, 50% 100%, 0 76%);
+  transform-origin: 50% 100%;
+  transform: translateX(-50%) rotate(calc(225deg + var(--journey-arc-sweep, 0deg)));
+  transition: transform 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.journey-arc.is-complete::before {
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--journey-metric-color) 55%, transparent));
+}
+
+.journey-arc__mark {
+  position: absolute;
+  font-size: 0.6rem;
+  font-style: normal;
+  letter-spacing: 0.05em;
+  color: #90805f;
+}
+
+.journey-arc__mark--zero {
+  top: 68%;
+  left: 31%;
+  transform: translate(-50%, -50%);
+}
+
+.journey-arc__mark--half {
+  top: 25%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.journey-arc__mark--full {
+  top: 68%;
+  left: 69%;
+  transform: translate(-50%, -50%);
+}
+
+.journey-instrument--gauge {
+  position: relative;
+  width: 128px;
+  height: 74px;
+  margin-bottom: 14px;
+}
+
+.journey-gauge__dial {
+  position: absolute;
+  inset: 0;
+}
+
+.journey-gauge__dial svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.journey-gauge__needle {
+  position: absolute;
+  bottom: 9px;
+  left: 50%;
+  width: 5px;
+  height: 42px;
+  background: color-mix(in srgb, var(--journey-metric-color) 72%, #3a2c1c);
+  clip-path: polygon(50% 0, 92% 100%, 8% 100%);
+  transform-origin: 50% 100%;
+  transform: translateX(-50%) rotate(var(--journey-gauge-angle, -90deg));
+  transition: transform 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.journey-gauge__needle::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--ui-surface, #fff);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--journey-metric-color) 72%, #3a2c1c);
+  transform: translateX(-50%);
+}
+
+.journey-instrument--gauge.is-idle {
+  opacity: 0.45;
+}
+
+.journey-focus-dial {
+  position: relative;
+  width: 148px;
+  aspect-ratio: 1;
+  margin-bottom: 8px;
+  pointer-events: none;
+  transition: --journey-focus-sweep 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.journey-focus-dial::before {
+  content: "";
+  position: absolute;
+  top: 30px;
+  right: 26px;
+  bottom: 22px;
+  left: 26px;
+  border-radius: 50%;
+  background: conic-gradient(var(--journey-metric-color) var(--journey-focus-sweep, 0deg), color-mix(in srgb, var(--journey-metric-color) 13%, transparent) 0);
+  opacity: 0.9;
+  transition: --journey-focus-sweep 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+  -webkit-mask-image: radial-gradient(closest-side, transparent calc(100% - 11px), #fff calc(100% - 10px));
+  mask-image: radial-gradient(closest-side, transparent calc(100% - 11px), #fff calc(100% - 10px));
+}
+
+.journey-focus-dial__hand {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  width: 3px;
+  height: 34px;
+  background: color-mix(in srgb, var(--journey-metric-color) 72%, #3a2c1c);
+  clip-path: polygon(50% 0, 100% 88%, 50% 100%, 0 88%);
+  transform-origin: 50% 100%;
+  transform: translateX(-50%) rotate(var(--journey-focus-sweep, 0deg));
+  transition: transform 1150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.journey-focus-dial:not(.is-charged) {
+  opacity: 0.4;
+}
+
+.journey-metric--focus.is-session-live .journey-focus-dial {
+  opacity: 1;
+  animation: journey-dial-live 2.1s ease-in-out infinite;
+}
+
+.journey-metric--focus.is-session-live .journey-metric__label::after {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--journey-metric-color);
+  vertical-align: 1px;
+  animation: journey-dial-live 2.1s ease-in-out infinite;
+}
+
+.journey-metric--focus.is-session-break .journey-focus-dial {
+  filter: hue-rotate(140deg) saturate(0.85);
+}
+
+@keyframes journey-dial-live {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 2px color-mix(in srgb, var(--journey-metric-color) 40%, transparent));
+    opacity: 1;
+  }
+
+  50% {
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--journey-metric-color) 78%, transparent));
+    opacity: 0.82;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .journey-focus-dial,
+  .journey-focus-dial::before,
+  .journey-focus-dial__hand,
+  .journey-arc::before,
+  .journey-arc__head,
+  .journey-arc__needle,
+  .journey-gauge__needle {
+    transition: none;
+  }
+
+  .journey-hourglass.is-complete .journey-hourglass__sand {
+    animation: none;
+  }
+
+  .journey-metric--focus.is-session-live .journey-focus-dial,
+  .journey-metric--focus.is-session-live .journey-metric__label::after {
+    animation: none;
   }
 }
 

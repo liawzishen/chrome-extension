@@ -13,6 +13,7 @@ export const EXTENSION_FILES = Object.freeze([
   "assets/page-actions/from-page.png",
   "assets/page-actions/from-video.png",
   "assets/page-actions/import-files.png",
+  "assets/page-actions/paste-notes.png",
   "assets/page-actions/save-source.png",
   "cheat-sheet-utils.js",
   "document-reader-utils.js",

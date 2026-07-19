@@ -137,6 +137,139 @@ test("draft restore accepts only coherent quizzes and hides empty or unfinished 
   assert.ok(render.indexOf("renderQuiz(session)") < render.indexOf('elements.quizBlock.classList.remove("hidden")'));
 });
 
+test("quiz choices are shuffled for display while answers remain text keyed", () => {
+  const renderQuizSource = functionBody("function renderQuiz(session)", "async function revealHintWithSource(");
+
+  class FakeElement {
+    constructor(tagName) {
+      this.tagName = tagName;
+      this.children = [];
+      this.listeners = {};
+      this.attributes = {};
+      const classes = new Set();
+      this.classList = {
+        add: (...names) => names.forEach((name) => classes.add(name)),
+        remove: (...names) => names.forEach((name) => classes.delete(name)),
+        contains: (name) => classes.has(name)
+      };
+    }
+
+    append(...children) {
+      this.children.push(...children);
+    }
+
+    replaceChildren(...children) {
+      this.children = [...children];
+    }
+
+    setAttribute(name, value) {
+      this.attributes[name] = value;
+    }
+
+    addEventListener(type, listener) {
+      this.listeners[type] = listener;
+    }
+  }
+
+  const quizContainer = new FakeElement("section");
+  const scheduledSaves = [];
+  let progressUpdates = 0;
+  const context = {
+    document: {
+      createElement: (tagName) => new FakeElement(tagName),
+      createTextNode: (text) => ({ textContent: text })
+    },
+    elements: { quizContainer },
+    state: { currentSession: null },
+    createElement: (tagName, text, className = "") => {
+      const element = new FakeElement(tagName);
+      element.textContent = text;
+      element.className = className;
+      return element;
+    },
+    shuffle: (items) => [...items].reverse(),
+    scheduleCurrentSessionDraftSave: () => scheduledSaves.push("scheduled"),
+    updateQuizProgress: () => { progressUpdates += 1; },
+    revealHintWithSource: async () => {}
+  };
+  const renderQuiz = vm.runInNewContext(`(${renderQuizSource})`, context);
+  const session = {
+    answers: {},
+    questions: [{
+      id: "question-1",
+      prompt: "Choose the correct text.",
+      choices: ["A text", "B text", "C text", "D text"],
+      answer: "A text"
+    }]
+  };
+  context.state.currentSession = session;
+
+  renderQuiz(session);
+
+  const card = quizContainer.children[0];
+  const renderedInputs = card.children
+    .filter((child) => child?.tagName === "label")
+    .map((label) => label.children[0]);
+  assert.deepEqual(renderedInputs.map((input) => input.value), ["D text", "C text", "B text", "A text"]);
+  assert.deepEqual(session.questions[0].choices, ["A text", "B text", "C text", "D text"]);
+
+  renderedInputs[0].listeners.change();
+  assert.equal(session.answers["question-1"], "D text");
+  assert.equal(progressUpdates, 1);
+  assert.equal(scheduledSaves.length, 1);
+});
+
+test("quiz answer drafts use one trailing 400 ms save", async () => {
+  const draftSaveSource = functionBody(
+    "let currentSessionDraftSaveTimer",
+    "async function maybeRestoreSessionDraft()"
+  );
+  const timers = [];
+  const writes = [];
+  const context = {
+    setTimeout: (callback, delay) => {
+      const timer = { callback, delay, cleared: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer) => { timer.cleared = true; },
+    structuredClone,
+    state: {
+      currentSession: { id: "quiz-1", answers: { "question-1": "A text" }, sourceText: "source" },
+      currentArtifact: null,
+      currentExportItem: null,
+      submitted: false
+    },
+    sanitizeDraftArtifact: (artifact) => artifact,
+    STORAGE_KEYS: { sessionDraft: "sessionDraft" },
+    setStorage: async (key, value) => { writes.push({ key, value }); }
+  };
+  const harness = vm.runInNewContext(`(() => {
+    ${draftSaveSource}
+    return { scheduleCurrentSessionDraftSave, persistCurrentSessionDraft };
+  })()`, context);
+
+  harness.scheduleCurrentSessionDraftSave();
+  harness.scheduleCurrentSessionDraftSave();
+
+  assert.equal(timers.length, 2);
+  assert.equal(timers[0].cleared, true);
+  assert.equal(timers[1].delay, 400);
+  assert.equal(writes.length, 0);
+
+  timers[1].callback();
+  await Promise.resolve();
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].key, "sessionDraft");
+  assert.equal(writes[0].value.artifact.answers["question-1"], "A text");
+
+  harness.scheduleCurrentSessionDraftSave();
+  const pendingTimer = timers[2];
+  await harness.persistCurrentSessionDraft();
+  assert.equal(pendingTimer.cleared, true);
+  assert.equal(writes.length, 2);
+});
+
 test("Journey separates saved artifacts from deduplicated source snapshots", () => {
   assert.match(source, /Saved learning artifacts/);
   assert.match(source, /Saved source snapshots/);

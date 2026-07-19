@@ -8163,7 +8163,7 @@ function renderQuiz(session) {
     const title = createElement("p", `${index + 1}. ${question.prompt}`);
     card.append(badge, title);
 
-    question.choices.forEach((choice) => {
+    shuffle(question.choices).forEach((choice) => {
       const choiceId = `${question.id}-${choice}`;
       const label = document.createElement("label");
       label.className = "choice";
@@ -8177,7 +8177,7 @@ function renderQuiz(session) {
       input.addEventListener("change", () => {
         state.currentSession.answers[question.id] = choice;
         updateQuizProgress();
-        void persistCurrentSessionDraft();
+        scheduleCurrentSessionDraftSave();
       });
 
       label.append(input, document.createTextNode(choice));
@@ -9002,7 +9002,21 @@ async function handleExportPdf() {
   await handleOpenExport();
 }
 
+let currentSessionDraftSaveTimer = null;
+
+function scheduleCurrentSessionDraftSave(delayMs = 400) {
+  if (currentSessionDraftSaveTimer) clearTimeout(currentSessionDraftSaveTimer);
+  currentSessionDraftSaveTimer = setTimeout(() => {
+    currentSessionDraftSaveTimer = null;
+    void persistCurrentSessionDraft();
+  }, delayMs);
+}
+
 async function persistCurrentSessionDraft() {
+  if (currentSessionDraftSaveTimer) {
+    clearTimeout(currentSessionDraftSaveTimer);
+    currentSessionDraftSaveTimer = null;
+  }
   const currentArtifact = state.currentSession || state.currentArtifact || state.currentExportItem;
   if (!currentArtifact?.id) return false;
   try {
@@ -9361,13 +9375,89 @@ function renderDashboardGoalForm(journey, studyGoal) {
   updateChapterSelectionSlots();
 }
 
-function buildDashboardStat(label, value) {
+const DASHBOARD_STAT_ICONS = {
+  flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3c1.9 2.7 5 5 5 8.7A5.3 5.3 0 0 1 12 17a5.3 5.3 0 0 1-5-5.3C7 8 10.1 5.7 12 3z"></path><path d="M12 12.4c.9.9 1.6 1.8 1.6 2.9a1.8 1.8 0 0 1-3.2 1.1"></path><path d="M8 20.5h8"></path></svg>',
+  calendar: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="1.4"></rect><path d="M7 3.2v4.2M12 3.2v4.2M17 3.2v4.2"></path><path d="M3.5 10.5h17M3.5 15.5h17M7.8 10.5v10M12 10.5v10M16.2 10.5v10"></path></svg>',
+  scroll: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 4.5H17a2 2 0 0 1 2 2v11.2a1.8 1.8 0 1 1-3.6 0V6.3"></path><path d="M7.5 4.5a1.9 1.9 0 0 0-1.9 1.9v.9h3.8v-.9a1.9 1.9 0 0 0-1.9-1.9z"></path><path d="M9.4 7.3v10.4a1.8 1.8 0 0 0 1.8 1.8h4.5"></path><path d="M12 10.2h4M12 13h4M12 15.8h2.6"></path></svg>',
+  hourglass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="M6.5 3.5h11M6.5 20.5h11"></path><path d="M8 3.5c0 4.8 8 4.8 8 8.5s-8 3.7-8 8.5M16 3.5c0 4.8-8 4.8-8 8.5s8 3.7 8 8.5"></path></svg>'
+};
+
+function getStreakFlameTier(streakDays) {
+  if (streakDays >= 14) return 4;
+  if (streakDays >= 7) return 3;
+  if (streakDays >= 3) return 2;
+  if (streakDays >= 1) return 1;
+  return 0;
+}
+
+const STREAK_FLAME_COLORS = ["#a1937e", "#c99044", "#d97b35", "#cd5d2a", "#b23a25"];
+
+function buildStreakFlameIcon(streakDays) {
+  const tier = getStreakFlameTier(streakDays);
+  const icon = document.createElement("span");
+  icon.className = "dashboard__stat-icon dashboard__stat-icon--flame";
+  icon.dataset.streakTier = String(tier);
+  icon.style.color = STREAK_FLAME_COLORS[tier];
+  icon.innerHTML = DASHBOARD_STAT_ICONS.flame;
+  return icon;
+}
+
+function buildStreakCalendarIcon(journey, now = Date.now()) {
+  const journeyUtils = globalThis.ExamCramJourney;
+  const activeDays = new Set((journey?.events || []).map((event) => event?.localDay).filter(Boolean));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const todayKey = journeyUtils ? journeyUtils.localDayKey(new Date(now)) : "";
+  const weekdayIndex = (new Date(now).getDay() + 6) % 7;
+  const gridStart = now - (weekdayIndex + 14) * dayMs;
+  let cells = "";
+  for (let index = 0; index < 21; index++) {
+    const cellTime = gridStart + index * dayMs;
+    const key = journeyUtils ? journeyUtils.localDayKey(new Date(cellTime)) : "";
+    const x = 4.6 + (index % 7) * 2.13;
+    const y = 11.4 + Math.floor(index / 7) * 3.1;
+    const isFuture = cellTime > now;
+    if (key && key === todayKey) {
+      cells += `<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="1.7" height="2.4" rx="0.4" fill="none" stroke="currentColor" stroke-width="0.5"></rect>`;
+    }
+    if (!isFuture && key && activeDays.has(key)) {
+      cells += `<rect x="${(x + 0.25).toFixed(2)}" y="${(y + 0.3).toFixed(2)}" width="1.2" height="1.8" rx="0.3" fill="currentColor" stroke="none"></rect>`;
+    }
+  }
+  const icon = document.createElement("span");
+  icon.className = "dashboard__stat-icon dashboard__stat-icon--tail dashboard__stat-icon--calendar";
+  icon.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="15" rx="1.4"></rect><path d="M7 3.2v4.2M12 3.2v4.2M17 3.2v4.2"></path><path d="M3.5 9.8h17"></path><g stroke-width="0.5">${cells}</g></svg>`;
+  return icon;
+}
+
+function buildDashboardStat(label, value, options = {}) {
   const stat = document.createElement("div");
   stat.className = "dashboard__stat";
-  stat.append(
-    createElement("span", label, "dashboard__stat-label"),
-    createElement("strong", value, "dashboard__stat-value")
-  );
+  if (options.kind) stat.dataset.stat = options.kind;
+  stat.append(createElement("span", label, "dashboard__stat-label"));
+  const figure = document.createElement("span");
+  figure.className = "dashboard__stat-figure";
+  if (options.leadNode) {
+    figure.append(options.leadNode);
+  } else if (options.leadIcon && DASHBOARD_STAT_ICONS[options.leadIcon]) {
+    const lead = document.createElement("span");
+    lead.className = "dashboard__stat-icon";
+    lead.innerHTML = DASHBOARD_STAT_ICONS[options.leadIcon];
+    figure.append(lead);
+  }
+  const reading = document.createElement("span");
+  reading.className = "dashboard__stat-reading";
+  reading.append(createElement("strong", value, "dashboard__stat-value"));
+  if (options.unit) reading.append(createElement("span", options.unit, "dashboard__stat-unit"));
+  figure.append(reading);
+  if (options.tailNode) {
+    figure.append(options.tailNode);
+  } else if (options.tailIcon && DASHBOARD_STAT_ICONS[options.tailIcon]) {
+    const tail = document.createElement("span");
+    tail.className = "dashboard__stat-icon dashboard__stat-icon--tail";
+    tail.innerHTML = DASHBOARD_STAT_ICONS[options.tailIcon];
+    figure.append(tail);
+  }
+  stat.append(figure);
   return stat;
 }
 
@@ -9375,11 +9465,23 @@ function renderDashboardStats(journey, studyGoal, plan) {
   const dueCount = globalThis.ExamCramJourney.getDueConcepts(journey, { now: Date.now(), limit: 50 }).length;
   const streakDays = Math.max(0, Number(plan?.habit?.currentStreakDays) || 0);
   const stats = [
-    buildDashboardStat("Current streak", `${streakDays} ${streakDays === 1 ? "day" : "days"}`),
-    buildDashboardStat("Due concepts", String(dueCount))
+    buildDashboardStat("Current streak", String(streakDays), {
+      kind: "streak",
+      unit: streakDays === 1 ? "day." : "days.",
+      leadNode: buildStreakFlameIcon(streakDays),
+      tailNode: buildStreakCalendarIcon(journey)
+    }),
+    buildDashboardStat("Due concepts", String(dueCount), {
+      kind: "due",
+      leadIcon: "scroll"
+    })
   ];
   if (plan?.goalContext) {
-    stats.push(buildDashboardStat("Until target", `${plan.goalContext.daysToTarget} ${plan.goalContext.daysToTarget === 1 ? "day" : "days"}`));
+    stats.push(buildDashboardStat("Until target", String(plan.goalContext.daysToTarget), {
+      kind: "target",
+      unit: plan.goalContext.daysToTarget === 1 ? "day." : "days.",
+      leadIcon: "hourglass"
+    }));
   }
 
   const selectedChapterIds = new Set(studyGoal?.chapterIds || []);
@@ -9463,10 +9565,11 @@ async function handleSaveStudyGoal(event) {
 
 async function renderJourney() {
   if (!elements.journeyRoute || !globalThis.ExamCramJourney) return;
-  const [journey, storedFocus, savedItems] = await Promise.all([
+  const [journey, storedFocus, savedItems, journeyStudyGoal] = await Promise.all([
     getJourney(),
     getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
-    getStorage(STORAGE_KEYS.sessions, []).catch(() => [])
+    getStorage(STORAGE_KEYS.sessions, []).catch(() => []),
+    getStudyGoal().catch(() => null)
   ]);
   const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
   elements.journeyTitle.textContent = journey.title;
@@ -9493,8 +9596,7 @@ async function renderJourney() {
       value: `${metrics.progressPercent}%`,
       detail: progressTone.label,
       tone: progressTone,
-      sandState: progressSandState,
-      asset: "assets/journey/hourglass-progress-glass-shell.png"
+      sandState: progressSandState
     }),
     renderJourneyMetric({
       kind: "average",
@@ -9502,8 +9604,7 @@ async function renderJourney() {
       value: metrics.averageScore == null ? "—" : `${metrics.averageScore}%`,
       detail: averageTone.label,
       tone: averageTone,
-      sandState: averageSandState,
-      asset: "assets/journey/hourglass-average-vertical-glass-shell.png"
+      sandState: averageSandState
     }),
     renderJourneyMetric({
       kind: "focus",
@@ -9511,8 +9612,12 @@ async function renderJourney() {
       value: `${metrics.focusMinutes}m`,
       detail: focusTone.label,
       tone: focusTone,
-      asset: "assets/journey/hourglass-focus-clean-v2.png",
-      hasMetricValue: metrics.focusMinutes > 0
+      hasMetricValue: metrics.focusMinutes > 0,
+      focusDial: {
+        fraction: Math.max(0, Math.min(1, metrics.focusMinutes / (journeyStudyGoal?.dailyMinutes || 20))),
+        minutes: metrics.focusMinutes,
+        goalMinutes: journeyStudyGoal?.dailyMinutes || 20
+      }
     })
   );
 
@@ -9766,57 +9871,137 @@ function getJourneyPerformanceTone(value, artworkBase) {
   };
 }
 
-function createJourneySandReservoir(position, fillPercent) {
-  const reservoir = document.createElement("span");
-  reservoir.className = `journey-hourglass__reservoir journey-hourglass__reservoir--${position}`;
-  const sand = document.createElement("span");
-  sand.className = "journey-hourglass__sand";
-  sand.style.setProperty("--journey-sand-fill", `${fillPercent}%`);
-  reservoir.append(sand);
-  return reservoir;
+function animateMetricValue(element, targetText) {
+  const parsed = /^(\d+)(.*)$/.exec(String(targetText));
+  const prefersReducedMotion = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (!parsed || prefersReducedMotion || typeof requestAnimationFrame !== "function") {
+    element.textContent = targetText;
+    return;
+  }
+  const target = Number(parsed[1]);
+  const suffix = parsed[2];
+  element.textContent = `0${suffix}`;
+  const startedAt = performance.now();
+  const step = (now) => {
+    if (element.dataset.liveValue) return;
+    const ratio = Math.min(1, (now - startedAt) / 850);
+    const eased = 1 - Math.pow(1 - ratio, 3);
+    element.textContent = `${Math.round(target * eased)}${suffix}`;
+    if (ratio < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
 }
 
-function createJourneySandHourglass({ kind, asset, sandState, tone }) {
-  const hourglass = document.createElement("div");
-  hourglass.className = `journey-hourglass journey-hourglass--${kind}`;
-  hourglass.setAttribute("aria-hidden", "true");
-  const hasSandData = Boolean(sandState?.hasValue);
-  const isFlowing = Boolean(sandState?.isFlowing);
-  const isWaiting = !hasSandData && kind === "average";
-  hourglass.classList.toggle("has-sand-data", hasSandData);
-  hourglass.classList.toggle("is-flowing", isFlowing);
-  hourglass.classList.toggle("is-waiting", isWaiting);
-  hourglass.style.setProperty("--journey-sand-color", tone.sandColor || tone.color);
-  hourglass.style.setProperty(
-    "--journey-sand-opacity",
-    hasSandData ? String(Math.min(0.96, 0.58 + (sandState.percent / 100) * 0.38)) : isWaiting ? "0.28" : "0"
-  );
-  hourglass.style.setProperty(
-    "--journey-stream-opacity",
-    isFlowing ? String(0.24 + (Math.min(sandState.percent, 100 - sandState.percent) / 100) * 0.5) : "0"
-  );
+function journeyDialPoint(centerX, centerY, radius, angleFromTop) {
+  const radians = ((angleFromTop - 90) * Math.PI) / 180;
+  return [
+    (centerX + radius * Math.cos(radians)).toFixed(1),
+    (centerY + radius * Math.sin(radians)).toFixed(1)
+  ];
+}
 
-  const sourceName = kind === "average" ? "top" : "source";
-  const destinationName = kind === "average" ? "bottom" : "destination";
-  hourglass.append(
-    createJourneySandReservoir(sourceName, isWaiting ? 18 : sandState.sourceFill),
-    createJourneySandReservoir(destinationName, sandState.destinationFill)
-  );
+function journeyDialTicks({ centerX, centerY, startAngle, count, step, majorEvery, radiusOuter, radiusMinor, radiusMajor }) {
+  let ticks = "";
+  for (let index = 0; index <= count; index++) {
+    const angle = startAngle + index * step;
+    const major = index % majorEvery === 0;
+    const [x1, y1] = journeyDialPoint(centerX, centerY, radiusOuter, angle);
+    const [x2, y2] = journeyDialPoint(centerX, centerY, major ? radiusMajor : radiusMinor, angle);
+    ticks += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke-width="${major ? 1.6 : 0.9}"></line>`;
+  }
+  return ticks;
+}
 
-  const stream = document.createElement("span");
-  stream.className = "journey-hourglass__stream";
-  const shell = document.createElement("img");
-  shell.className = "journey-hourglass__shell";
-  shell.src = asset;
-  shell.alt = "";
-  shell.decoding = "async";
-  shell.draggable = false;
-  hourglass.append(stream, shell);
+function buildJourneyArc(percent, tone) {
+  const arc = document.createElement("div");
+  arc.className = "journey-instrument journey-arc";
+  const clamped = Math.max(0, Math.min(100, percent));
+  arc.classList.toggle("is-complete", clamped === 100);
+  const engraving = document.createElement("span");
+  engraving.className = "journey-instrument__engraving";
+  engraving.innerHTML = `<svg viewBox="0 0 168 168" fill="none" stroke="rgba(74, 49, 28, 0.55)" stroke-linecap="round" aria-hidden="true">
+    <circle cx="84" cy="84" r="82" stroke-width="1.4"></circle>
+    <circle cx="84" cy="84" r="78.5" stroke-width="0.7"></circle>
+    ${journeyDialTicks({ centerX: 84, centerY: 84, startAngle: 225, count: 20, step: 13.5, majorEvery: 5, radiusOuter: 76, radiusMinor: 71.5, radiusMajor: 67 })}
+    <circle cx="84" cy="84" r="5" stroke-width="1.4"></circle>
+    <circle cx="84" cy="84" r="1.6" fill="rgba(74, 49, 28, 0.55)" stroke="none"></circle>
+  </svg>`;
+  const needle = document.createElement("span");
+  needle.className = "journey-arc__needle";
+  const head = document.createElement("span");
+  head.className = "journey-arc__head";
+  const startCap = document.createElement("span");
+  startCap.className = "journey-arc__cap";
+  const zero = createElement("i", "0", "journey-arc__mark journey-arc__mark--zero");
+  const half = createElement("i", "50", "journey-arc__mark journey-arc__mark--half");
+  const full = createElement("i", "100", "journey-arc__mark journey-arc__mark--full");
+  arc.append(engraving, startCap, head, needle, zero, half, full);
+  const reveal = () => arc.style.setProperty("--journey-arc-sweep", `${(clamped * 2.7).toFixed(1)}deg`);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(reveal);
+  else reveal();
+  return arc;
+}
 
-  const revealSand = () => hourglass.classList.add("is-filled");
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(revealSand);
-  else revealSand();
-  return hourglass;
+function buildJourneyGauge(percent, tone) {
+  const gauge = document.createElement("div");
+  gauge.className = "journey-instrument journey-instrument--gauge";
+  const hasScore = Number.isFinite(percent);
+  gauge.classList.toggle("is-idle", !hasScore);
+  const dial = document.createElement("span");
+  dial.className = "journey-gauge__dial";
+  const [coralEndX, coralEndY] = journeyDialPoint(64, 64, 50, 0);
+  const [goldEndX, goldEndY] = journeyDialPoint(64, 64, 50, 36);
+  dial.innerHTML = `<svg viewBox="0 0 128 74" fill="none" stroke-linecap="round" aria-hidden="true">
+    <path d="M6 64a58 58 0 0 1 116 0" stroke="rgba(74, 49, 28, 0.55)" stroke-width="1.4"></path>
+    <path d="M9.5 64a54.5 54.5 0 0 1 109 0" stroke="rgba(74, 49, 28, 0.4)" stroke-width="0.7"></path>
+    <path d="M14 64a50 50 0 0 1 ${(Number(coralEndX) - 14).toFixed(1)} ${(Number(coralEndY) - 64).toFixed(1)}" stroke="#c8674a" stroke-width="7" opacity="0.75"></path>
+    <path d="M${coralEndX} ${coralEndY}A50 50 0 0 1 ${goldEndX} ${goldEndY}" stroke="#cf9f3a" stroke-width="7" opacity="0.75"></path>
+    <path d="M${goldEndX} ${goldEndY}A50 50 0 0 1 114 64" stroke="#5c8a63" stroke-width="7" opacity="0.75"></path>
+    <g stroke="rgba(74, 49, 28, 0.55)">${journeyDialTicks({ centerX: 64, centerY: 64, startAngle: -90, count: 10, step: 18, majorEvery: 5, radiusOuter: 44, radiusMinor: 40.5, radiusMajor: 37.5 })}</g>
+    <path d="M10 64h108" stroke="rgba(74, 49, 28, 0.45)" stroke-width="1"></path>
+    <text x="41" y="49" text-anchor="middle" font-size="6.6" fill="rgba(74, 49, 28, 0.7)" stroke="none" letter-spacing="0.5">LOW</text>
+    <text x="68" y="31" text-anchor="middle" font-size="6.6" fill="rgba(74, 49, 28, 0.7)" stroke="none" letter-spacing="0.5">FAIR</text>
+    <text x="90" y="49" text-anchor="middle" font-size="6.6" fill="rgba(74, 49, 28, 0.7)" stroke="none" letter-spacing="0.5">FINE</text>
+  </svg>`;
+  const needle = document.createElement("span");
+  needle.className = "journey-gauge__needle";
+  gauge.append(dial, needle);
+  const angle = hasScore ? Math.round(-90 + (Math.max(0, Math.min(100, percent)) * 1.8)) : -90;
+  const reveal = () => gauge.style.setProperty("--journey-gauge-angle", `${angle}deg`);
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(reveal);
+  else reveal();
+  return gauge;
+}
+
+function updateJourneyFocusInstrument(focus) {
+  const card = document.querySelector("#journeyView .journey-metric--focus");
+  if (!card) return;
+  const dial = card.querySelector(".journey-focus-dial");
+  const valueElement = card.querySelector(".journey-metric__value");
+  const detailElement = card.querySelector(".journey-metric__detail");
+  if (!dial || !valueElement || !detailElement) return;
+  const onBreak = focus.status === "break";
+  const live = Boolean(focus.active);
+  card.classList.toggle("is-session-live", live);
+  card.classList.toggle("is-session-break", onBreak);
+  if (live) {
+    const plannedMs = Math.max(1, (focus.endsAt || 0) - (focus.startedAt || 0));
+    const remaining = onBreak ? focus.breakRemainingMs : focus.remainingMs;
+    const elapsedFraction = Math.max(0, Math.min(1, 1 - (focus.remainingMs / plannedMs)));
+    dial.classList.add("is-charged");
+    dial.style.setProperty("--journey-focus-sweep", `${Math.round(elapsedFraction * 360)}deg`);
+    valueElement.dataset.liveValue = "1";
+    valueElement.textContent = formatTimestamp(Math.ceil(remaining / 1000));
+    detailElement.textContent = onBreak ? "Break running — session resumes soon" : "Focus session in progress";
+  } else {
+    const loggedMinutes = Number(card.dataset.loggedMinutes) || 0;
+    const goalMinutes = Number(card.dataset.goalMinutes) || 20;
+    delete valueElement.dataset.liveValue;
+    dial.classList.toggle("is-charged", loggedMinutes > 0);
+    dial.style.setProperty("--journey-focus-sweep", `${Math.round(Math.max(0, Math.min(1, loggedMinutes / goalMinutes)) * 360)}deg`);
+    valueElement.textContent = `${loggedMinutes}m`;
+    detailElement.textContent = loggedMinutes > 0 ? "Focused time logged" : "Ready for a focus block";
+  }
 }
 
 function getJourneyMetricStateClass(kind, tone, hasMetricValue = false) {
@@ -9825,7 +10010,7 @@ function getJourneyMetricStateClass(kind, tone, hasMetricValue = false) {
   return tone?.key === "unscored" ? "state-ready" : "state-performance";
 }
 
-function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asset, hasMetricValue = false }) {
+function renderJourneyMetric({ kind, label, value, detail, tone, sandState, hasMetricValue = false, focusDial = null }) {
   const card = document.createElement("section");
   const stateClass = getJourneyMetricStateClass(kind, tone, hasMetricValue);
   card.className = ["journey-metric", "journey-metric--" + kind, stateClass].join(" ");
@@ -9838,22 +10023,48 @@ function renderJourneyMetric({ kind, label, value, detail, tone, sandState, asse
   const copy = document.createElement("div");
   copy.className = "journey-metric__copy";
   copy.append(createElement("span", label, "journey-metric__label"));
-  copy.append(createElement("strong", value, "journey-metric__value"));
+  const valueElement = createElement("strong", value, "journey-metric__value");
+  copy.append(valueElement);
   copy.append(createElement("small", detail, "journey-metric__detail"));
+  animateMetricValue(valueElement, value);
 
   const visual = document.createElement("div");
   visual.className = `journey-metric__visual journey-metric__visual--${kind}`;
   visual.setAttribute("aria-hidden", "true");
-  if (kind === "progress" || kind === "average") {
-    visual.append(createJourneySandHourglass({ kind, asset, sandState, tone }));
-  } else {
-    const artwork = document.createElement("img");
-    artwork.className = "journey-metric__art";
-    artwork.src = asset;
-    artwork.alt = "";
-    artwork.decoding = "async";
-    artwork.draggable = false;
-    visual.append(artwork);
+  if (kind === "progress") {
+    visual.append(buildJourneyArc(sandState?.hasValue ? sandState.percent : 0, tone));
+  } else if (kind === "average") {
+    visual.append(buildJourneyGauge(sandState?.hasValue ? sandState.percent : null, tone));
+  } else if (focusDial) {
+    const dial = document.createElement("span");
+    dial.className = "journey-focus-dial";
+    dial.classList.toggle("is-charged", focusDial.fraction > 0);
+    const engraving = document.createElement("span");
+    engraving.className = "journey-instrument__engraving";
+    engraving.innerHTML = `<svg viewBox="0 0 148 148" fill="none" stroke="rgba(74, 49, 28, 0.55)" stroke-linecap="round" aria-hidden="true">
+      <rect x="68" y="2.5" width="12" height="8" rx="2" stroke-width="1.3"></rect>
+      <path d="M64 12a22 22 0 0 1 20 0" stroke-width="1.3"></path>
+      <circle cx="74" cy="78" r="66" stroke-width="1.4"></circle>
+      <circle cx="74" cy="78" r="62.5" stroke-width="0.7"></circle>
+      ${journeyDialTicks({ centerX: 74, centerY: 78, startAngle: 0, count: 11, step: 30, majorEvery: 3, radiusOuter: 42, radiusMinor: 38, radiusMajor: 34.5 })}
+      <circle cx="74" cy="78" r="3.6" stroke-width="1.3"></circle>
+      <circle cx="74" cy="78" r="1.3" fill="rgba(74, 49, 28, 0.55)" stroke="none"></circle>
+    </svg>`;
+    const hand = document.createElement("span");
+    hand.className = "journey-focus-dial__hand";
+    dial.append(engraving, hand);
+    visual.append(dial);
+    card.dataset.loggedMinutes = String(focusDial.minutes);
+    card.dataset.goalMinutes = String(focusDial.goalMinutes);
+    const sweep = `${Math.round(Math.max(0, Math.min(1, focusDial.fraction)) * 360)}deg`;
+    const revealSweep = () => {
+      dial.style.setProperty("--journey-focus-sweep", sweep);
+      if (globalThis.ExamCramFocus && state.focusState?.active) {
+        updateJourneyFocusInstrument(globalThis.ExamCramFocus.toPublicFocusState(state.focusState, Date.now()));
+      }
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(revealSweep);
+    else revealSweep();
   }
 
   card.append(copy, visual);
@@ -10492,6 +10703,7 @@ function renderFocusState() {
     syncCustomFocusDurationControl();
     elements.focusSitesInput.disabled = focus.active;
     renderFocusHistory(focus.history || []);
+    updateJourneyFocusInstrument(focus);
     if (focus.active && remaining <= 0) void loadFocusState();
   };
   update();
