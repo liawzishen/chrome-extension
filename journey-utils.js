@@ -45,6 +45,50 @@
     return timestamp === null ? null : new Date(timestamp).toISOString();
   }
 
+  function normalizeStudyGoal(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const suppliedDaysPerWeek = Math.round(Number(value.daysPerWeek));
+    const daysPerWeek = Number.isFinite(suppliedDaysPerWeek)
+      ? Math.max(1, Math.min(7, suppliedDaysPerWeek))
+      : 5;
+    const allowedDailyMinutes = [10, 20, 30, 45, 60];
+    const suppliedDailyMinutes = Number(value.dailyMinutes);
+    const dailyMinutes = Number.isFinite(suppliedDailyMinutes)
+      ? allowedDailyMinutes.reduce((nearest, candidate) => (
+        Math.abs(candidate - suppliedDailyMinutes) < Math.abs(nearest - suppliedDailyMinutes)
+          ? candidate
+          : nearest
+      ))
+      : 20;
+    const seenChapterIds = new Set();
+    const chapterIds = (Array.isArray(value.chapterIds) ? value.chapterIds : [])
+      .map((chapterId) => cleanText(chapterId, 100))
+      .filter((chapterId) => {
+        if (!chapterId || seenChapterIds.has(chapterId)) return false;
+        seenChapterIds.add(chapterId);
+        return true;
+      })
+      .slice(0, MAX_CHAPTERS);
+    const suppliedTargetDate = cleanText(value.targetDate, 10);
+    const targetTimestamp = /^\d{4}-\d{2}-\d{2}$/.test(suppliedTargetDate)
+      ? Date.parse(`${suppliedTargetDate}T00:00:00.000Z`)
+      : NaN;
+    const targetDate = Number.isFinite(targetTimestamp)
+      && new Date(targetTimestamp).toISOString().slice(0, 10) === suppliedTargetDate
+      ? suppliedTargetDate
+      : null;
+    const createdAt = normalizeIsoDate(value.createdAt);
+    return {
+      chapterIds,
+      daysPerWeek,
+      dailyMinutes,
+      targetDate,
+      label: cleanText(value.label, 60),
+      createdAt,
+      updatedAt: normalizeIsoDate(value.updatedAt, createdAt)
+    };
+  }
+
   function fingerprint(value) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     let hash = 2166136261;
@@ -1705,16 +1749,35 @@
     const savedNoteIds = Array.isArray(options.savedNoteIds)
       ? new Set(options.savedNoteIds.map((id) => cleanText(id, 100)).filter(Boolean))
       : null;
+    const studyGoal = normalizeStudyGoal(options.studyGoal);
+    const hasStudyGoal = Object.prototype.hasOwnProperty.call(options, "studyGoal") && studyGoal !== null;
     const noteMissingFor = (noteId) => (savedNoteIds ? !savedNoteIds.has(noteId) : false);
     const streakNote = habit.currentStreakDays >= 2
       ? `Day ${habit.currentStreakDays} streak — one quiz today keeps it alive.`
       : "";
+    const selectedChapters = hasStudyGoal && studyGoal.chapterIds.length
+      ? journey.chapters.filter((chapter) => studyGoal.chapterIds.includes(chapter.id))
+      : journey.chapters;
+    const targetTimestamp = hasStudyGoal && studyGoal.targetDate
+      ? Date.parse(`${studyGoal.targetDate}T00:00:00.000Z`)
+      : NaN;
+    const daysToTarget = Number.isFinite(targetTimestamp) && targetTimestamp > nowTimestamp
+      ? Math.ceil((targetTimestamp - nowTimestamp) / DAY_MS)
+      : null;
+    const goalContext = daysToTarget === null
+      ? null
+      : {
+        daysToTarget,
+        selectedChapterCount: selectedChapters.length,
+        completedSelectedChapterCount: selectedChapters.filter((chapter) => getChapterStatus(chapter) === "completed").length
+      };
 
     if (!journey.chapters.length) {
       return {
         generatedAt,
         habit,
         streakNote,
+        goalContext,
         steps: [{
           id: "onboard-1",
           kind: "advance",
@@ -1729,13 +1792,24 @@
       };
     }
 
-    const due = getDueConcepts(journey, { now, limit: 3 });
-    const maxSteps = habit.typicalSessionMinutes > 0 && habit.typicalSessionMinutes < 20 ? 2 : 3;
-    const steps = [];
-    const usedRepairConceptIds = new Set();
     const chapterIdForNote = (noteId) => journey.chapters.find((chapter) => (
       chapter.sessions.some((session) => cleanText(session?.noteId || session?.id, 100) === noteId)
     ))?.id || "";
+    const goalChapterIds = hasStudyGoal && studyGoal.chapterIds.length
+      ? new Set(studyGoal.chapterIds)
+      : null;
+    const unscopedDue = getDueConcepts(journey, { now, limit: 3 });
+    const scopedDue = goalChapterIds
+      ? unscopedDue.filter((concept) => goalChapterIds.has(chapterIdForNote(concept.noteId)))
+      : unscopedDue;
+    const dueUsesFallback = Boolean(goalChapterIds && !scopedDue.length && unscopedDue.length);
+    const due = dueUsesFallback ? unscopedDue : scopedDue;
+    const maxSteps = habit.typicalSessionMinutes > 0 && habit.typicalSessionMinutes < 20 ? 2 : 3;
+    const goalMaxSteps = hasStudyGoal
+      ? studyGoal.dailyMinutes <= 15 ? 2 : studyGoal.dailyMinutes <= 30 ? 3 : 4
+      : maxSteps;
+    const steps = [];
+    const usedRepairConceptIds = new Set();
 
     due.slice(0, 2).forEach((concept) => {
       const nextReviewTimestamp = dateTimestamp(concept.nextReviewAt);
@@ -1749,7 +1823,7 @@
       } else if (nextReviewTimestamp !== null && nowTimestamp >= nextReviewTimestamp) {
         reason = `Due for review — last practiced ${daysSinceAttempt} days ago.`;
       }
-      steps.push({
+      const step = {
         id: `repair-${concept.conceptId}`,
         kind: "recovery",
         intent: "recovery",
@@ -1760,26 +1834,40 @@
         conceptId: concept.conceptId,
         chapterId: chapterIdForNote(concept.noteId),
         estimatedMinutes: 5
-      });
+      };
+      if (dueUsesFallback && !goalChapterIds.has(step.chapterId)) step.outsideGoal = true;
+      steps.push(step);
       usedRepairConceptIds.add(concept.conceptId);
     });
 
-    let advanceChapter = journey.chapters.reduce((latest, chapter) => (
+    const selectUnscopedAdvanceChapter = () => {
+      let selected = journey.chapters.reduce((latest, chapter) => (
       (dateTimestamp(chapter.updatedAt) ?? 0) > (dateTimestamp(latest.updatedAt) ?? 0) ? chapter : latest
-    ));
-    if (getChapterStatus(advanceChapter) === "completed") {
-      const startIndex = journey.chapters.indexOf(advanceChapter);
-      advanceChapter = null;
-      for (let offset = 1; offset <= journey.chapters.length; offset += 1) {
-        const candidate = journey.chapters[(startIndex + offset) % journey.chapters.length];
-        if (getChapterStatus(candidate) === "completed") continue;
-        advanceChapter = candidate;
-        break;
+      ));
+      if (getChapterStatus(selected) === "completed") {
+        const startIndex = journey.chapters.indexOf(selected);
+        selected = null;
+        for (let offset = 1; offset <= journey.chapters.length; offset += 1) {
+          const candidate = journey.chapters[(startIndex + offset) % journey.chapters.length];
+          if (getChapterStatus(candidate) === "completed") continue;
+          selected = candidate;
+          break;
+        }
       }
-    }
+      return selected;
+    };
+    const goalAdvanceCandidates = goalChapterIds
+      ? journey.chapters.filter((chapter) => goalChapterIds.has(chapter.id) && getChapterStatus(chapter) !== "completed")
+      : [];
+    const advanceUsesFallback = Boolean(goalChapterIds && !goalAdvanceCandidates.length);
+    let advanceChapter = goalAdvanceCandidates.length
+      ? goalAdvanceCandidates.reduce((latest, chapter) => (
+        (dateTimestamp(chapter.updatedAt) ?? 0) > (dateTimestamp(latest.updatedAt) ?? 0) ? chapter : latest
+      ))
+      : selectUnscopedAdvanceChapter();
 
     if (!advanceChapter) {
-      steps.push({
+      const step = {
         id: "advance-new-chapter",
         kind: "advance",
         intent: "new-chapter",
@@ -1789,7 +1877,9 @@
         conceptId: "",
         chapterId: "",
         estimatedMinutes: 10
-      });
+      };
+      if (advanceUsesFallback) step.outsideGoal = true;
+      steps.push(step);
     } else {
       const status = getChapterStatus(advanceChapter);
       const scoredSessions = advanceChapter.sessions.filter((session) => (
@@ -1813,7 +1903,7 @@
         reason = "Activity only becomes mastery evidence after a submitted quiz.";
         intent = "first-quiz";
       }
-      steps.push({
+      const step = {
         id: `advance-${advanceChapter.id}`,
         kind: "advance",
         intent,
@@ -1823,21 +1913,28 @@
         conceptId: "",
         chapterId: advanceChapter.id,
         estimatedMinutes: 10
-      });
+      };
+      if (advanceUsesFallback && !goalChapterIds.has(step.chapterId)) step.outsideGoal = true;
+      steps.push(step);
     }
 
-    if (steps.length < maxSteps) {
-      const stretch = journey.learningMemory.concepts
+    if (steps.length < goalMaxSteps) {
+      const unscopedStretchCandidates = journey.learningMemory.concepts
         .filter((concept) => concept.state === "stable" && !usedRepairConceptIds.has(concept.conceptId))
         .map((concept) => ({ concept, strength: effectiveStrength(concept, now) }))
         .sort((first, second) => first.strength - second.strength
-          || first.concept.conceptLabel.localeCompare(second.concept.conceptLabel))[0];
+          || first.concept.conceptLabel.localeCompare(second.concept.conceptLabel));
+      const scopedStretchCandidates = goalChapterIds
+        ? unscopedStretchCandidates.filter(({ concept }) => goalChapterIds.has(chapterIdForNote(concept.noteId)))
+        : unscopedStretchCandidates;
+      const stretchUsesFallback = Boolean(goalChapterIds && !scopedStretchCandidates.length && unscopedStretchCandidates.length);
+      const stretch = (stretchUsesFallback ? unscopedStretchCandidates : scopedStretchCandidates)[0];
       if (stretch) {
         const lastAttemptTimestamp = dateTimestamp(stretch.concept.lastAttemptAt);
         const daysSinceAttempt = lastAttemptTimestamp === null
           ? 0
           : Math.floor(Math.max(0, (nowTimestamp - lastAttemptTimestamp) / DAY_MS));
-        steps.push({
+        const step = {
           id: `stretch-${stretch.concept.conceptId}`,
           kind: "stretch",
           intent: "stretch",
@@ -1848,7 +1945,9 @@
           conceptId: stretch.concept.conceptId,
           chapterId: chapterIdForNote(stretch.concept.noteId),
           estimatedMinutes: 5
-        });
+        };
+        if (stretchUsesFallback && !goalChapterIds.has(step.chapterId)) step.outsideGoal = true;
+        steps.push(step);
       }
     }
 
@@ -1856,7 +1955,8 @@
       generatedAt,
       habit,
       streakNote,
-      steps: steps.slice(0, maxSteps)
+      goalContext,
+      steps: steps.slice(0, goalMaxSteps)
     };
   }
 
@@ -2499,6 +2599,7 @@
     MAX_LEARNING_ATTEMPTS,
     createLearningMemory,
     createJourney,
+    normalizeStudyGoal,
     normalizeJourney,
     normalizeSource,
     normalizeLastStudySource,

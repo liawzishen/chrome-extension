@@ -2349,7 +2349,10 @@ function getStudySessionTokenBudget(input) {
 }
 
 function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
+  if (value == null) return value;
+  return typeof structuredClone === "function"
+    ? structuredClone(value)
+    : JSON.parse(JSON.stringify(value));
 }
 
 function getArtifactCacheKey(kind, input) {
@@ -2495,9 +2498,10 @@ function repairJson(value) {
 }
 
 function normalizeSession(session, input) {
-  assertVisualModelUsable(session?.visualLesson?.visualModel);
+  assertVisualModelUsable(session?.visualLesson?.visualModel, { requireScenarios: false });
   const summary = normalizeSummary(session.summary, input.rawText);
   const visualLesson = normalizeVisualLesson(session.visualLesson, summary, input);
+  assertVisualModelUsable(visualLesson.visualModel);
   const quizId = `quiz-${randomUUID()}`;
   const questionContext = { ...input, visualModel: visualLesson.visualModel, quizId };
   const normalizedQuestions = (Array.isArray(session.questions) ? session.questions : [])
@@ -3854,6 +3858,7 @@ module.exports = {
   normalizeNotes,
   normalizeQuestion,
   normalizeQuizArtifact,
+  normalizeSession,
   normalizeVisualModel,
   normalizeBoundedStringList,
   normalizePublicYouTubeUrl,

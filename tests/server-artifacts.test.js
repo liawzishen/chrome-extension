@@ -14,6 +14,7 @@ const {
   getResponseSchema,
   normalizeNotes,
   normalizeQuizArtifact,
+  normalizeSession,
   prepareQuizArtifactInput,
   prepareStudyNotesInput,
   stripGeminiUnsupportedSchemaKeywords
@@ -1232,6 +1233,45 @@ test("assertVisualModelUsable still fast-fails on too few nodes when scenarios a
     () => assertVisualModelUsable(rawModel, { requireScenarios: false }),
     /fewer than 3 usable nodes/
   );
+});
+
+test("normalizeNotes pads a single-scenario AI model up to two grounded scenarios", () => {
+  const input = prepareStudyNotesInput({
+    sourceType: "notes",
+    title: "Photosynthesis",
+    sourceFingerprint: "photosynthesis-fingerprint",
+    rawText: photosynthesisText
+  });
+  const singleScenarioModel = makePhotosynthesisVisualModel();
+  singleScenarioModel.scenarios = singleScenarioModel.scenarios.slice(0, 1);
+  assert.equal(singleScenarioModel.scenarios.length, 1);
+
+  const note = normalizeNotes({
+    title: "Photosynthesis",
+    summary: ["Photosynthesis converts light energy into chemical energy stored in glucose."],
+    visualLesson: { title: "Photosynthesis", visualModel: singleScenarioModel },
+    terms: [],
+    goals: []
+  }, input);
+
+  assert.ok(note.visualLesson.visualModel.scenarios.length >= 2);
+});
+
+test("normalizeSession tolerates a single-scenario AI model and pads it after normalization", () => {
+  const input = preparePhotosynthesisQuizInput({ sourceId: "source-photosynthesis-note" });
+  const singleScenarioModel = makePhotosynthesisVisualModel();
+  singleScenarioModel.scenarios = singleScenarioModel.scenarios.slice(0, 1);
+  assert.equal(singleScenarioModel.scenarios.length, 1);
+
+  const session = {
+    title: "Photosynthesis",
+    summary: ["Photosynthesis converts light energy into chemical energy stored in glucose."],
+    visualLesson: { title: "Photosynthesis", visualModel: singleScenarioModel },
+    questions: makePhotosynthesisQuestions({ sourceId: "source-photosynthesis-note" })
+  };
+
+  const normalized = normalizeSession(session, input);
+  assert.ok(normalized.visualLesson.visualModel.scenarios.length >= 2);
 });
 
 test("strips unsupported item-count keywords from every Gemini schema path only", () => {

@@ -3,6 +3,7 @@ const STORAGE_KEYS = {
   settings: "examCramSettings",
   exportPayload: "examCramExportPayload",
   journey: "examCramLearningJourney",
+  studyGoal: "examCramStudyGoal",
   focusState: "examCramFocusState",
   lastChapter: "examCramLastChapter",
   sessionDraft: "examCramSessionDraft",
@@ -51,12 +52,29 @@ const state = {
   pendingImportChapterFileId: "",
   importNoteQueue: null,
   visualModelCleanup: null,
-  chapterDialogReturnFocus: null
+  chapterDialogReturnFocus: null,
+  tocSelectionContext: null,
+  tocSheetReturnFocus: null
 };
 
 const elements = {
   tabs: document.querySelectorAll(".tab"),
   views: document.querySelectorAll(".view"),
+  dashboardGoalForm: document.getElementById("dashboardGoalForm"),
+  dashboardGoalTitle: document.getElementById("dashboardGoalTitle"),
+  dashboardGoalMode: document.getElementById("dashboardGoalMode"),
+  dashboardGoalExplainer: document.getElementById("dashboardGoalExplainer"),
+  dashboardChapterOptions: document.getElementById("dashboardChapterOptions"),
+  dashboardChapterSlot: document.getElementById("dashboardChapterSlot"),
+  dashboardChapterSlotValue: document.getElementById("dashboardChapterSlotValue"),
+  dashboardDaysPerWeek: document.getElementById("dashboardDaysPerWeek"),
+  dashboardDailyMinutes: document.getElementById("dashboardDailyMinutes"),
+  dashboardTargetDate: document.getElementById("dashboardTargetDate"),
+  dashboardGoalLabel: document.getElementById("dashboardGoalLabel"),
+  saveDashboardGoalButton: document.getElementById("saveDashboardGoalButton"),
+  dashboardStats: document.getElementById("dashboardStats"),
+  dashboardPlan: document.getElementById("dashboardPlan"),
+  dashboardEmptyState: document.getElementById("dashboardEmptyState"),
   statusText: document.getElementById("statusText"),
   accessBanner: document.getElementById("accessBanner"),
   accessBannerText: document.getElementById("accessBannerText"),
@@ -80,6 +98,24 @@ const elements = {
   activeSourceMeta: document.getElementById("activeSourceMeta"),
   pageChapterInput: document.getElementById("pageChapterInput"),
   notesChapterInput: document.getElementById("notesChapterInput"),
+  pageChapterSlot: document.getElementById("pageChapterSlot"),
+  pageChapterSlotValue: document.getElementById("pageChapterSlotValue"),
+  notesChapterSlot: document.getElementById("notesChapterSlot"),
+  notesChapterSlotValue: document.getElementById("notesChapterSlotValue"),
+  tocSheetDialog: document.getElementById("tocSheetDialog"),
+  tocSheetForm: document.getElementById("tocSheetForm"),
+  tocSheetTitle: document.getElementById("tocSheetTitle"),
+  tocSheetDescription: document.getElementById("tocSheetDescription"),
+  tocSheetDraftState: document.getElementById("tocSheetDraftState"),
+  tocSheetSearchTools: document.getElementById("tocSheetSearchTools"),
+  tocSheetSearchInput: document.getElementById("tocSheetSearchInput"),
+  tocSheetClearSearchButton: document.getElementById("tocSheetClearSearchButton"),
+  tocSheetSearchStatus: document.getElementById("tocSheetSearchStatus"),
+  tocSheetList: document.getElementById("tocSheetList"),
+  tocSheetEmpty: document.getElementById("tocSheetEmpty"),
+  tocSheetSelectionSummary: document.getElementById("tocSheetSelectionSummary"),
+  cancelTocSheetButton: document.getElementById("cancelTocSheetButton"),
+  saveTocSheetButton: document.getElementById("saveTocSheetButton"),
   newPageChapterButton: document.getElementById("newPageChapterButton"),
   newNotesChapterButton: document.getElementById("newNotesChapterButton"),
   newJourneyChapterButton: document.getElementById("newJourneyChapterButton"),
@@ -198,12 +234,23 @@ function init() {
   elements.openPinnedArtifactButton?.addEventListener("click", openPinnedArtifact);
   elements.grantCrossSiteAccessButton?.addEventListener("click", handleGrantCrossSiteAccess);
   elements.videoTranscriptInput?.addEventListener("input", handleTranscriptInput);
-  elements.notesInput?.addEventListener("input", () => void savePanelState());
+  elements.notesInput?.addEventListener("input", () => schedulePanelStateSave());
   elements.pageChapterInput?.addEventListener("change", handleChapterSelectionChange);
   elements.notesChapterInput?.addEventListener("change", handleChapterSelectionChange);
+  [elements.dashboardChapterSlot, elements.pageChapterSlot, elements.notesChapterSlot].forEach((slot) => {
+    slot?.addEventListener("click", openTocSheet);
+  });
+  elements.tocSheetList?.addEventListener("change", handleTocSheetDraftChange);
+  elements.tocSheetSearchInput?.addEventListener("input", filterTocSheetEntries);
+  elements.tocSheetSearchInput?.addEventListener("keydown", handleTocSheetSearchKeydown);
+  elements.tocSheetClearSearchButton?.addEventListener("click", clearTocSheetSearch);
+  elements.tocSheetForm?.addEventListener("submit", applyTocSheetSelection);
+  elements.cancelTocSheetButton?.addEventListener("click", cancelTocSheetSelection);
+  elements.tocSheetDialog?.addEventListener("close", handleTocSheetClosed);
   elements.newPageChapterButton?.addEventListener("click", openNewChapterDialog);
   elements.newNotesChapterButton?.addEventListener("click", openNewChapterDialog);
   elements.newJourneyChapterButton?.addEventListener("click", openNewChapterDialog);
+  elements.dashboardGoalForm?.addEventListener("submit", handleSaveStudyGoal);
   elements.newChapterForm?.addEventListener("submit", handleCreateChapter);
   elements.cancelNewChapterButton?.addEventListener("click", closeNewChapterDialog);
   elements.newChapterDialog?.addEventListener("close", restoreChapterDialogFocus);
@@ -326,12 +373,13 @@ function scheduleSourceRefresh() {
 }
 
 async function initializePersistentPanel() {
-  let initialView = "pageView";
+  let initialView = "dashboardView";
   let restoredArtifact = false;
   try {
     initialView = await loadPanelState();
     restoredArtifact = await maybeRestoreSessionDraft();
     await loadJourney();
+    if (!restoredArtifact && initialView === "dashboardView") await renderDashboard();
     if (!restoredArtifact && initialView === "journeyView") await renderJourney();
     if (!restoredArtifact && initialView === "libraryView") await renderLibrary();
   } catch (error) {
@@ -415,6 +463,12 @@ async function getCurrentPagePermissionPattern() {
 
 async function loadPanelState() {
   const saved = await getStorage(STORAGE_KEYS.panelState, {});
+  if (!saved.dashboardIntroSeen) {
+    await setStorage(STORAGE_KEYS.panelState, {
+      ...saved,
+      dashboardIntroSeen: true
+    });
+  }
   if (typeof saved.notesInput === "string") elements.notesInput.value = saved.notesInput;
   const legacyPageChapterId = typeof saved.pageChapterId === "string" ? saved.pageChapterId.trim() : "";
   const legacyNotesChapterId = typeof saved.notesChapterId === "string" ? saved.notesChapterId.trim() : "";
@@ -441,17 +495,31 @@ async function loadPanelState() {
   if (elements.pageQuestionCount?.querySelector(`option[value="${cssEscape(saved.questionCount || "")}"]`)) elements.pageQuestionCount.value = saved.questionCount;
   if (elements.pageQuizStyle?.querySelector(`option[value="${cssEscape(saved.quizStyle || "")}"]`)) elements.pageQuizStyle.value = saved.quizStyle;
   const restoredView = saved.activeView === "notesView" ? "pageView" : saved.activeView;
-  const initialView = restoredView && document.getElementById(restoredView)
+  const initialView = restoredView && document.getElementById(restoredView) && saved.dashboardIntroSeen
     ? restoredView
-    : "pageView";
+    : "dashboardView";
   if (initialView) {
     switchView(initialView, { skipViewLoad: true, skipSave: true });
   }
   return initialView;
 }
 
+let panelStateSaveTimer = null;
+
+function schedulePanelStateSave(delayMs = 400) {
+  if (panelStateSaveTimer) clearTimeout(panelStateSaveTimer);
+  panelStateSaveTimer = setTimeout(() => {
+    panelStateSaveTimer = null;
+    void savePanelState();
+  }, delayMs);
+}
+
 async function savePanelState(overrides = {}) {
-  const activeView = [...elements.tabs].find((tab) => tab.classList.contains("active"))?.dataset.view || "pageView";
+  if (panelStateSaveTimer) {
+    clearTimeout(panelStateSaveTimer);
+    panelStateSaveTimer = null;
+  }
+  const activeView = [...elements.tabs].find((tab) => tab.classList.contains("active"))?.dataset.view || "dashboardView";
   const selectedChapter = getSelectedChapterBinding(
     elements.pageChapterInput || elements.notesChapterInput,
     { required: false }
@@ -459,6 +527,7 @@ async function savePanelState(overrides = {}) {
   state.selectedChapter = { id: selectedChapter.chapterId, title: selectedChapter.chapterTitle };
   await setStorage(STORAGE_KEYS.panelState, {
     activeView,
+    dashboardIntroSeen: true,
     notesInput: elements.notesInput?.value || "",
     selectedChapterId: selectedChapter.chapterId,
     selectedChapter: selectedChapter.chapterTitle,
@@ -539,7 +608,9 @@ function switchView(viewId, options = {}) {
   elements.resultView.classList.add("hidden");
   elements.resultView.setAttribute("aria-hidden", "true");
   if (!options.preserveStatus) resetStatus();
-  if (!options.skipViewLoad && viewId === "libraryView") {
+  if (!options.skipViewLoad && viewId === "dashboardView") {
+    void renderDashboard();
+  } else if (!options.skipViewLoad && viewId === "libraryView") {
     renderLibrary();
   } else if (!options.skipViewLoad && viewId === "journeyView") {
     void renderJourney();
@@ -627,6 +698,247 @@ function selectChapterAcrossControls(chapterId) {
     }
   });
   state.selectedChapter = { id: matchedChapterId, title: selectedTitle };
+  updateChapterSelectionSlots();
+}
+
+function updateChapterSelectionSlots() {
+  const updateSingleSlot = (select, slot, valueNode) => {
+    if (!select || !slot || !valueNode) return;
+    const selectedOption = select.selectedOptions?.[0];
+    const hasSelection = Boolean(selectedOption?.value);
+    const hasChapters = [...select.options].some((option) => option.value);
+    const value = hasSelection
+      ? String(selectedOption.dataset?.chapterTitle || selectedOption.textContent || "Selected chapter").trim()
+      : hasChapters
+        ? "Choose from contents"
+        : "No chapters yet";
+    valueNode.textContent = value;
+    slot.dataset.empty = String(!hasSelection);
+    slot.setAttribute("aria-label", `Journey chapter: ${value}. Open Table of Contents`);
+  };
+
+  updateSingleSlot(elements.pageChapterInput, elements.pageChapterSlot, elements.pageChapterSlotValue);
+  updateSingleSlot(elements.notesChapterInput, elements.notesChapterSlot, elements.notesChapterSlotValue);
+
+  if (!elements.dashboardChapterSlot || !elements.dashboardChapterSlotValue || !elements.dashboardChapterOptions) return;
+  const checked = [...elements.dashboardChapterOptions.querySelectorAll('input[name="chapterIds"]:checked')];
+  const titles = checked.map((input) => String(input.nextElementSibling?.textContent || "").trim()).filter(Boolean);
+  const value = titles.length === 0
+    ? "All Journey chapters"
+    : titles.length === 1
+      ? titles[0]
+      : `${titles.length} chapters selected`;
+  elements.dashboardChapterSlotValue.textContent = value;
+  elements.dashboardChapterSlot.dataset.empty = String(titles.length === 0);
+  elements.dashboardChapterSlot.setAttribute("aria-label", `Focus chapters: ${value}. Open Table of Contents`);
+}
+
+function getTocSheetConfiguration(target) {
+  if (target === "dashboard") {
+    const controls = [...(elements.dashboardChapterOptions?.querySelectorAll('input[name="chapterIds"]') || [])];
+    return {
+      target,
+      mode: "multiple",
+      searchable: true,
+      title: "Build your chapter folio",
+      description: "Check the chapters that belong in this goal. An empty draft includes the whole Journey.",
+      saveLabel: "Save chapter list",
+      entries: controls.map((input) => ({
+        value: input.value,
+        title: String(input.nextElementSibling?.textContent || "Untitled chapter").trim(),
+        selected: input.checked
+      }))
+    };
+  }
+
+  const select = target === "notes" ? elements.notesChapterInput : elements.pageChapterInput;
+  return {
+    target,
+    mode: "single",
+    searchable: false,
+    title: "Choose a Journey chapter",
+    description: "Choose the one chapter where this note should be filed. Your draft is not applied until you save.",
+    saveLabel: "Save chapter",
+    entries: [...(select?.options || [])]
+      .filter((option) => option.value)
+      .map((option) => ({
+        value: option.value,
+        title: String(option.dataset?.chapterTitle || option.textContent || "Untitled chapter").trim(),
+        selected: option.selected
+      }))
+  };
+}
+
+function openTocSheet(event) {
+  if (!elements.tocSheetDialog || !elements.tocSheetList) return;
+  const target = String(event?.currentTarget?.dataset?.tocTarget || "");
+  const configuration = getTocSheetConfiguration(target);
+  const initialValues = new Set(configuration.entries.filter((entry) => entry.selected).map((entry) => entry.value));
+  state.tocSelectionContext = {
+    ...configuration,
+    initialValues,
+    draftValues: new Set(initialValues)
+  };
+  state.tocSheetReturnFocus = event?.currentTarget || document.activeElement;
+  elements.tocSheetTitle.textContent = configuration.title;
+  elements.tocSheetDescription.textContent = configuration.description;
+  elements.saveTocSheetButton.textContent = configuration.saveLabel;
+  const searchEnabled = configuration.searchable && configuration.entries.length > 0;
+  elements.tocSheetSearchTools?.classList.toggle("hidden", !searchEnabled);
+  if (elements.tocSheetSearchInput) elements.tocSheetSearchInput.value = "";
+
+  const rows = configuration.entries.map((entry, index) => {
+    const row = document.createElement("label");
+    row.className = "toc-sheet__row";
+    row.dataset.searchText = normalizeTocSearchValue(entry.title);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "tocEntry";
+    checkbox.value = entry.value;
+    checkbox.checked = entry.selected;
+    checkbox.id = `tocSheetEntry-${index + 1}`;
+    checkbox.dataset.tocEntry = "true";
+    const title = document.createElement("span");
+    title.className = "toc-sheet__row-title";
+    title.textContent = entry.title;
+    const leader = document.createElement("span");
+    leader.className = "toc-sheet__leader";
+    leader.setAttribute("aria-hidden", "true");
+    const folio = document.createElement("span");
+    folio.className = "toc-sheet__folio";
+    folio.textContent = String(index + 1).padStart(2, "0");
+    row.append(checkbox, title, leader, folio);
+    return row;
+  });
+  elements.tocSheetList.replaceChildren(elements.tocSheetEmpty, ...rows);
+  filterTocSheetEntries();
+  renderTocSheetDraftState();
+
+  if (!elements.tocSheetDialog.open) elements.tocSheetDialog.showModal();
+  requestAnimationFrame(() => {
+    const preferred = searchEnabled
+      ? elements.tocSheetSearchInput
+      : elements.tocSheetList.querySelector('input[data-toc-entry="true"]:checked')
+      || elements.tocSheetList.querySelector('input[data-toc-entry="true"]')
+      || elements.cancelTocSheetButton;
+    preferred?.focus();
+  });
+}
+
+function normalizeTocSearchValue(value) {
+  return String(value || "").trim();
+}
+
+function filterTocSheetEntries() {
+  const context = state.tocSelectionContext;
+  if (!context || !elements.tocSheetList) return;
+  const rawQuery = context.searchable ? String(elements.tocSheetSearchInput?.value || "").trim() : "";
+  const query = normalizeTocSearchValue(rawQuery);
+  const rows = [...elements.tocSheetList.querySelectorAll(".toc-sheet__row")];
+  let visibleCount = 0;
+  rows.forEach((row) => {
+    const matches = !query || String(row.dataset.searchText || "").includes(query);
+    row.hidden = !matches;
+    row.classList.toggle("hidden", !matches);
+    if (matches) visibleCount += 1;
+  });
+
+  const hasEntries = rows.length > 0;
+  const hasNoMatches = hasEntries && Boolean(query) && visibleCount === 0;
+  elements.tocSheetEmpty.textContent = hasNoMatches
+    ? `No focus chapters match “${rawQuery.slice(0, 80)}”. Try another search.`
+    : "No chapters are available yet. Cancel, then create your first chapter.";
+  elements.tocSheetEmpty.classList.toggle("hidden", hasEntries && !hasNoMatches);
+  elements.tocSheetClearSearchButton?.classList.toggle("hidden", !query);
+  if (elements.tocSheetSearchStatus) {
+    elements.tocSheetSearchStatus.textContent = context.searchable
+      ? query
+        ? `${visibleCount} of ${rows.length} ${rows.length === 1 ? "chapter" : "chapters"} shown`
+        : `${rows.length} focus ${rows.length === 1 ? "chapter" : "chapters"} available`
+      : "";
+  }
+}
+
+function handleTocSheetSearchKeydown(event) {
+  if (event.key === "Enter") event.preventDefault();
+}
+
+function clearTocSheetSearch() {
+  if (!elements.tocSheetSearchInput) return;
+  elements.tocSheetSearchInput.value = "";
+  filterTocSheetEntries();
+  elements.tocSheetSearchInput.focus();
+}
+
+function handleTocSheetDraftChange(event) {
+  const input = event?.target;
+  const context = state.tocSelectionContext;
+  if (!context || !(input instanceof HTMLInputElement) || input.dataset.tocEntry !== "true") return;
+  if (context.mode === "single") {
+    context.draftValues.clear();
+    if (input.checked) {
+      elements.tocSheetList.querySelectorAll('input[data-toc-entry="true"]').forEach((candidate) => {
+        if (candidate !== input) candidate.checked = false;
+      });
+      context.draftValues.add(input.value);
+    }
+  } else if (input.checked) {
+    context.draftValues.add(input.value);
+  } else {
+    context.draftValues.delete(input.value);
+  }
+  renderTocSheetDraftState();
+}
+
+function renderTocSheetDraftState() {
+  const context = state.tocSelectionContext;
+  if (!context) return;
+  const changed = context.initialValues.size !== context.draftValues.size
+    || [...context.initialValues].some((value) => !context.draftValues.has(value));
+  const selectedCount = context.draftValues.size;
+  elements.tocSheetDraftState.textContent = changed ? "Draft edited" : "Draft unchanged";
+  elements.tocSheetDraftState.dataset.changed = String(changed);
+  elements.tocSheetSelectionSummary.textContent = context.mode === "multiple"
+    ? selectedCount
+      ? `${selectedCount} ${selectedCount === 1 ? "chapter" : "chapters"} in this folio`
+      : "Every Journey chapter will be included"
+    : selectedCount
+      ? "1 chapter ready to file"
+      : "Choose one chapter to continue";
+  elements.saveTocSheetButton.disabled = context.entries.length === 0
+    || (context.mode === "single" && selectedCount !== 1);
+}
+
+function applyTocSheetSelection(event) {
+  event.preventDefault();
+  const context = state.tocSelectionContext;
+  if (!context) return;
+  if (context.mode === "multiple") {
+    elements.dashboardChapterOptions.querySelectorAll('input[name="chapterIds"]').forEach((input) => {
+      input.checked = context.draftValues.has(input.value);
+    });
+  } else {
+    const selectedId = [...context.draftValues][0] || "";
+    selectChapterAcrossControls(selectedId);
+    void savePanelState();
+  }
+  updateChapterSelectionSlots();
+  elements.tocSheetDialog.close("saved");
+}
+
+function cancelTocSheetSelection() {
+  if (elements.tocSheetDialog?.open) elements.tocSheetDialog.close("cancel");
+}
+
+function handleTocSheetClosed() {
+  const returnFocus = state.tocSheetReturnFocus;
+  state.tocSelectionContext = null;
+  state.tocSheetReturnFocus = null;
+  if (elements.tocSheetSearchInput) elements.tocSheetSearchInput.value = "";
+  elements.tocSheetSearchTools?.classList.add("hidden");
+  elements.tocSheetClearSearchButton?.classList.add("hidden");
+  if (elements.tocSheetSearchStatus) elements.tocSheetSearchStatus.textContent = "";
+  requestAnimationFrame(() => returnFocus?.focus?.());
 }
 
 function openNewChapterDialog(event, options = {}) {
@@ -807,7 +1119,9 @@ async function handleBulkImportSelected(event) {
           fileName: String(file.name || source.title || "Local document").slice(0, 180),
           title: source.title || file.name,
           excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
+          originalFile: file,
           source,
+          status: "ready",
           skipped: false
         });
       } catch (error) {
@@ -816,7 +1130,9 @@ async function handleBulkImportSelected(event) {
           fileName: String(file.name || "Local document").slice(0, 180),
           title: String(file.name || "Local document").slice(0, 180),
           excerpt: "",
+          originalFile: file,
           source: null,
+          status: "failed",
           skipped: true,
           error: error?.message || "This file could not be read safely."
         });
@@ -824,20 +1140,17 @@ async function handleBulkImportSelected(event) {
     }
 
     const readableFiles = files.filter((file) => !file.skipped);
-    if (!readableFiles.length) {
-      showStatus("None of the selected files could be read safely.", true);
-      return;
-    }
-
     const journey = await getJourney();
-    let assignments;
+    let assignments = [];
     let usedLocalClassification = false;
-    showStatus(`Sorting ${readableFiles.length} readable ${readableFiles.length === 1 ? "file" : "files"} into chapters...`);
-    try {
-      assignments = await classifyImportSourcesWithBackend(readableFiles, journey);
-    } catch {
-      assignments = globalThis.ExamCramJourney.classifySourcesLocally(readableFiles, journey);
-      usedLocalClassification = true;
+    if (readableFiles.length) {
+      showStatus(`Sorting ${readableFiles.length} readable ${readableFiles.length === 1 ? "file" : "files"} into chapters...`);
+      try {
+        assignments = await classifyImportSourcesWithBackend(readableFiles, journey);
+      } catch {
+        assignments = globalThis.ExamCramJourney.classifySourcesLocally(readableFiles, journey);
+        usedLocalClassification = true;
+      }
     }
     const assignmentByFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
     const plannedAssignments = files.map((file) => {
@@ -849,21 +1162,40 @@ async function handleBulkImportSelected(event) {
           skipped: true
         };
       }
-      return { ...assignmentByFileId.get(file.fileId) };
+      const assignment = assignmentByFileId.get(file.fileId);
+      if (!assignment) {
+        file.status = "failed";
+        file.skipped = true;
+        file.error = "This file could not be classified. Retry it or remove it from the import.";
+        return {
+          fileId: file.fileId,
+          chapterTitle: "",
+          confidence: 0,
+          skipped: true
+        };
+      }
+      return { ...assignment };
     });
     refreshImportDuplicateAssignments({ files, assignments: plannedAssignments }, journey);
     const plan = globalThis.ExamCramJourney.planBulkFiling(plannedAssignments, journey);
     state.pendingImport = {
+      id: crypto.randomUUID(),
       files,
       assignments: plannedAssignments,
       plan,
       journey,
-      usedLocalClassification
+      usedLocalClassification,
+      retryingFileIds: new Set(),
+      cancelled: false
     };
     renderImportReview();
-    showStatus(usedLocalClassification
-      ? "The AI sorter was unavailable, so local topic matching was used. Review every proposal before confirming."
-      : "Your files are sorted for review. Nothing has been saved yet.");
+    if (!readableFiles.length) {
+      showStatus("None of the selected files could be read. Review each error, then retry or remove the file.", true);
+    } else {
+      showStatus(usedLocalClassification
+        ? "The AI sorter was unavailable, so local topic matching was used. Review every proposal before confirming."
+        : "Your files are sorted for review. Nothing has been saved yet.");
+    }
   } catch (error) {
     state.pendingImport = null;
     showStatus(error?.message || "The selected files could not be prepared for import.", true);
@@ -948,6 +1280,36 @@ function refreshImportDuplicateAssignments(pending, journey) {
   });
 }
 
+function getPendingImportReviewEntries(pending) {
+  const assignmentByFileId = new Map(
+    (Array.isArray(pending?.assignments) ? pending.assignments : [])
+      .map((assignment) => [assignment.fileId, assignment])
+  );
+  const planRowByFileId = new Map(
+    (Array.isArray(pending?.plan?.rows) ? pending.plan.rows : [])
+      .map((row) => [row.fileId, row])
+  );
+  return (Array.isArray(pending?.files) ? pending.files : []).map((file, index) => {
+    const assignment = assignmentByFileId.get(file.fileId) || null;
+    const row = planRowByFileId.get(file.fileId) || {
+      fileId: file.fileId,
+      finalChapterTitle: "",
+      willCreateChapter: false,
+      spillover: false,
+      blocked: !file.skipped,
+      skipped: Boolean(file.skipped),
+      confidence: Number(assignment?.confidence) || 0
+    };
+    return {
+      row,
+      index,
+      file,
+      assignment,
+      retrying: Boolean(pending?.retryingFileIds?.has(file.fileId))
+    };
+  });
+}
+
 function renderImportReview() {
   const pending = state.pendingImport;
   const existing = document.querySelector(".smart-import");
@@ -959,21 +1321,15 @@ function renderImportReview() {
     return;
   }
 
-  const assignmentByFileId = new Map(
-    pending.assignments.map((assignment) => [assignment.fileId, assignment])
-  );
-  const fileByFileId = new Map(pending.files.map((file) => [file.fileId, file]));
-  const reviewRows = pending.plan.rows.map((row, index) => ({
-    row,
-    index,
-    file: fileByFileId.get(row.fileId),
-    assignment: assignmentByFileId.get(row.fileId)
-  }));
-  const stats = getImportReviewStats(pending.plan);
+  const reviewRows = getPendingImportReviewEntries(pending);
+  const stats = getImportReviewStats(pending.plan, pending.files, pending.assignments);
+  const retryingCount = pending.retryingFileIds?.size || 0;
+  const importableCount = pending.plan.rows.filter((row) => !row.skipped && !row.blocked).length;
 
   const section = document.createElement("section");
   section.className = "smart-import";
   section.setAttribute("aria-label", "Review imported files");
+  section.setAttribute("aria-busy", String(retryingCount > 0));
   const header = document.createElement("header");
   header.className = "smart-import__header";
   const title = document.createElement("h2");
@@ -987,6 +1343,15 @@ function renderImportReview() {
     )
   );
   header.append(title);
+  const summary = createElement(
+    "p",
+    retryingCount
+      ? `Retrying ${retryingCount} ${retryingCount === 1 ? "file" : "files"}. Other review choices are preserved.`
+      : buildImportPlanSummary(pending.plan, pending.files.length),
+    "smart-import__summary"
+  );
+  summary.setAttribute("role", "status");
+  header.append(summary);
   if (pending.usedLocalClassification) {
     const notice = createElement(
       "p",
@@ -1000,8 +1365,8 @@ function renderImportReview() {
   columnHeadings.className = "smart-import__column-headings";
   columnHeadings.setAttribute("aria-hidden", "true");
   columnHeadings.append(
-    createElement("span", "Folder"),
-    createElement("span", "Status")
+    createElement("span", "Imported file"),
+    createElement("span", "Destination and actions")
   );
   const groups = document.createElement("div");
   groups.className = "smart-import__groups";
@@ -1029,7 +1394,7 @@ function renderImportReview() {
   confirm.type = "button";
   confirm.className = "primary smart-import__confirm";
   confirm.textContent = "Confirm Import";
-  confirm.disabled = pending.plan.blockedCount > 0;
+  confirm.disabled = retryingCount > 0 || pending.plan.blockedCount > 0 || importableCount === 0;
   confirm.addEventListener("click", handleConfirmImport);
   footerActions.append(confirm, cancel);
   footer.append(footerSummary, footerActions);
@@ -1051,6 +1416,8 @@ function buildImportPlanSummary(plan, fileCount) {
     if (row.skipped || row.blocked || !row.finalChapterTitle) return;
     counts.set(row.finalChapterTitle, (counts.get(row.finalChapterTitle) || 0) + 1);
   });
+  const plannedFileCount = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  const excludedCount = Math.max(0, fileCount - plannedFileCount);
   const destinationCount = counts.size;
   const chapterCount = plan.newChapterTitles.length;
   const destinationCopy = destinationCount
@@ -1059,46 +1426,61 @@ function buildImportPlanSummary(plan, fileCount) {
   const chapterCopy = chapterCount
     ? ` ${chapterCount} new ${chapterCount === 1 ? "chapter" : "chapters"} will be created when you confirm.`
     : "";
-  return `${fileCount} ${fileCount === 1 ? "file is" : "files are"} ${destinationCopy}. Nothing is saved until you confirm.${chapterCopy}`;
+  const excludedCopy = excludedCount
+    ? ` ${excludedCount} ${excludedCount === 1 ? "file is" : "files are"} skipped or need attention.`
+    : "";
+  return `${plannedFileCount} of ${fileCount} ${fileCount === 1 ? "file is" : "files are"} ${destinationCopy}. Nothing is saved until you confirm.${chapterCopy}${excludedCopy}`;
 }
 
-function getImportReviewStats(plan) {
+function getImportReviewStats(plan, files = [], assignments = []) {
   const rows = Array.isArray(plan?.rows) ? plan.rows : [];
+  const fileByFileId = new Map(files.map((file) => [file.fileId, file]));
+  const assignmentByFileId = new Map(assignments.map((assignment) => [assignment.fileId, assignment]));
   return rows.reduce((stats, row) => {
-    if (row?.skipped) stats.skipped += 1;
+    if (row?.skipped) {
+      const file = fileByFileId.get(row.fileId);
+      const assignment = assignmentByFileId.get(row.fileId);
+      if (file?.status === "failed" && !assignment?.alreadySaved) stats.failed += 1;
+      else stats.skipped += 1;
+    }
     else if (row?.blocked || Number(row?.confidence) < 0.5) stats.review += 1;
     else stats.ready += 1;
     return stats;
-  }, { ready: 0, review: 0, skipped: 0 });
+  }, { ready: 0, review: 0, failed: 0, skipped: 0 });
 }
 
 function buildImportReviewFooterCopy(stats) {
-  if (stats.review) {
-    return `${stats.review} ${stats.review === 1 ? "file needs" : "files need"} review before import.`;
-  }
-  if (stats.ready) {
-    return `${stats.ready} ${stats.ready === 1 ? "file is" : "files are"} ready to import.`;
-  }
-  return "No files are ready to import.";
+  const parts = [];
+  if (stats.ready) parts.push(`${stats.ready} ready`);
+  if (stats.review) parts.push(`${stats.review} ${stats.review === 1 ? "needs" : "need"} review`);
+  if (stats.failed) parts.push(`${stats.failed} failed`);
+  if (stats.skipped) parts.push(`${stats.skipped} skipped`);
+  return parts.length ? `${parts.join(" · ")}.` : "No files are ready to import.";
 }
 
 function groupImportReviewEntries(entries) {
   const groups = new Map();
   entries.forEach((entry) => {
+    const retrying = Boolean(entry.retrying);
     const skipped = Boolean(entry.row?.skipped);
-    const chapterTitle = skipped
-      ? "Skipped files"
+    const chapterTitle = retrying
+      ? "Retrying files"
+      : skipped
+        ? "Files needing attention"
       : String(entry.row?.finalChapterTitle || entry.assignment?.chapterTitle || "").trim()
         || "Choose a chapter";
-    const key = skipped
-      ? "skipped"
+    const key = retrying
+      ? "retrying"
+      : skipped
+        ? "skipped"
       : `${entry.row?.blocked ? "blocked:" : ""}${chapterTitle.toLowerCase()}`;
     const group = groups.get(key) || {
       chapterTitle,
       entries: [],
       createsChapter: false,
       blocked: false,
-      skipped
+      skipped,
+      retrying
     };
     group.entries.push(entry);
     group.createsChapter ||= Boolean(entry.row?.willCreateChapter);
@@ -1110,7 +1492,7 @@ function groupImportReviewEntries(entries) {
 
 function renderImportReviewFolderGroup(cluster, pending) {
   const group = document.createElement("section");
-  group.className = `smart-import__cluster${cluster.blocked ? " smart-import__cluster--blocked" : ""}${cluster.skipped ? " smart-import__cluster--skipped" : ""}`;
+  group.className = `smart-import__cluster${cluster.blocked ? " smart-import__cluster--blocked" : ""}${cluster.skipped ? " smart-import__cluster--skipped" : ""}${cluster.retrying ? " smart-import__cluster--retrying" : ""}`;
   const heading = document.createElement("header");
   heading.className = "smart-import__cluster-header";
   heading.append(createElement(
@@ -1124,10 +1506,12 @@ function renderImportReviewFolderGroup(cluster, pending) {
 }
 
 function renderImportReviewRow(entry, pending) {
-  const { row, file, assignment, index } = entry;
+  const { row, file, assignment, index, retrying } = entry;
   const article = document.createElement("article");
-  const needsReview = !row.skipped && (row.confidence < 0.5 || row.blocked);
-  article.className = `smart-import__row${row.skipped ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}${needsReview ? " smart-import__row--review" : ""}`;
+  const needsReview = !retrying && !row.skipped && (row.confidence < 0.5 || row.blocked);
+  article.className = `smart-import__row${row.skipped ? " smart-import__row--skipped" : ""}${row.blocked ? " smart-import__row--blocked" : ""}${needsReview ? " smart-import__row--review" : ""}${retrying ? " smart-import__row--retrying" : ""}`;
+  article.dataset.importFileId = row.fileId;
+  article.setAttribute("aria-busy", String(Boolean(retrying)));
   if (assignment?.reason) article.title = assignment.reason;
   const heading = document.createElement("div");
   heading.className = "smart-import__row-heading";
@@ -1137,26 +1521,71 @@ function renderImportReviewRow(entry, pending) {
   );
   const badges = document.createElement("div");
   badges.className = "smart-import__badges";
-  if (needsReview) {
-    const confidenceLabel = row.blocked ? "Needs reassignment" : "Low match";
-    const confidenceTone = row.blocked ? "blocked" : "low";
-    const confidence = createElement(
-      "span",
-      confidenceLabel,
-      `smart-import__confidence smart-import__confidence--${confidenceTone}`
-    );
-    confidence.setAttribute("aria-label", `${confidenceLabel} classification confidence`);
-    badges.append(confidence);
-  }
+  const statusLabel = retrying
+    ? "Retrying"
+    : row.skipped
+      ? assignment?.alreadySaved ? "Already saved" : "Read failed"
+      : row.blocked
+        ? "Needs reassignment"
+        : row.confidence < 0.5
+          ? "Low match"
+          : "Ready";
+  const statusTone = retrying
+    ? "loading"
+    : row.skipped
+      ? assignment?.alreadySaved ? "skipped" : "failed"
+      : row.blocked
+        ? "blocked"
+        : row.confidence < 0.5 ? "low" : "ready";
+  const status = createElement(
+    "span",
+    statusLabel,
+    `smart-import__status smart-import__status--${statusTone}`
+  );
+  status.setAttribute("aria-label", `${statusLabel} import status`);
+  badges.append(status);
   heading.append(badges);
   article.append(heading);
 
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "text-button smart-import__remove";
+  remove.textContent = "Remove";
+  remove.setAttribute("aria-label", `Remove ${file?.fileName || file?.title || row.fileId} from this import`);
+  remove.addEventListener("click", () => removeImportReviewFile(row.fileId));
+
+  if (retrying) {
+    const message = createElement("p", "Reading and classifying this file again…", "smart-import__message");
+    message.setAttribute("role", "status");
+    const actions = document.createElement("div");
+    actions.className = "smart-import__row-actions smart-import__row-actions--compact";
+    actions.append(remove);
+    article.append(message, actions);
+    return article;
+  }
+
   if (row.skipped) {
-    article.append(createElement(
+    const message = createElement(
       "p",
-      assignment?.alreadySaved ? "already saved — will be skipped" : "couldn't read — will be skipped",
-      "smart-import__message"
-    ));
+      assignment?.alreadySaved
+        ? "This source is already saved and will not be imported again."
+        : file?.error || "This file could not be read safely.",
+      `smart-import__message${assignment?.alreadySaved ? "" : " smart-import__message--danger"}`
+    );
+    if (!assignment?.alreadySaved) message.setAttribute("role", "alert");
+    const actions = document.createElement("div");
+    actions.className = "smart-import__row-actions smart-import__row-actions--compact";
+    if (!assignment?.alreadySaved && file?.originalFile) {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "secondary compact-button smart-import__retry";
+      retry.textContent = "Retry";
+      retry.setAttribute("aria-label", `Retry ${file?.fileName || file?.title || row.fileId}`);
+      retry.addEventListener("click", () => void retryImportReviewFile(row.fileId));
+      actions.append(retry);
+    }
+    actions.append(remove);
+    article.append(message, actions);
     return article;
   }
   if (assignment?.reason) article.append(createElement("p", assignment.reason, "smart-import__reason"));
@@ -1229,7 +1658,7 @@ function renderImportReviewRow(entry, pending) {
   move.addEventListener("click", () => select.focus());
   const actions = document.createElement("div");
   actions.className = "smart-import__row-actions";
-  actions.append(label, move, select);
+  actions.append(label, move, select, remove);
   article.append(actions);
   return article;
 }
@@ -1240,28 +1669,149 @@ function getImportFileTypeLabel(file) {
   return extension || "FILE";
 }
 
-function cancelImportReview() {
+function rebuildPendingImportPlan(pending) {
+  if (!pending) return;
+  const assignmentByFileId = new Map(
+    (Array.isArray(pending.assignments) ? pending.assignments : [])
+      .map((assignment) => [assignment.fileId, assignment])
+  );
+  pending.assignments = pending.files.map((file) => {
+    const assignment = assignmentByFileId.get(file.fileId);
+    if (file.skipped || !assignment) {
+      if (!file.skipped) {
+        file.skipped = true;
+        file.status = "failed";
+        file.error ||= "This file has no chapter assignment. Retry it or remove it from the import.";
+      }
+      return {
+        fileId: file.fileId,
+        chapterTitle: "",
+        confidence: 0,
+        skipped: true
+      };
+    }
+    return {
+      ...assignment,
+      fileId: file.fileId,
+      skipped: Boolean(assignment.alreadySaved)
+    };
+  });
+  refreshImportDuplicateAssignments(pending, pending.journey);
+  pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
+}
+
+function removeImportReviewFile(fileId) {
+  const pending = state.pendingImport;
+  if (!pending) return;
+  const file = pending.files.find((item) => item.fileId === fileId);
+  if (!file) return;
+  pending.files = pending.files.filter((item) => item.fileId !== fileId);
+  pending.assignments = pending.assignments.filter((assignment) => assignment.fileId !== fileId);
+  pending.retryingFileIds?.delete(fileId);
+  if (!pending.files.length) {
+    dismissImportReview("All imported files were removed. Nothing was saved.");
+    return;
+  }
+  rebuildPendingImportPlan(pending);
+  renderImportReview();
+  showStatus(`${file.fileName || file.title || "File"} was removed from this import.`);
+}
+
+async function retryImportReviewFile(fileId) {
+  const pending = state.pendingImport;
+  const file = pending?.files.find((item) => item.fileId === fileId);
+  if (!pending || !file?.originalFile || pending.retryingFileIds?.has(fileId)) return;
+  pending.retryingFileIds.add(fileId);
+  file.status = "retrying";
+  renderImportReview();
+  showStatus(`Retrying ${file.fileName || file.title || "file"}...`);
+  try {
+    const source = await readImportedDocument(file.originalFile);
+    if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(file)) return;
+    const readableFile = {
+      ...file,
+      title: source.title || file.fileName,
+      excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
+      source,
+      status: "ready",
+      skipped: false,
+      error: "",
+      alreadySaved: false
+    };
+    let assignments;
+    try {
+      assignments = await classifyImportSourcesWithBackend([readableFile], pending.journey);
+    } catch {
+      assignments = globalThis.ExamCramJourney.classifySourcesLocally([readableFile], pending.journey);
+      pending.usedLocalClassification = true;
+    }
+    if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(file)) return;
+    const assignment = assignments.find((item) => item.fileId === fileId);
+    if (!assignment) throw new Error("The file sorter did not return a chapter assignment.");
+    Object.assign(file, readableFile);
+    pending.assignments = pending.assignments
+      .filter((item) => item.fileId !== fileId)
+      .concat({ ...assignment, skipped: false });
+    rebuildPendingImportPlan(pending);
+    showStatus(`${file.fileName || file.title || "File"} is ready for review.`);
+  } catch (error) {
+    if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(file)) return;
+    file.source = null;
+    file.excerpt = "";
+    file.status = "failed";
+    file.skipped = true;
+    file.error = error?.message || "This file could not be read safely.";
+    pending.assignments = pending.assignments
+      .filter((item) => item.fileId !== fileId)
+      .concat({ fileId, chapterTitle: "", confidence: 0, skipped: true });
+    rebuildPendingImportPlan(pending);
+    showStatus(`${file.fileName || file.title || "File"} still could not be read. Review the error or remove it.`, true);
+  } finally {
+    if (state.pendingImport === pending && pending.files.includes(file)) {
+      pending.retryingFileIds.delete(fileId);
+      renderImportReview();
+    }
+  }
+}
+
+function dismissImportReview(message) {
+  if (state.pendingImport) state.pendingImport.cancelled = true;
   state.pendingImport = null;
   state.pendingImportChapterFileId = "";
   document.querySelector(".smart-import")?.remove();
   elements.documentImportControls?.closest(".page-composer")?.classList.remove("page-composer--reviewing");
   elements.documentImportControls?.classList.remove("hidden");
   if (elements.newChapterDialog?.open) elements.newChapterDialog.close("cancel");
-  showStatus("Import cancelled. Nothing was saved.");
+  showStatus(message);
+}
+
+function cancelImportReview() {
+  dismissImportReview("Import cancelled. Nothing was saved.");
 }
 
 async function handleConfirmImport() {
   const pending = state.pendingImport;
   if (!pending) return;
+  if (pending.retryingFileIds?.size) {
+    showStatus("Wait for every retry to finish before confirming the import.", true);
+    return;
+  }
   if (pending.plan.blockedCount > 0) {
     showStatus("Choose existing chapters for every blocked file before confirming.", true);
     return;
   }
+  if (!pending.plan.rows.some((row) => !row.skipped && !row.blocked)) {
+    showStatus("Retry or remove failed files before confirming. No readable files are ready.", true);
+    return;
+  }
 
   const section = document.querySelector(".smart-import");
-  const confirm = section?.querySelector(".smart-import__confirm");
-  if (confirm) confirm.disabled = true;
   section?.setAttribute("aria-busy", "true");
+  section?.querySelectorAll("button, select").forEach((control) => {
+    control.disabled = true;
+  });
+  const footerSummary = section?.querySelector(".smart-import__footer-summary");
+  if (footerSummary) footerSummary.textContent = "Importing files…";
   try {
     pending.journey = await getJourney();
     refreshImportDuplicateAssignments(pending, pending.journey);
@@ -1326,9 +1876,7 @@ async function handleConfirmImport() {
     showStatus(error?.message || "The import stopped before every source could be filed. Already filed sources remain saved.", true);
   } finally {
     const activeSection = document.querySelector(".smart-import");
-    activeSection?.removeAttribute("aria-busy");
-    const activeConfirm = activeSection?.querySelector(".smart-import__confirm");
-    if (activeConfirm) activeConfirm.disabled = Boolean(state.pendingImport?.plan?.blockedCount);
+    if (activeSection && state.pendingImport === pending) renderImportReview();
   }
 }
 
@@ -4457,9 +5005,10 @@ function buildSourceClozeQuestions(text, sentences, maxQuestions) {
 
   const questions = [];
   const used = new Set();
+  const sourceTermSet = new Set(sourceTerms);
   for (const sentence of sentences) {
     const sentenceTerms = [...new Set(getWords(sentence))]
-      .filter((term) => sourceTerms.includes(term));
+      .filter((term) => sourceTermSet.has(term));
     for (const term of sentenceTerms) {
       const matcher = createWholeWordMatcher(term);
       const match = String(sentence || "").match(matcher);
@@ -8581,6 +9130,20 @@ async function getJourney() {
   return globalThis.ExamCramJourney.normalizeJourney(stored || globalThis.ExamCramJourney.createJourney());
 }
 
+async function getStudyGoal() {
+  if (!globalThis.ExamCramJourney) return null;
+  const stored = await getStorage(STORAGE_KEYS.studyGoal, null);
+  return globalThis.ExamCramJourney.normalizeStudyGoal(stored);
+}
+
+async function saveStudyGoal(goal) {
+  if (!globalThis.ExamCramJourney) throw new Error("Study goal tools are unavailable.");
+  const normalized = globalThis.ExamCramJourney.normalizeStudyGoal(goal);
+  if (!normalized) throw new Error("The study goal could not be saved.");
+  await setStorage(STORAGE_KEYS.studyGoal, normalized);
+  return normalized;
+}
+
 async function saveJourney(journey) {
   if (!journey) return;
   await setStorage(STORAGE_KEYS.journey, journey);
@@ -8769,6 +9332,135 @@ async function recordLearningItem(item, chapterIdOrTitle, source = null, questio
   return { ...recorded.result, journey: recorded.journey };
 }
 
+function renderDashboardGoalForm(journey, studyGoal) {
+  const chapterIds = new Set(studyGoal?.chapterIds || []);
+  const chapterOptions = journey.chapters.map((chapter, index) => {
+    const label = document.createElement("label");
+    label.className = "dashboard__chapter-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.name = "chapterIds";
+    checkbox.value = chapter.id;
+    checkbox.id = `dashboardChapter-${index + 1}`;
+    checkbox.checked = chapterIds.has(chapter.id);
+    label.htmlFor = checkbox.id;
+    label.append(checkbox, createElement("span", chapter.title));
+    return label;
+  });
+  elements.dashboardChapterOptions.replaceChildren(...chapterOptions);
+  elements.dashboardDaysPerWeek.value = String(studyGoal?.daysPerWeek || 5);
+  elements.dashboardDailyMinutes.value = String(studyGoal?.dailyMinutes || 20);
+  elements.dashboardTargetDate.value = studyGoal?.targetDate || "";
+  elements.dashboardGoalLabel.value = studyGoal?.label || "";
+  elements.dashboardGoalTitle.textContent = studyGoal?.label || (studyGoal ? "Your study goal" : "Choose what to focus on");
+  elements.dashboardGoalMode.textContent = studyGoal ? "Active" : "Setup";
+  elements.dashboardGoalExplainer.textContent = studyGoal
+    ? "Update the chapters, weekly rhythm, or daily pace that guide your plan."
+    : "A goal keeps today’s work aligned with the chapters and pace that matter most.";
+  elements.saveDashboardGoalButton.textContent = studyGoal ? "Update study goal" : "Save study goal";
+  updateChapterSelectionSlots();
+}
+
+function buildDashboardStat(label, value) {
+  const stat = document.createElement("div");
+  stat.className = "dashboard__stat";
+  stat.append(
+    createElement("span", label, "dashboard__stat-label"),
+    createElement("strong", value, "dashboard__stat-value")
+  );
+  return stat;
+}
+
+function renderDashboardStats(journey, studyGoal, plan) {
+  const dueCount = globalThis.ExamCramJourney.getDueConcepts(journey, { now: Date.now(), limit: 50 }).length;
+  const streakDays = Math.max(0, Number(plan?.habit?.currentStreakDays) || 0);
+  const stats = [
+    buildDashboardStat("Current streak", `${streakDays} ${streakDays === 1 ? "day" : "days"}`),
+    buildDashboardStat("Due concepts", String(dueCount))
+  ];
+  if (plan?.goalContext) {
+    stats.push(buildDashboardStat("Until target", `${plan.goalContext.daysToTarget} ${plan.goalContext.daysToTarget === 1 ? "day" : "days"}`));
+  }
+
+  const selectedChapterIds = new Set(studyGoal?.chapterIds || []);
+  const selectedChapters = journey.chapters.filter((chapter) => selectedChapterIds.has(chapter.id));
+  const chapterStats = selectedChapters.map((chapter) => {
+    const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
+    const chip = createElement("span", `${chapter.title} · ${formatJourneyStatus(status)}`, "dashboard__chapter-chip");
+    chip.dataset.status = status;
+    return chip;
+  });
+  elements.dashboardStats.replaceChildren(...stats, ...chapterStats);
+}
+
+async function renderDashboard() {
+  if (!elements.dashboardGoalForm || !globalThis.ExamCramJourney) return;
+  const [journey, storedFocus, savedItems, studyGoal] = await Promise.all([
+    getJourney(),
+    getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
+    getStorage(STORAGE_KEYS.sessions, []).catch(() => []),
+    getStudyGoal().catch(() => null)
+  ]);
+  if (!journey) return;
+
+  const hasChapters = journey.chapters.length > 0;
+  elements.dashboardGoalForm.classList.toggle("hidden", !hasChapters);
+  elements.dashboardStats.classList.toggle("hidden", !hasChapters);
+  elements.dashboardPlan.classList.toggle("hidden", !hasChapters);
+  elements.dashboardEmptyState.classList.toggle("hidden", hasChapters);
+
+  if (!hasChapters) {
+    const createButton = document.createElement("button");
+    createButton.type = "button";
+    createButton.className = "primary";
+    createButton.textContent = "Create your first note";
+    createButton.addEventListener("click", () => switchView("pageView"));
+    elements.dashboardEmptyState.replaceChildren(
+      createElement("strong", "Start your first study chapter"),
+      createElement("p", "Create a visual note to plant your first Journey chapter and unlock a goal-aware daily plan."),
+      createButton
+    );
+    elements.dashboardStats.replaceChildren();
+    elements.dashboardPlan.replaceChildren();
+    return;
+  }
+
+  renderDashboardGoalForm(journey, studyGoal);
+  elements.dashboardEmptyState.replaceChildren();
+  const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
+  const savedNoteIds = (Array.isArray(savedItems) ? savedItems : []).map((item) => item?.id);
+  const plan = globalThis.ExamCramJourney.buildStudyPlan(journey, focusHistory, { now: Date.now(), savedNoteIds, studyGoal });
+  renderDashboardStats(journey, studyGoal, plan);
+  elements.dashboardPlan.replaceChildren(buildTodayPlanSection(plan));
+}
+
+async function handleSaveStudyGoal(event) {
+  event.preventDefault();
+  elements.saveDashboardGoalButton.disabled = true;
+  try {
+    const existingGoal = await getStudyGoal();
+    const timestamp = new Date().toISOString();
+    const chapterIds = [...elements.dashboardChapterOptions.querySelectorAll('input[name="chapterIds"]:checked')]
+      .map((checkbox) => checkbox.value);
+    const normalized = globalThis.ExamCramJourney.normalizeStudyGoal({
+      chapterIds,
+      daysPerWeek: elements.dashboardDaysPerWeek.value,
+      dailyMinutes: elements.dashboardDailyMinutes.value,
+      targetDate: elements.dashboardTargetDate.value || null,
+      label: elements.dashboardGoalLabel.value,
+      createdAt: existingGoal?.createdAt || timestamp,
+      updatedAt: timestamp
+    });
+    await saveStudyGoal(normalized);
+    await renderDashboard();
+    showStatus("Study goal saved.");
+  } catch (error) {
+    showStatus(error?.message || "The study goal could not be saved.", true);
+  } finally {
+    elements.saveDashboardGoalButton.disabled = false;
+  }
+}
+
 async function renderJourney() {
   if (!elements.journeyRoute || !globalThis.ExamCramJourney) return;
   const [journey, storedFocus, savedItems] = await Promise.all([
@@ -8782,9 +9474,6 @@ async function renderJourney() {
     elements.journeyRange.value = journey.summary.range;
   }
   const metrics = globalThis.ExamCramJourney.getMetrics(journey, focusHistory);
-  const savedNoteIds = (Array.isArray(savedItems) ? savedItems : []).map((item) => item?.id);
-  const plan = globalThis.ExamCramJourney.buildStudyPlan(journey, focusHistory, { now: Date.now(), savedNoteIds });
-  renderTodayPlan(plan);
   const timelineChapters = globalThis.ExamCramJourney.orderChaptersByTimeline(journey.chapters);
   const progressTone = getJourneyPerformanceTone(metrics.progressPercent, "progress");
   const averageTone = getJourneyPerformanceTone(metrics.averageScore, "average");
@@ -8893,7 +9582,7 @@ async function renderJourney() {
   if (journey.summary) renderJourneySummary(journey.summary);
 }
 
-function renderTodayPlan(plan) {
+function buildTodayPlanSection(plan) {
   const section = document.createElement("section");
   section.className = "today-plan";
   section.setAttribute("aria-label", "Today's study plan");
@@ -8917,6 +9606,9 @@ function renderTodayPlan(plan) {
       createElement("strong", step.title || "Study next", "today-plan__title"),
       createElement("p", step.reason || "", "today-plan__reason")
     );
+    if (step.outsideGoal) {
+      copy.append(createElement("span", "Outside your goal", "today-plan__outside-goal"));
+    }
     if (step.noteMissing) {
       copy.append(createElement("p", "The saved note behind this quiz is no longer in your Library — Go opens its chapter so you can rebuild it.", "today-plan__reason"));
     }
@@ -8947,7 +9639,7 @@ function renderTodayPlan(plan) {
           } else if (step.noteMissing && step.chapterId) {
             const opened = await openTodayPlanChapterArtifact(step, { openCreateOnMissing: false });
             if (!opened) {
-              await renderJourney();
+              await renderDashboard();
               showStatus("The saved note behind this step is no longer in your Library, and this chapter has no saved replacement note yet. Build one from its sources to restore the quiz.", true);
             }
           } else {
@@ -8964,10 +9656,7 @@ function renderTodayPlan(plan) {
     list.append(row);
   });
   section.append(list);
-
-  const existing = elements.journeyMetrics.parentElement?.querySelector(".today-plan");
-  existing?.remove();
-  elements.journeyChapterDetail.after(section);
+  return section;
 }
 
 async function openTodayPlanChapterArtifact(step, options = {}) {
@@ -9006,7 +9695,7 @@ async function startTodayPlanQuiz(step) {
     const artifact = await openJourneyArtifact(step.noteId);
     if (!artifact) {
       if (step.chapterId) selectChapterAcrossControls(step.chapterId);
-      await renderJourney();
+      await renderDashboard();
       return;
     }
     const activeArtifact = state.currentSession?.id === artifact.id

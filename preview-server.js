@@ -9,6 +9,7 @@ const FILES = new Map([
   ["/popup.html", "popup.html"],
   ["/popup.css", "popup.css"],
   ["/popup-design-system.css", "popup-design-system.css"],
+  ["/vintage-planner.css", "vintage-planner.css"],
   ["/popup.js", "popup.js"],
   ["/assets/page-actions/from-page.png", "assets/page-actions/from-page.png"],
   ["/assets/page-actions/from-video.png", "assets/page-actions/from-video.png"],

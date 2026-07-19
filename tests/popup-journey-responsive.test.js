@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const styles = fs.readFileSync(path.join(__dirname, "..", "popup.css"), "utf8");
 const script = fs.readFileSync(path.join(__dirname, "..", "popup.js"), "utf8");
@@ -52,8 +53,12 @@ test("Smart Import re-plans capacity whenever a chapter dropdown changes", () =>
 });
 
 test("Smart Import cannot confirm while chapter-cap rows remain blocked", () => {
-  assert.match(script, /confirm\.disabled = pending\.plan\.blockedCount > 0/);
+  assert.match(script, /confirm\.disabled = retryingCount > 0 \|\| pending\.plan\.blockedCount > 0 \|\| importableCount === 0/);
   assert.match(script, /async function handleConfirmImport\(\)[\s\S]*?if \(pending\.plan\.blockedCount > 0\) \{[\s\S]*?return;/);
+  assert.match(script, /if \(!pending\.plan\.rows\.some\(\(row\) => !row\.skipped && !row\.blocked\)\)/);
+  assert.match(script, /section\?\.querySelectorAll\("button, select"\)\.forEach\(\(control\) => \{\s*control\.disabled = true;/);
+  assert.match(script, /footerSummary\.textContent = "Importing files…"/);
+  assert.match(script, /if \(activeSection && state\.pendingImport === pending\) renderImportReview\(\)/);
 });
 
 test("Smart Import confirms sources through the existing Journey add-source operation", () => {
@@ -64,14 +69,14 @@ test("Smart Import confirms sources through the existing Journey add-source oper
 
 test("Smart Import identifies exact re-uploads before reserving chapter capacity", () => {
   assert.match(script, /function isImportSourceAlreadySaved\(file, assignment, journey\)[\s\S]*?source\.fingerprint === sourceFingerprint/);
-  assert.match(script, /alreadySaved \? "already saved — will be skipped" : "couldn't read — will be skipped"/);
+  assert.match(script, /assignment\?\.alreadySaved[\s\S]*?This source is already saved and will not be imported again\./);
   assert.match(script, /refreshImportDuplicateAssignments\(pending, pending\.journey\);[\s\S]*?planBulkFiling\(pending\.assignments, pending\.journey\)/);
 });
 
 test("Smart Import review is accessible, compact, and uses semantic UI tokens", () => {
   assert.match(script, /section\.setAttribute\("aria-label", "Review imported files"\)/);
   assert.match(script, /const select = document\.createElement\("select"\)/);
-  assert.match(script, /confidence\.setAttribute\("aria-label", `\$\{confidenceLabel\} classification confidence`\)/);
+  assert.match(script, /status\.setAttribute\("aria-label", `\$\{statusLabel\} import status`\)/);
   assert.match(styles, /\.smart-import\s*\{[\s\S]*?max-height:[\s\S]*?overflow-y:\s*auto;[\s\S]*?background:\s*var\(--ui-surface\);/);
   assert.match(styles, /\.smart-import__group--check\s*\{[\s\S]*?background:\s*var\(--ui-warning-tint\);/);
   assert.match(styles, /\.smart-import__message--danger\s*\{[\s\S]*?color:\s*var\(--ui-danger\);/);
@@ -82,8 +87,8 @@ test("Smart Import matches the compact folder-and-status review hierarchy", () =
   assert.match(script, /Review & Confirm Import/);
   assert.match(script, /function groupImportReviewEntries\(entries\)/);
   assert.match(script, /function renderImportReviewFolderGroup\(cluster, pending\)/);
-  assert.match(script, /createElement\("span", "Folder"\)/);
-  assert.match(script, /createElement\("span", "Status"\)/);
+  assert.match(script, /createElement\("span", "Imported file"\)/);
+  assert.match(script, /createElement\("span", "Destination and actions"\)/);
   assert.match(script, /move\.textContent = "Move"/);
   assert.match(script, /smart-import__groups/);
   assert.match(styles, /#pageView \.page-composer--reviewing > :not\(\.smart-import\)/);
@@ -92,6 +97,53 @@ test("Smart Import matches the compact folder-and-status review hierarchy", () =
   assert.match(styles, /#pageView \.smart-import__confirm\s*\{[\s\S]*?var\(--ui-success\)/);
   assert.match(styles, /#pageView \.smart-import__cluster\s*\{/);
   assert.match(styles, /#pageView \.smart-import__footer-actions\s*\{/);
+});
+
+test("Smart Import renders every selected file even when planning state is incomplete", () => {
+  const start = script.indexOf("function getPendingImportReviewEntries(pending)");
+  const end = script.indexOf("function renderImportReview()", start);
+  assert.ok(start >= 0 && end > start);
+  const helper = vm.runInNewContext(`(() => {
+    ${script.slice(start, end)}
+    return getPendingImportReviewEntries;
+  })()`);
+  const files = Array.from({ length: 11 }, (_, index) => ({
+    fileId: `file-${index}`,
+    fileName: `Chapter ${index}.html`,
+    skipped: false
+  }));
+  const entries = helper({
+    files,
+    assignments: [{ fileId: "file-0", confidence: 0.9 }],
+    plan: { rows: [{ fileId: "file-0", skipped: false, blocked: false, confidence: 0.9 }] },
+    retryingFileIds: new Set(["file-10"])
+  });
+  assert.equal(entries.length, 11);
+  assert.equal(entries[0].row.blocked, false);
+  assert.equal(entries[10].row.blocked, true);
+  assert.equal(entries[10].retrying, true);
+});
+
+test("Smart Import keeps errors visible and exposes retry, remove, confirm, and cancel", () => {
+  assert.match(script, /originalFile: file,[\s\S]*?status: "failed",[\s\S]*?error:/);
+  assert.match(script, /file\?\.error \|\| "This file could not be read safely\."/);
+  assert.match(script, /message\.setAttribute\("role", "alert"\)/);
+  assert.match(script, /retry\.textContent = "Retry"[\s\S]*?retryImportReviewFile\(row\.fileId\)/);
+  assert.match(script, /remove\.textContent = "Remove"[\s\S]*?removeImportReviewFile\(row\.fileId\)/);
+  assert.match(script, /cancel\.textContent = "Cancel"[\s\S]*?cancelImportReview/);
+  assert.match(script, /confirm\.textContent = "Confirm Import"[\s\S]*?handleConfirmImport/);
+  assert.match(script, /async function retryImportReviewFile\(fileId\)[\s\S]*?readImportedDocument\(file\.originalFile\)[\s\S]*?rebuildPendingImportPlan\(pending\)/);
+  assert.match(script, /file\?\.status === "failed"[\s\S]*?stats\.failed \+= 1/);
+  assert.match(script, /if \(stats\.failed\) parts\.push\(`\$\{stats\.failed\} failed`\)/);
+  assert.match(script, /excludedCount[\s\S]*?skipped or need attention/);
+});
+
+test("Smart Import review owns a stable viewport grid with isolated scrolling", () => {
+  assert.match(styles, /#pageView \.page-composer--reviewing\s*\{[\s\S]*?animation:\s*none !important;[\s\S]*?transform:\s*none !important;/);
+  assert.match(styles, /#pageView \.page-composer--reviewing \.smart-import\s*\{[\s\S]*?position:\s*fixed;[\s\S]*?height:\s*100dvh;[\s\S]*?grid-template-rows:\s*auto auto minmax\(0, 1fr\) auto;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(styles, /@media \(max-width: 640px\)\s*\{[\s\S]*?#pageView \.page-composer--reviewing \.smart-import\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0, 1fr\) auto;/);
+  assert.match(styles, /#pageView \.smart-import__groups\s*\{[\s\S]*?min-height:\s*0;[\s\S]*?overflow-y:\s*auto;[\s\S]*?overscroll-behavior:\s*contain;[\s\S]*?scrollbar-gutter:\s*stable;/);
+  assert.match(styles, /#pageView \.smart-import__footer\s*\{[\s\S]*?justify-content:\s*space-between;/);
 });
 
 test("Journey metrics use semantic single surfaces with container-based reflow", () => {
@@ -174,15 +226,19 @@ test("artifact actions become full-width cards through 640px", () => {
   assert.match(styles, /@media \(max-width: 640px\)\s*\{[\s\S]*?\.journey-artifact-row\s*\{\s*grid-template-columns:\s*minmax\(0, 1fr\);[\s\S]*?\.journey-artifact-open\s*\{[\s\S]*?width:\s*100%;[\s\S]*?min-width:\s*0;/);
 });
 
-test("Journey builds and renders an accessible Today's plan section", () => {
-  assert.match(script, /ExamCramJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds \}\)/);
+test("Dashboard builds and renders the accessible Today's plan section outside Journey", () => {
+  assert.match(script, /ExamCramJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds, studyGoal \}\)/);
   assert.match(script, /const persistedView = viewId === "notesView" \? "pageView" : viewId/);
+  assert.match(script, /function buildTodayPlanSection\(plan\)/);
   assert.match(script, /section\.setAttribute\("aria-label", "Today's study plan"\)/);
   assert.match(script, /createElement\("span", "TODAY'S PLAN", "today-plan__label"\)/);
   assert.match(script, /action\.type = "button"/);
+  const journeyStart = script.indexOf("async function renderJourney()");
+  const planSectionStart = script.indexOf("function buildTodayPlanSection(plan)", journeyStart);
+  assert.doesNotMatch(script.slice(journeyStart, planSectionStart), /buildStudyPlan|renderTodayPlan/);
 });
 
-test("Journey plan recovery actions reuse the existing recovery quiz launcher", () => {
+test("Dashboard plan recovery actions reuse the existing recovery quiz launcher", () => {
   assert.match(script, /async function openTodayPlanChapterArtifact\(step, options = \{\}\)/);
   assert.match(script, /const boundChapterId = String\(artifact\?\.journeyChapterId \|\| artifact\?\.sourceBinding\?\.chapterId \|\| ""\)\.trim\(\);[\s\S]*?return boundChapterId \? boundChapterId === chapter\?\.id : sessionIds\.has\(artifactId\);/);
   assert.match(script, /const newestFirst = \(Array\.isArray\(savedItems\) \? savedItems : \[\]\)[\s\S]*?sessionActivityTime\(second\)[\s\S]*?sessionActivityTime\(first\)/);

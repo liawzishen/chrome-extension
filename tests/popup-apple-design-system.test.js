@@ -70,11 +70,12 @@ test("rendered semantic colors meet normal-text contrast targets", () => {
   assert.doesNotMatch(script, /#ffb4ad/);
 });
 
-test("four compact study destinations use symbols and complete tab semantics", () => {
-  assert.equal((html.match(/role="tab"/g) || []).length, 4);
-  assert.equal((html.match(/role="tabpanel"/g) || []).length, 4);
+test("five compact study destinations use symbols and complete tab semantics", () => {
+  assert.equal((html.match(/role="tab"/g) || []).length, 5);
+  assert.equal((html.match(/role="tabpanel"/g) || []).length, 5);
   assert.match(html, /<nav class="tabs"[^>]*role="tablist"/);
   const tabNames = {
+    dashboardTab: "Dashboard",
     pageTab: "Create",
     journeyTab: "Journey",
     focusTab: "Focus",
@@ -84,7 +85,7 @@ test("four compact study destinations use symbols and complete tab semantics", (
     assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="${name}"`));
     assert.match(html, new RegExp(`id="${id}"[\\s\\S]{0,180}class="tab-icon"`));
   }
-  assert.match(styles, /\.tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(5, minmax\(0, 1fr\)\)/);
   assert.match(styles, /\.tab\s*\{[\s\S]*min-height:\s*52px/);
 });
 
@@ -189,7 +190,7 @@ test("narrow panels cannot create a second tab row or an overlaying action dock"
   assert.match(narrowStyles, /\.artifact-action-bar\s*\{[\s\S]*position:\s*static/);
   const mediumStart = styles.indexOf("@media (max-width: 640px)");
   const mediumStyles = styles.slice(mediumStart, narrowStart);
-  assert.match(mediumStyles, /\.tabs\s*\{[\s\S]*repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(mediumStyles, /\.tabs\s*\{[\s\S]*repeat\(5, minmax\(0, 1fr\)\)/);
   assert.doesNotMatch(mediumStyles, /repeat\(3/);
   assert.match(styles, /\.topbar\s*\{[\s\S]*position:\s*relative/);
   assert.match(styles, /\.tabs\s*\{[\s\S]*position:\s*sticky;[\s\S]*top:\s*0/);

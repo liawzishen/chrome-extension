@@ -1172,6 +1172,205 @@ test("finds the preferred local study hour only with at least three events", () 
   assert.equal(Journey.buildHabitProfile({ events: events.slice(0, 2) }, [], now).preferredStudyHour, null);
 });
 
+test("normalizes study goals with safe defaults, clamping, date validation, and deduplication", () => {
+  assert.equal(Journey.normalizeStudyGoal(null), null);
+  assert.equal(Journey.normalizeStudyGoal([]), null);
+
+  const defaults = Journey.normalizeStudyGoal({
+    createdAt: "2026-07-16T08:00:00.000Z",
+    updatedAt: "2026-07-16T09:00:00.000Z"
+  });
+  assert.equal(defaults.daysPerWeek, 5);
+  assert.equal(defaults.dailyMinutes, 20);
+  assert.deepEqual(defaults.chapterIds, []);
+  assert.equal(defaults.targetDate, null);
+  assert.equal(defaults.label, "");
+
+  const chapterIds = Array.from({ length: Journey.MAX_CHAPTERS + 3 }, (_, index) => ` chapter-${index} `);
+  const normalized = Journey.normalizeStudyGoal({
+    chapterIds: [chapterIds[0], chapterIds[0], "", ...chapterIds.slice(1)],
+    daysPerWeek: 19,
+    dailyMinutes: 44,
+    targetDate: "2026-02-31",
+    label: `  ${"Final ".repeat(20)}  `,
+    createdAt: "2026-07-16T08:00:00.000Z",
+    updatedAt: "not-a-date"
+  });
+
+  assert.equal(normalized.daysPerWeek, 7);
+  assert.equal(normalized.dailyMinutes, 45);
+  assert.equal(normalized.chapterIds.length, Journey.MAX_CHAPTERS);
+  assert.equal(new Set(normalized.chapterIds).size, Journey.MAX_CHAPTERS);
+  assert.equal(normalized.targetDate, null);
+  assert.equal(normalized.label.length, 60);
+  assert.equal(normalized.createdAt, "2026-07-16T08:00:00.000Z");
+  assert.equal(normalized.updatedAt, normalized.createdAt);
+});
+
+function createGoalAwarePlanJourney() {
+  return Journey.normalizeJourney({
+    ...Journey.createJourney("Goal-aware plan", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-outside",
+      title: "Outside chapter",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-15T12:00:00.000Z",
+      sources: [],
+      sessions: [{ id: "note-outside", itemKind: "note", generatedAt: "2026-07-15T12:00:00.000Z" }]
+    }, {
+      id: "chapter-goal",
+      title: "Goal chapter",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-14T12:00:00.000Z",
+      sources: [],
+      sessions: [
+        { id: "note-goal-one", itemKind: "note", generatedAt: "2026-07-14T10:00:00.000Z" },
+        { id: "note-goal-two", itemKind: "note", generatedAt: "2026-07-14T11:00:00.000Z" },
+        { id: "note-goal-stretch", itemKind: "note", generatedAt: "2026-07-14T12:00:00.000Z" }
+      ]
+    }, {
+      id: "chapter-complete",
+      title: "Completed goal chapter",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-13T12:00:00.000Z",
+      sources: [],
+      sessions: [{
+        id: "quiz-complete",
+        itemKind: "quiz",
+        score: 90,
+        generatedAt: "2026-07-13T11:00:00.000Z",
+        submittedAt: "2026-07-13T12:00:00.000Z"
+      }]
+    }],
+    learningMemory: {
+      concepts: [{
+        noteId: "note-outside",
+        conceptId: "outside-repair",
+        conceptLabel: "Outside repair",
+        timesTested: 4,
+        timesWrong: 3,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 25,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-15T12:00:00.000Z"
+      }, {
+        noteId: "note-goal-one",
+        conceptId: "goal-repair-one",
+        conceptLabel: "Goal repair one",
+        timesTested: 3,
+        timesWrong: 2,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T09:00:00.000Z",
+        strength: 30,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-15T12:00:00.000Z"
+      }, {
+        noteId: "note-goal-two",
+        conceptId: "goal-repair-two",
+        conceptLabel: "Goal repair two",
+        timesTested: 3,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T08:00:00.000Z",
+        strength: 35,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-15T12:00:00.000Z"
+      }, {
+        noteId: "note-goal-stretch",
+        conceptId: "goal-stretch",
+        conceptLabel: "Goal stretch",
+        timesTested: 3,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-14T08:00:00.000Z",
+        strength: 70,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-24T08:00:00.000Z"
+      }]
+    }
+  });
+}
+
+test("scopes goal-aware repair, advance, and stretch steps to selected chapters", () => {
+  const plan = Journey.buildStudyPlan(createGoalAwarePlanJourney(), [], {
+    now: "2026-07-16T10:00:00.000Z",
+    studyGoal: {
+      chapterIds: ["chapter-goal"],
+      dailyMinutes: 60,
+      createdAt: "2026-07-16T08:00:00.000Z",
+      updatedAt: "2026-07-16T08:00:00.000Z"
+    }
+  });
+
+  assert.equal(plan.steps.length, 4);
+  assert.ok(plan.steps.every((step) => step.chapterId === "chapter-goal"));
+  assert.ok(plan.steps.every((step) => step.outsideGoal !== true));
+  assert.equal(plan.steps.find((step) => step.kind === "advance").id, "advance-chapter-goal");
+  assert.equal(plan.steps.find((step) => step.kind === "stretch").conceptId, "goal-stretch");
+});
+
+test("falls back to urgent work outside the selected goal and labels those steps", () => {
+  const plan = Journey.buildStudyPlan(createGoalAwarePlanJourney(), [], {
+    now: "2026-07-16T10:00:00.000Z",
+    studyGoal: {
+      chapterIds: ["chapter-complete"],
+      dailyMinutes: 30,
+      createdAt: "2026-07-16T08:00:00.000Z",
+      updatedAt: "2026-07-16T08:00:00.000Z"
+    }
+  });
+
+  assert.equal(plan.steps[0].kind, "recovery");
+  assert.equal(plan.steps[0].outsideGoal, true);
+  assert.equal(plan.steps.find((step) => step.kind === "advance").outsideGoal, true);
+});
+
+test("paces goal-aware plans from the saved daily minute budget", () => {
+  const journey = createGoalAwarePlanJourney();
+  const makePlan = (dailyMinutes) => Journey.buildStudyPlan(journey, [], {
+    now: "2026-07-16T10:00:00.000Z",
+    studyGoal: {
+      chapterIds: ["chapter-goal"],
+      dailyMinutes,
+      createdAt: "2026-07-16T08:00:00.000Z",
+      updatedAt: "2026-07-16T08:00:00.000Z"
+    }
+  });
+
+  assert.equal(makePlan(10).steps.length, 2);
+  assert.equal(makePlan(30).steps.length, 3);
+  assert.equal(makePlan(60).steps.length, 4);
+});
+
+test("adds target-date context for selected chapters", () => {
+  const plan = Journey.buildStudyPlan(createGoalAwarePlanJourney(), [], {
+    now: "2026-07-16T10:00:00.000Z",
+    studyGoal: {
+      chapterIds: ["chapter-goal", "chapter-complete"],
+      dailyMinutes: 20,
+      targetDate: "2026-07-23",
+      createdAt: "2026-07-16T08:00:00.000Z",
+      updatedAt: "2026-07-16T08:00:00.000Z"
+    }
+  });
+
+  assert.deepEqual(plan.goalContext, {
+    daysToTarget: 7,
+    selectedChapterCount: 2,
+    completedSelectedChapterCount: 1
+  });
+});
+
+test("keeps study-plan behavior identical when studyGoal is omitted or undefined", () => {
+  const journey = createGoalAwarePlanJourney();
+  const now = "2026-07-16T10:00:00.000Z";
+  assert.deepEqual(
+    Journey.buildStudyPlan(journey, [{ elapsedMinutes: 30 }], { now }),
+    Journey.buildStudyPlan(journey, [{ elapsedMinutes: 30 }], { now, studyGoal: undefined })
+  );
+});
+
 test("returns the single onboarding step when a study plan has no chapters", () => {
   const plan = Journey.buildStudyPlan(Journey.createJourney(), [], {
     now: "2026-07-16T10:00:00.000Z"

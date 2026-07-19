@@ -6,8 +6,9 @@
     <title>Exam-Cram Assistant</title>
     <link rel="stylesheet" href="popup.css">
     <link rel="stylesheet" href="popup-design-system.css">
+    <link rel="stylesheet" href="vintage-planner.css">
   </head>
-  <body>
+  <body class="vintage-planner vintage-planner--panel">
     <main class="app">
       <header class="topbar">
         <div>
@@ -57,7 +58,11 @@
       </section>
 
       <nav class="tabs" aria-label="Study modes" role="tablist">
-        <button id="pageTab" class="tab active" data-view="pageView" role="tab" aria-label="Create" aria-selected="true" tabindex="0" type="button">
+        <button id="dashboardTab" class="tab active" data-view="dashboardView" role="tab" aria-label="Dashboard" aria-selected="true" tabindex="0" type="button">
+          <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"></rect><rect x="14" y="4" width="6" height="6" rx="1"></rect><rect x="4" y="14" width="6" height="6" rx="1"></rect><rect x="14" y="14" width="6" height="6" rx="1"></rect></svg>
+          <span>Dashboard</span>
+        </button>
+        <button id="pageTab" class="tab" data-view="pageView" role="tab" aria-label="Create" aria-selected="false" tabindex="-1" type="button">
           <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4V20.5H6z"></path><path d="M14 3.5v4h4M9 12h6M9 16h6"></path></svg>
           <span>Create</span>
         </button>
@@ -75,7 +80,83 @@
         </button>
       </nav>
 
-      <section id="pageView" class="view active" role="tabpanel" aria-labelledby="pageTab">
+      <section id="dashboardView" class="view active" role="tabpanel" aria-labelledby="dashboardTab">
+        <div class="panel dashboard">
+          <div class="dashboard__heading">
+            <div>
+              <span class="eyebrow">Goal-guided studying</span>
+              <h2>Study Dashboard</h2>
+            </div>
+            <p>Set your direction, then work through a focused plan built from your own learning evidence.</p>
+          </div>
+
+          <div id="dashboardEmptyState" class="dashboard__empty hidden"></div>
+
+          <form id="dashboardGoalForm" class="dashboard__goal">
+            <div class="dashboard__goal-heading">
+              <div>
+                <span class="eyebrow">Study Goal</span>
+                <h3 id="dashboardGoalTitle">Choose what to focus on</h3>
+              </div>
+              <span id="dashboardGoalMode" class="dashboard__goal-mode">Setup</span>
+            </div>
+            <p id="dashboardGoalExplainer" class="dashboard__explainer">A goal keeps today’s work aligned with the chapters and pace that matter most.</p>
+
+            <fieldset class="dashboard__chapters">
+              <legend>Focus chapters</legend>
+              <button id="dashboardChapterSlot" class="toc-entry-slot" type="button" data-toc-target="dashboard" aria-haspopup="dialog" aria-controls="tocSheetDialog">
+                <span class="toc-entry-slot__copy">
+                  <span class="toc-entry-slot__label">Chapter folio</span>
+                  <strong id="dashboardChapterSlotValue">All Journey chapters</strong>
+                </span>
+                <span class="toc-entry-slot__action">Open contents</span>
+              </button>
+              <div id="dashboardChapterOptions" class="dashboard__chapter-options toc-source-controls" hidden></div>
+              <p class="hint">Choose a focused folio, or leave it set to every chapter.</p>
+            </fieldset>
+
+            <div class="dashboard__form-grid">
+              <label class="dashboard__field" for="dashboardDaysPerWeek">
+                <span>Study days each week</span>
+                <select id="dashboardDaysPerWeek" name="daysPerWeek">
+                  <option value="1">1 day</option>
+                  <option value="2">2 days</option>
+                  <option value="3">3 days</option>
+                  <option value="4">4 days</option>
+                  <option value="5" selected>5 days</option>
+                  <option value="6">6 days</option>
+                  <option value="7">7 days</option>
+                </select>
+              </label>
+              <label class="dashboard__field" for="dashboardDailyMinutes">
+                <span>Daily study time</span>
+                <select id="dashboardDailyMinutes" name="dailyMinutes">
+                  <option value="10">10 minutes</option>
+                  <option value="20" selected>20 minutes</option>
+                  <option value="30">30 minutes</option>
+                  <option value="45">45 minutes</option>
+                  <option value="60">60 minutes</option>
+                </select>
+              </label>
+              <label class="dashboard__field" for="dashboardTargetDate">
+                <span>Target date <small>Optional</small></span>
+                <input id="dashboardTargetDate" name="targetDate" type="date">
+              </label>
+              <label class="dashboard__field" for="dashboardGoalLabel">
+                <span>Goal name <small>Optional</small></span>
+                <input id="dashboardGoalLabel" name="label" type="text" maxlength="60" placeholder="FIT1051 final">
+              </label>
+            </div>
+
+            <button id="saveDashboardGoalButton" class="primary dashboard__save" type="submit">Save study goal</button>
+          </form>
+
+          <div id="dashboardStats" class="dashboard__stats" aria-label="Study goal progress"></div>
+          <div id="dashboardPlan" class="dashboard__plan"></div>
+        </div>
+      </section>
+
+      <section id="pageView" class="view" role="tabpanel" aria-labelledby="pageTab">
         <div class="panel page-composer">
           <div class="input-heading">
             <div>
@@ -86,13 +167,20 @@
           <p class="hint note-first-hint">Start with the ideas and relationships. A quiz is generated only after you request one from the finished note.</p>
           <div class="chapter-field">
             <div class="chapter-field__label-row">
-              <label for="pageChapterInput">Journey chapter</label>
+              <span id="pageChapterLabel">Journey chapter</span>
               <span>One chapter = one tree</span>
             </div>
             <div class="chapter-field__controls">
-              <select id="pageChapterInput" aria-describedby="pageChapterHint">
+              <select id="pageChapterInput" class="toc-native-control" aria-hidden="true" tabindex="-1">
                 <option value="">Choose a chapter</option>
               </select>
+              <button id="pageChapterSlot" class="toc-entry-slot toc-entry-slot--compact" type="button" data-toc-target="page" aria-labelledby="pageChapterLabel pageChapterSlotValue" aria-describedby="pageChapterHint" aria-haspopup="dialog" aria-controls="tocSheetDialog">
+                <span class="toc-entry-slot__copy">
+                  <span class="toc-entry-slot__label">Selected chapter</span>
+                  <strong id="pageChapterSlotValue">Choose from contents</strong>
+                </span>
+                <span class="toc-entry-slot__action">Browse</span>
+              </button>
               <button id="newPageChapterButton" class="secondary compact-button chapter-new-button" type="button">New chapter</button>
             </div>
             <p id="pageChapterHint" class="hint chapter-field__hint">Create a separate chapter whenever you want a new tree in your Learning Forest.</p>
@@ -181,13 +269,20 @@
           <p class="hint">The visual, scenarios, and follow-up answers stay grounded in this material. A quiz appears only when you request one.</p>
           <div class="chapter-field">
             <div class="chapter-field__label-row">
-              <label for="notesChapterInput">Journey chapter</label>
+              <span id="notesChapterLabel">Journey chapter</span>
               <span>One chapter = one tree</span>
             </div>
             <div class="chapter-field__controls">
-              <select id="notesChapterInput" aria-describedby="notesChapterHint">
+              <select id="notesChapterInput" class="toc-native-control" aria-hidden="true" tabindex="-1">
                 <option value="">Choose a chapter</option>
               </select>
+              <button id="notesChapterSlot" class="toc-entry-slot toc-entry-slot--compact" type="button" data-toc-target="notes" aria-labelledby="notesChapterLabel notesChapterSlotValue" aria-describedby="notesChapterHint" aria-haspopup="dialog" aria-controls="tocSheetDialog">
+                <span class="toc-entry-slot__copy">
+                  <span class="toc-entry-slot__label">Selected chapter</span>
+                  <strong id="notesChapterSlotValue">Choose from contents</strong>
+                </span>
+                <span class="toc-entry-slot__action">Browse</span>
+              </button>
               <button id="newNotesChapterButton" class="secondary compact-button chapter-new-button" type="button">New chapter</button>
             </div>
             <p id="notesChapterHint" class="hint chapter-field__hint">The generated visual note will grow on the selected chapter's tree.</p>
@@ -347,6 +442,38 @@
           <button id="saveSessionButton" class="secondary" type="button">Save Session</button>
         </div>
       </section>
+
+      <dialog id="tocSheetDialog" class="toc-sheet-dialog" aria-labelledby="tocSheetTitle" aria-describedby="tocSheetDescription">
+        <form id="tocSheetForm" class="toc-sheet" method="dialog">
+          <header class="toc-sheet__header">
+            <div class="toc-sheet__heading">
+              <span class="eyebrow">Table of Contents</span>
+              <h2 id="tocSheetTitle">Choose chapters</h2>
+              <p id="tocSheetDescription">Draft a selection, then save it when the folio looks right.</p>
+              <div id="tocSheetSearchTools" class="toc-sheet__search-tools hidden">
+                <label for="tocSheetSearchInput">Search focus chapters (case-sensitive)</label>
+                <div class="toc-sheet__search-control">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.5"></circle><path d="m15 15 4 4"></path></svg>
+                  <input id="tocSheetSearchInput" type="search" maxlength="80" autocomplete="off" spellcheck="false" placeholder="Match exact capitalization" aria-controls="tocSheetList" aria-describedby="tocSheetSearchStatus">
+                  <button id="tocSheetClearSearchButton" class="toc-sheet__search-clear hidden" type="button" aria-label="Clear chapter search">Clear</button>
+                </div>
+                <span id="tocSheetSearchStatus" class="toc-sheet__search-status" role="status" aria-live="polite" aria-atomic="true"></span>
+              </div>
+            </div>
+            <span id="tocSheetDraftState" class="toc-sheet__draft" role="status" aria-live="polite">Draft unchanged</span>
+          </header>
+          <div id="tocSheetList" class="toc-sheet__list" role="group" aria-label="Available chapters">
+            <p id="tocSheetEmpty" class="toc-sheet__empty hidden">No chapters are available yet. Cancel, then create your first chapter.</p>
+          </div>
+          <footer class="toc-sheet__footer">
+            <span id="tocSheetSelectionSummary" class="toc-sheet__selection-summary">No changes</span>
+            <menu>
+              <button id="cancelTocSheetButton" class="text-button" type="button">Cancel</button>
+              <button id="saveTocSheetButton" class="primary" type="submit">Save selection</button>
+            </menu>
+          </footer>
+        </form>
+      </dialog>
 
       <dialog id="quizSettingsDialog">
         <form method="dialog" class="settings quiz-settings">

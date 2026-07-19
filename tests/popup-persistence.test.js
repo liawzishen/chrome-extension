@@ -15,6 +15,54 @@ function functionBody(startMarker, endMarker) {
   return source.slice(start, end);
 }
 
+test("legacy panel state opens Dashboard once, then restores its active view", async () => {
+  const loadPanelStateSource = functionBody(
+    "async function loadPanelState()",
+    "let panelStateSaveTimer"
+  );
+  let stored = { activeView: "journeyView", notesInput: "Legacy notes" };
+  const writes = [];
+  const switchedViews = [];
+  const context = {
+    STORAGE_KEYS: { panelState: "panelState" },
+    elements: {
+      notesInput: { value: "" },
+      pageQuestionCount: { querySelector: () => null },
+      pageQuizStyle: { querySelector: () => null }
+    },
+    state: {},
+    getStorage: async () => ({ ...stored }),
+    setStorage: async (_key, value) => {
+      stored = { ...value };
+      writes.push({ ...value });
+    },
+    setQuizDifficulty: () => {},
+    cssEscape: (value) => String(value),
+    document: {
+      getElementById: (id) => ["dashboardView", "journeyView", "pageView"].includes(id) ? {} : null
+    },
+    switchView: (viewId) => switchedViews.push(viewId)
+  };
+  const loadPanelState = vm.runInNewContext(`(() => {
+    ${loadPanelStateSource}
+    return loadPanelState;
+  })()`, context);
+
+  assert.equal(await loadPanelState(), "dashboardView");
+  assert.deepEqual(switchedViews, ["dashboardView"]);
+  assert.equal(writes.length, 1);
+  assert.equal(stored.dashboardIntroSeen, true);
+  assert.equal(stored.activeView, "journeyView");
+
+  assert.equal(await loadPanelState(), "journeyView");
+  assert.deepEqual(switchedViews, ["dashboardView", "journeyView"]);
+  assert.equal(writes.length, 1);
+
+  stored.activeView = "notesView";
+  assert.equal(await loadPanelState(), "pageView");
+  assert.equal(writes.length, 1);
+});
+
 test("restores the pinned artifact before detecting a permission-dependent page", () => {
   const initialization = functionBody(
     "async function initializePersistentPanel()",
