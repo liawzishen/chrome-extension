@@ -313,9 +313,20 @@ NeatMind — study you can inspect, practice, and keep. [silent end-card hold, �
 - **Captions:** Compact, high-contrast sentence rail; no large reserved caption band.
 - **Motion:** Cursor taps, evidence highlights, controlled crop/zoom, diagram-flow lines, and causal match cuts.
 - **Breathing space:** at least two seconds of visual-only time after each important product action (banner, quiz submit, plan appears); the end-card holds silent for at least three seconds.
-- **Avoid:** Glitch effects, generic stock footage, long code lists, constant camera movement, tiny UI, and overbuilt 3D.
+- **Avoid:** Glitch effects, generic stock footage, long code lists, constant camera movement, tiny UI, overbuilt 3D, and **pure black (`#000000`) anywhere in the frame** — no black mattes, letterboxing, transition beds, or end-card background.
 - **Music:** Licensed/original warm electronic-acoustic bed with minimal UI sounds; duck under narration; carries the silent end-card.
 - **Accessibility:** Captions, readable sizes, contrast, no rapid flashes, and reduced-motion-aware pacing.
+
+### Background color rule (mandatory — confirmed against the product's own dark surfaces)
+
+**No scene, transition, matte, or end-card may use pure black (`#000000`).** This is not an invented brand preference — it matches how NeatMind's own dark UI is already built:
+
+- The Learning Forest / Journey view (`journey.css:38`, `:49`) never renders on flat black. Its real background is a warm near-black gradient — `linear-gradient(145deg, #070909 0%, #020303 48%, #050606 100%)` — plus a soft ember-brown radial highlight (`rgba(130, 68, 24, 0.08)`). Because Scenes 6, 7, and the end-card sit on or fade toward Journey, capturing the real UI already satisfies this rule for those frames.
+- For any *invented* dark surface (title cards, transition beds, the end-card backdrop) that is not a direct UI capture, use one of these two verified dark tokens instead of black:
+  - Journey near-black warm gradient: `#070909` → `#020303` → `#050606` (with the ember radial tint above), or
+  - Vintage-planner leather brown: `--planner-leather-950: #26170f` / `--planner-leather-900: #342015` (`vintage-planner.css:3-4`), optionally toward `--planner-ember: #6f3217` for warmth.
+- Never composite a plain `#000` fade-to-black; fade toward one of the two tokens above so the closing hold stays warm and on-brand instead of reading as a generic dark screen.
+- QA check: sample the darkest pixel in every non-captured frame before Gate 5 sign-off and confirm it is not `#000000`.
 
 ## 11. Timing Audit (per scene)
 
@@ -354,6 +365,17 @@ Do not proceed automatically from one gate to the next. Each gate requires expli
 
 Approve narration, timestamps, per-scene claims, the evidence matrix, and the storyboard. No capture or animation begins before this gate.
 
+**Decision record (this revision):**
+
+- **Narration (Section 9):** 281 words, ~135 WPM, prepared and internally consistent with the per-scene timing audit (Section 11). Ready for creator sign-off.
+- **Timestamps / storyboard (Section 8):** 11 scenes, 150 s total, product-first structure. Ready for creator sign-off.
+- **Claims / evidence (Section 4):** every spoken claim maps to a file+symbol+commit row; no unverified claim remains in the script. Ready for creator sign-off.
+- **Background color rule (Section 10):** locked as a hard constraint — no pure black anywhere in the frame; use the two verified warm-dark tokens instead. Applies to every future gate, including Gate 2's preflight test.
+- **Feature decision (Section 15):** the Study Goal segment (Scene 7) uses the *existing, shipped* Dashboard Study Goal + Today's Plan feature (State A). No new feature was proposed, approved, or implemented to support this script — the segment is demo-script work only, not code work.
+- **Still open before Gate 1 can formally close:** the six items in Section 16 (runtime GPT-5.6 confirmation, transcript/session-ID display approval, asset reuse, end-card credit, judge URL, and which specific goal to capture). Gate 1 is script-*ready*, not yet script-*signed*.
+
+This document remains planning/script only. Gate 2 (technical preflight) is the first step that touches Hyperframes, installs any video-production dependency, or renders a frame — none of that has started, and it will not start without a separate explicit go-ahead, since it falls outside this task's current scope.
+
 ### Gate 2 — Technical preflight
 
 After script approval, build only a 10–15 second test containing: real UI capture, one caption, voice-over, music, and one representative transition. Use it to confirm whether Hyperframes is reliable for this project before committing to the full build.
@@ -368,7 +390,7 @@ Review detailed motion, diagrams, typography, cursor movement, transitions, and 
 
 ### Gate 5 — Final quality assurance
 
-Verify runtime, captions, audio, absence of sensitive information, UI readability, copyright/rights, YouTube compression, and submission requirements before publishing.
+Verify runtime, captions, audio, absence of sensitive information, UI readability, copyright/rights, YouTube compression, submission requirements, and the **no-pure-black background rule** (Section 10) before publishing.
 
 ## 13. Future Technical Production Recommendation
 
@@ -384,6 +406,7 @@ Hyperframes is the better future fit because NeatMind is already HTML/CSS/JavaSc
 - Separate asset groups for screen captures, sanitized development proof, music/SFX, and captions.
 - Shared motion utilities for controlled zooms, cursor taps, text reveals, and flow-line timing.
 - H.264/AAC MP4 output; absolute maximum remains 5,400 frames / 180 seconds.
+- **Background/build note:** any invented background, transition bed, or end-card component must use the Journey near-black gradient (`#070909`/`#020303`/`#050606` + ember radial tint) or the vintage-planner leather browns (`#26170f`/`#342015`) — never `#000000`. See Section 10.
 - Only after Gate approvals: capture current UI, assemble scenes, validate timing/contrast/captions, review final preview, then render.
 
 ## 14. Asset and Compliance Checklist
