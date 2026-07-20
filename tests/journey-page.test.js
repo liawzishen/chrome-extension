@@ -8,6 +8,7 @@ const root = path.join(__dirname, "..");
 const html = fs.readFileSync(path.join(root, "journey.html"), "utf8");
 const script = fs.readFileSync(path.join(root, "journey-page.js"), "utf8");
 const styles = fs.readFileSync(path.join(root, "journey.css"), "utf8");
+const vintageStyles = fs.readFileSync(path.join(root, "vintage-planner.css"), "utf8");
 const forest = fs.readFileSync(path.join(root, "journey-tree", "forest.js"), "utf8");
 const forestData = fs.readFileSync(path.join(root, "journey-tree-utils.js"), "utf8");
 const particles = fs.readFileSync(path.join(root, "journey-tree", "particle-system.js"), "utf8");
@@ -319,7 +320,7 @@ test("retains loading recovery, an empty note CTA, and a complete WebGL fallback
   assert.match(script, /setLoadState\("error"/);
   assert.match(script, /button\.textContent = "Retry"/);
   assert.match(html, /id="forestEmpty"/);
-  assert.match(html, /id="pageCreateNoteButton"[^>]*>Open Exam-Cram</);
+  assert.match(html, /id="pageCreateNoteButton"[^>]*>Open NeatMind</);
   assert.match(html, /id="forestFallbackList"/);
   assert.match(forest, /root\.dataset\.renderer = 'fallback'/);
   assert.match(script, /renderFallback\(\)/);
@@ -355,7 +356,9 @@ test("keeps opt-in external study suggestions separate until the learner saves a
   });
   assert.deepEqual([...weak], ["Linear equations", "Inverse operations"]);
   const suggestions = helpers.buildExternalStudySuggestions("x & y");
-  assert.equal(suggestions.length, 2);
+  assert.equal(suggestions.length, 6);
+  assert.ok(suggestions.some((suggestion) => suggestion.provider === "Wikipedia"));
+  assert.ok(suggestions.some((suggestion) => suggestion.provider !== "Wikipedia"));
   suggestions.forEach((suggestion) => assert.match(suggestion.url, /^https:\/\//));
   assert.ok(suggestions.every((suggestion) => suggestion.url.includes("x%20%26%20y")));
 
@@ -502,6 +505,15 @@ test("adds a file-to-chapter outline and chapter workspace inside a collapsible 
   assert.match(styles, /\.chapter-workspace__panel[\s\S]*?overflow-wrap:\s*anywhere/);
 });
 
+test("keeps forest labels legible and gives learning evidence one primary smooth scroll surface", () => {
+  assert.match(vintageStyles, /\.vintage-planner--forest \.forest-label \{[\s\S]*?border-color:[\s\S]*?background:[\s\S]*?color:\s*#fff8e7/);
+  assert.match(vintageStyles, /\.vintage-planner--forest \.forest-drawer__panel \{[\s\S]*?overflow-y:\s*auto;[\s\S]*?scroll-behavior:\s*smooth;[\s\S]*?touch-action:\s*pan-y pinch-zoom/);
+  assert.match(vintageStyles, /\.vintage-planner--forest \.chapter-workspace__panel \{[\s\S]*?max-height:\s*none;[\s\S]*?overflow:\s*visible/);
+  assert.match(html, /id="chapterPanel"[^>]*tabindex="0"/);
+  assert.match(html, /id="summaryPanel"[^>]*tabindex="0"/);
+  assert.match(script, /panel\.tabIndex = 0/);
+});
+
 test("removes the in-forest chapter study timer and lets the learner close or reopen the study rail", () => {
   assert.doesNotMatch(html, /id="chapterFocusPanel"|id="startChapterFocus"|id="pauseChapterFocus"|id="resumeChapterFocus"|Chapter study timer/);
   assert.doesNotMatch(script, /chapterFocusState|CHAPTER_MESSAGE_TYPES|sendChapterFocusMessage|selectChapterForFocus/);
@@ -515,9 +527,33 @@ test("removes the in-forest chapter study timer and lets the learner close or re
   assert.match(styles, /\.forest-study-rail__opener/);
 });
 
-test("feeds the top-bar Focus stat from externally recorded focus sessions, live for an active session", () => {
+test("feeds the top-bar Focus stat from auto-recorded per-chapter/per-note study time", () => {
   assert.match(html, /id="pageFocusTime"/);
-  assert.match(script, /function getLiveFocusMetrics\([\s\S]*?reconcileFocusState[\s\S]*?activeMinutes/);
-  assert.match(script, /page\.focus\.textContent = `\$\{metrics\.focusMinutes \+ liveFocus\.activeMinutes\}m`/);
-  assert.match(script, /function scheduleFocusMetricsRender\(active\)[\s\S]*?setInterval\(renderHeaderMetrics/);
+  assert.match(html, /<script src="study-time-utils\.js"><\/script>/);
+  assert.match(script, /studyTime: "neatMindStudyTimeState"/);
+  assert.match(script, /page\.focus\.textContent = formatStudyDuration\(getTotalStudyMs\(\)\)/);
+  assert.match(script, /function getTotalStudyMs\(\)[\s\S]*?NeatMindStudyTime\?\.getTotalStudyMs/);
+  // Per-chapter time returns to the outline and the chapter inspector.
+  assert.match(script, /\$\{formatStudyDuration\(focusedMs\)\} studied/);
+  assert.match(script, /evidenceItem\("Focused time", formatStudyDuration\(getChapterStudyMs\(chapter\.id\)\)\)/);
+  // Per-note time appears on the note branches and the selected-note header.
+  assert.match(script, /getNoteStudyMs\(note\.id\)/);
+  assert.match(script, /getNoteStudyMs\(selectedNote\.id\)/);
+  // The forest re-renders when the side panel persists new study time.
+  assert.match(script, /changes\[STORAGE\.studyTime\][\s\S]*?renderHeaderMetrics\(\)/);
+});
+
+test("auto-tracks study time in the side panel by selected chapter, open note, visibility and idle", () => {
+  const utils = fs.readFileSync(path.join(root, "study-time-utils.js"), "utf8");
+  assert.match(utils, /STORAGE_KEY = "neatMindStudyTimeState"/);
+  assert.match(utils, /function flushStudySession\([\s\S]*?lastActivityAt\) \+ grace/);
+  assert.match(utils, /function touchStudySession\([\s\S]*?resumingFromIdle \? currentTime : session\.lastFlushAt/);
+  assert.match(popupScript, /studyTime: "neatMindStudyTimeState"/);
+  assert.match(popupScript, /function getStudyContext\(\)[\s\S]*?state\.selectedChapter\?\.id[\s\S]*?state\.currentSession\?\.id/);
+  assert.match(popupScript, /function isStudyPanelActive\(\)[\s\S]*?document\.visibilityState === "visible"[\s\S]*?getStudyContext\(\)\.chapterId/);
+  assert.match(popupScript, /function reconcileStudySession\([\s\S]*?flushStudySession\(state\.studyTimeState, state\.studySession, now\)[\s\S]*?createStudySession/);
+  assert.match(popupScript, /document\.addEventListener\("visibilitychange", handleStudyVisibilityChange\)/);
+  assert.match(popupScript, /window\.addEventListener\("pagehide", flushStudyOnHide\)/);
+  assert.match(popupScript, /\["pointerdown", "keydown", "wheel", "touchstart"\]\.forEach\(\(eventName\) => \{[\s\S]*?handleStudyActivity/);
+  assert.match(popupScript, /reconcileStudySession\(Date\.now\(\)\);\n\}/);
 });

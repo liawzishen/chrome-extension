@@ -31,6 +31,7 @@ const FILES = new Map([
   ["/assets/journey/hourglass-average-sand-texture.png", "assets/journey/hourglass-average-sand-texture.png"],
   ["/assets/journey/hourglass-average-sand-grains-v2.png", "assets/journey/hourglass-average-sand-grains-v2.png"],
   ["/focus-utils.js", "focus-utils.js"],
+  ["/study-time-utils.js", "study-time-utils.js"],
   ["/journey-utils.js", "journey-utils.js"],
   ["/journey-worker-utils.js", "journey-worker-utils.js"],
   ["/journey-tree-utils.js", "journey-tree-utils.js"],

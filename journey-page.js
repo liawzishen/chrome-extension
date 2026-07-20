@@ -1,12 +1,13 @@
 const STORAGE = {
-  journey: "examCramLearningJourney",
-  focus: "examCramFocusState",
-  sessions: "examCramSessions",
-  sessionDraft: "examCramSessionDraft",
-  pendingChapterAction: "examCramPendingChapterAction"
+  journey: "neatMindLearningJourney",
+  focus: "neatMindFocusState",
+  studyTime: "neatMindStudyTimeState",
+  sessions: "neatMindSessions",
+  sessionDraft: "neatMindSessionDraft",
+  pendingChapterAction: "neatMindPendingChapterAction"
 };
 
-const STUDY_RAIL_COLLAPSED_KEY = "examCramForestStudyRailCollapsed";
+const STUDY_RAIL_COLLAPSED_KEY = "neatMindForestStudyRailCollapsed";
 
 const page = {
   root: document.getElementById("learningForest"),
@@ -41,8 +42,9 @@ const page = {
   learningOutline: document.getElementById("learningOutline")
 };
 
-let journey = globalThis.ExamCramJourney.createJourney();
-let focusState = globalThis.ExamCramFocus?.createDefaultFocusState?.() || {};
+let journey = globalThis.NeatMindJourney.createJourney();
+let focusState = globalThis.NeatMindFocus?.createDefaultFocusState?.() || {};
+let studyTimeState = globalThis.NeatMindStudyTime?.createDefaultStudyTimeState?.() || {};
 let savedArtifacts = [];
 let forestRecords = [];
 let selectedChapterId = "";
@@ -50,10 +52,9 @@ let selectedVisualNoteId = "";
 let forestMode = "loading";
 let drawerReturnFocus = null;
 let motionPaused = Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
-let focusMetricsTimer = null;
 let studyRailCollapsed = readStoredStudyRailCollapsed();
 
-const forestController = globalThis.ExamCramLearningForest.mount(page.root, {
+const forestController = globalThis.NeatMindLearningForest.mount(page.root, {
   onSelectTree({ treeId }) {
     selectedChapterId = treeId;
     selectedVisualNoteId = "";
@@ -119,20 +120,33 @@ if (globalThis.chrome?.storage?.onChanged) {
   globalThis.chrome.storage.onChanged.addListener(handleStorageChanged);
 }
 
-void load();
+void initializeBrandStorage().finally(() => void load());
+
+async function initializeBrandStorage() {
+  const branding = globalThis.NeatMindBranding;
+  if (globalThis.chrome?.storage?.local) {
+    await branding?.migrateStorageArea?.(globalThis.chrome.storage.local);
+  } else {
+    branding?.migrateLocalStorage?.(globalThis.localStorage);
+  }
+  studyRailCollapsed = readStoredStudyRailCollapsed();
+  applyStudyRailState();
+}
 
 async function load() {
   setLoadState("loading", "Loading your learning forest...");
   try {
-    const [storedJourney, storedFocus, storedArtifacts] = await Promise.all([
+    const [storedJourney, storedFocus, storedStudyTime, storedArtifacts] = await Promise.all([
       getStorage(STORAGE.journey, null),
       getStorage(STORAGE.focus, null),
+      getStorage(STORAGE.studyTime, null),
       getStorage(STORAGE.sessions, [])
     ]);
-    journey = globalThis.ExamCramJourney.normalizeJourney(
-      storedJourney || globalThis.ExamCramJourney.createJourney()
+    journey = globalThis.NeatMindJourney.normalizeJourney(
+      storedJourney || globalThis.NeatMindJourney.createJourney()
     );
     focusState = storedFocus || {};
+    studyTimeState = globalThis.NeatMindStudyTime?.normalizeStudyTimeState?.(storedStudyTime) || storedStudyTime || {};
     savedArtifacts = normalizeSavedArtifacts(storedArtifacts);
     if (journey.summary?.range && page.range.querySelector(`option[value="${journey.summary.range}"]`)) {
       page.range.value = journey.summary.range;
@@ -146,33 +160,33 @@ async function load() {
 }
 
 function renderHeaderMetrics() {
-  const liveFocus = getLiveFocusMetrics(focusState, Date.now());
-  const metrics = globalThis.ExamCramJourney.getMetrics(journey, liveFocus.history);
+  const history = Array.isArray(focusState?.history) ? focusState.history : [];
+  const metrics = globalThis.NeatMindJourney.getMetrics(journey, history);
   page.title.textContent = journey.title;
   page.progress.textContent = `${metrics.progressPercent}%`;
-  page.focus.textContent = `${metrics.focusMinutes + liveFocus.activeMinutes}m`;
-  scheduleFocusMetricsRender(liveFocus.active);
+  page.focus.textContent = formatStudyDuration(getTotalStudyMs());
 }
 
-function getLiveFocusMetrics(stateValue, now = Date.now()) {
-  const focusApi = globalThis.ExamCramFocus;
-  const reconciled = focusApi?.reconcileFocusState ? focusApi.reconcileFocusState(stateValue, now).state : null;
-  const history = Array.isArray(reconciled?.history)
-    ? reconciled.history
-    : Array.isArray(stateValue?.history) ? stateValue.history : [];
-  const active = Boolean(reconciled?.active && reconciled.startedAt !== null);
-  const activeMs = active ? Math.max(0, Math.min(now, reconciled.endsAt ?? now) - reconciled.startedAt) : 0;
-  return { active, history, activeMinutes: Math.floor(activeMs / 60000) };
+function getTotalStudyMs() {
+  return globalThis.NeatMindStudyTime?.getTotalStudyMs?.(studyTimeState) || 0;
 }
 
-function scheduleFocusMetricsRender(active) {
-  if (!active) {
-    if (focusMetricsTimer) clearInterval(focusMetricsTimer);
-    focusMetricsTimer = null;
-    return;
+function getChapterStudyMs(chapterId) {
+  return globalThis.NeatMindStudyTime?.getChapterStudyMs?.(studyTimeState, chapterId) || 0;
+}
+
+function getNoteStudyMs(noteId) {
+  return globalThis.NeatMindStudyTime?.getNoteStudyMs?.(studyTimeState, noteId) || 0;
+}
+
+function formatStudyDuration(value) {
+  if (globalThis.NeatMindStudyTime?.formatStudyDuration) {
+    return globalThis.NeatMindStudyTime.formatStudyDuration(value);
   }
-  if (focusMetricsTimer) return;
-  focusMetricsTimer = setInterval(renderHeaderMetrics, 30000);
+  const minutes = Math.floor(Math.max(0, Number(value) || 0) / 60000);
+  if (minutes < 1) return "0m";
+  const hours = Math.floor(minutes / 60);
+  return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m`;
 }
 
 function renderStudyRail() {
@@ -255,9 +269,10 @@ function renderOutlineChapterNode(chapter) {
   const title = chapter.importedChapterTitle || chapter.title;
   const status = getChapterWorkspaceStatus(chapter);
   const progress = getChapterWorkspaceProgress(chapter);
+  const focusedMs = getChapterStudyMs(chapter.id);
   button.append(
     createText("strong", title),
-    createText("span", `${status} \u00b7 ${progress}%`)
+    createText("span", `${status} \u00b7 ${progress}% \u00b7 ${formatStudyDuration(focusedMs)} studied`)
   );
   if (chapter.pageStart) {
     button.append(createText("small", `Pages ${chapter.pageStart}${chapter.pageEnd > chapter.pageStart ? `\u2013${chapter.pageEnd}` : ""}`));
@@ -284,12 +299,12 @@ function getChapterWorkspaceStatus(chapter) {
     failed: "Generation failed",
     empty: "Empty content",
     outdated: "Update available"
-  }[status] || formatStatus(globalThis.ExamCramJourney.getChapterStatus(chapter));
+  }[status] || formatStatus(globalThis.NeatMindJourney.getChapterStatus(chapter));
 }
 
 function getChapterWorkspaceProgress(chapter) {
   if (chapter?.resourceStatus === "completed") {
-    return globalThis.ExamCramJourney.getChapterStatus(chapter) === "completed" ? 100 : 75;
+    return globalThis.NeatMindJourney.getChapterStatus(chapter) === "completed" ? 100 : 75;
   }
   if (chapter?.resourceStatus === "partially_completed") return 55;
   if (chapter?.resourceStatus === "generating") return 35;
@@ -306,10 +321,10 @@ function formatFileSize(value) {
 
 function render() {
   renderHeaderMetrics();
-  forestRecords = globalThis.ExamCramLearningForestData.buildForestRecords(
+  forestRecords = globalThis.NeatMindLearningForestData.buildForestRecords(
     journey,
     savedArtifacts,
-    { getChapterStatus: globalThis.ExamCramJourney.getChapterStatus }
+    { getChapterStatus: globalThis.NeatMindJourney.getChapterStatus }
   );
   if (selectedChapterId && !forestRecords.some((record) => record.id === selectedChapterId)) {
     selectedChapterId = "";
@@ -323,7 +338,7 @@ function render() {
   renderFallback();
   renderStudyRail();
   renderDetails();
-  renderSummary(journey.summary || globalThis.ExamCramJourney.summarize(journey, { range: page.range.value }));
+  renderSummary(journey.summary || globalThis.NeatMindJourney.summarize(journey, { range: page.range.value }));
   forestController.setTrees(forestRecords);
   page.empty.hidden = forestRecords.length !== 0;
 }
@@ -359,7 +374,7 @@ function renderFallback() {
 function renderDetails() {
   renderStudyContext();
   renderInspector();
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, selectedChapterId);
   const record = forestRecords.find((item) => item.id === selectedChapterId);
   const selectedNote = record?.visualNotes.find((note) => note.id === selectedVisualNoteId) || null;
   page.context.hidden = Boolean(selectedNote);
@@ -377,7 +392,7 @@ function setDrawerTab(tab) {
     ? "Overall learning journey"
     : (forestRecords.find((record) => record.id === selectedChapterId)?.visualNotes
       .find((note) => note.id === selectedVisualNoteId)?.title
-      || globalThis.ExamCramJourney.findChapter(journey, selectedChapterId)?.title
+      || globalThis.NeatMindJourney.findChapter(journey, selectedChapterId)?.title
       || "Note details");
 }
 
@@ -447,21 +462,21 @@ async function refreshSummary() {
   setLoadState("loading", "Refreshing the learning summary...");
   try {
     const summary = {
-      ...globalThis.ExamCramJourney.summarize(journey, { range: page.range.value }),
+      ...globalThis.NeatMindJourney.summarize(journey, { range: page.range.value }),
       sourceRevision: journey.revision
     };
     try {
       const response = await saveSummaryThroughWorker(journey, summary);
-      journey = globalThis.ExamCramJourney.normalizeJourney(response.journey);
+      journey = globalThis.NeatMindJourney.normalizeJourney(response.journey);
     } catch (error) {
       if (error.code !== "REVISION_CONFLICT") throw error;
-      const latest = globalThis.ExamCramJourney.normalizeJourney(await getStorage(STORAGE.journey, null));
+      const latest = globalThis.NeatMindJourney.normalizeJourney(await getStorage(STORAGE.journey, null));
       const refreshed = {
-        ...globalThis.ExamCramJourney.summarize(latest, { range: page.range.value }),
+        ...globalThis.NeatMindJourney.summarize(latest, { range: page.range.value }),
         sourceRevision: latest.revision
       };
       const response = await saveSummaryThroughWorker(latest, refreshed);
-      journey = globalThis.ExamCramJourney.normalizeJourney(response.journey);
+      journey = globalThis.NeatMindJourney.normalizeJourney(response.journey);
     }
     render();
     setLoadState("ready", "Learning summary refreshed.");
@@ -488,7 +503,7 @@ function setLoadState(kind, message, retry = null) {
 }
 
 function renderStudyContext() {
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, selectedChapterId);
   if (!chapter) {
     page.context.hidden = true;
     page.context.replaceChildren();
@@ -541,7 +556,7 @@ function renderStudyContext() {
 }
 
 function renderInspector() {
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, selectedChapterId);
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, selectedChapterId);
   const record = forestRecords.find((item) => item.id === selectedChapterId);
   if (!chapter || !record) {
     page.inspector.replaceChildren();
@@ -552,11 +567,11 @@ function renderInspector() {
     page.inspector.replaceChildren(renderVisualNoteFocus(chapter, record, selectedNote));
     return;
   }
-  const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
+  const status = globalThis.NeatMindJourney.getChapterStatus(chapter);
   const latestSubmittedQuiz = chapter.sessions
     .filter((session) => Number.isFinite(session.score) && session.submittedAt)
-    .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
-      - globalThis.ExamCramJourney.sessionActivityTime(first))[0];
+    .sort((first, second) => globalThis.NeatMindJourney.sessionActivityTime(second)
+      - globalThis.NeatMindJourney.sessionActivityTime(first))[0];
   const latestScore = latestSubmittedQuiz?.score ?? null;
   const weakTopics = getChapterWeakConceptLabels(chapter, journey.learningMemory);
   const weakTopicSummary = weakTopics.slice(0, 6);
@@ -575,6 +590,7 @@ function renderInspector() {
   evidence.append(
     evidenceItem("Latest score", latestScore == null ? "Not submitted" : `${latestScore}%`),
     evidenceItem("Study sessions", String(chapter.sessions.length)),
+    evidenceItem("Focused time", formatStudyDuration(getChapterStudyMs(chapter.id))),
     evidenceItem("Weak topics", weakTopicSummary.length
       ? `${weakTopicSummary.join(", ")}${weakTopics.length > weakTopicSummary.length ? ` +${weakTopics.length - weakTopicSummary.length} more` : ""}`
       : "None recorded")
@@ -595,9 +611,11 @@ function renderInspector() {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "concept-evidence__item";
+      const noteStudyMs = getNoteStudyMs(note.id);
+      const noteMeta = `${formatDate(note.activityAt || note.generatedAt)} · ${note.concepts.length} grounded ${note.concepts.length === 1 ? "concept" : "concepts"}${noteStudyMs ? ` · ${formatStudyDuration(noteStudyMs)} studied` : ""}`;
       item.append(
         createText("strong", note.title),
-        createText("span", `${formatDate(note.activityAt || note.generatedAt)} · ${note.concepts.length} grounded ${note.concepts.length === 1 ? "concept" : "concepts"}`)
+        createText("span", noteMeta)
       );
       item.addEventListener("click", () => {
         forestController.focusVisualNote(record.id, note.id);
@@ -618,7 +636,7 @@ function renderInspector() {
   artifacts.append(createText("h3", "Saved learning artifacts"));
   const artifactList = document.createElement("div");
   artifactList.className = "source-leaves artifact-list";
-  const visibleArtifacts = globalThis.ExamCramJourney.getChapterArtifactTimeline(chapter, savedArtifacts);
+  const visibleArtifacts = globalThis.NeatMindJourney.getChapterArtifactTimeline(chapter, savedArtifacts);
   if (!chapter.sessions.length) {
     artifactList.append(createText("p", "No saved visual notes or quizzes in this tree yet."));
   } else if (!visibleArtifacts.length) {
@@ -647,7 +665,10 @@ function renderInspector() {
     artifacts,
     sources: chapter.sources.length ? sources : null
   });
-  const exploreFurther = renderExploreFurther(chapter, weakTopics);
+  // Prefer weak topics for targeted remediation; otherwise fall back to the
+  // chapter's key concepts so external study links still appear for any note.
+  const exploreTopics = weakTopics.length ? weakTopics : getChapterExploreConceptLabels(record);
+  const exploreFurther = renderExploreFurther(chapter, exploreTopics);
   page.inspector.replaceChildren(header, workspace, ...(exploreFurther ? [exploreFurther] : []));
 }
 
@@ -682,20 +703,63 @@ function getChapterWeakConceptLabels(chapter, learningMemory = {}) {
     });
 }
 
+function getChapterExploreConceptLabels(record) {
+  if (!record) return [];
+  const artifact = getExactChapterArtifact(record);
+  const labels = [
+    ...(Array.isArray(record.concepts) ? record.concepts.map((concept) => concept?.label) : []),
+    ...(Array.isArray(artifact?.keyConcepts) ? artifact.keyConcepts.map((concept) => concept?.label) : [])
+  ];
+  const seen = new Set();
+  return labels
+    .map(normalizeExternalConceptLabel)
+    .filter((label) => {
+      const key = label.toLocaleLowerCase();
+      if (!label || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 4);
+}
+
 function buildExternalStudySuggestions(conceptLabel) {
   const concept = normalizeExternalConceptLabel(conceptLabel);
   if (!concept) return [];
   const query = encodeURIComponent(concept);
+  // A curated set of reputable providers, each opened as a live, pre-filled
+  // search for the concept. Deterministic search URLs on trusted domains are
+  // used instead of AI-generated links, which can hallucinate unsafe or dead
+  // pages — the learner still reviews and explicitly saves anything useful.
   return [
     {
       provider: "Khan Academy",
-      description: "Lessons and practice results for this concept.",
+      description: "Free lessons and practice for this concept.",
       url: `https://www.khanacademy.org/search?page_search_query=${query}`
     },
     {
       provider: "Wikipedia",
-      description: "An overview with references for further reading.",
+      description: "An encyclopedic overview with references.",
       url: `https://en.wikipedia.org/w/index.php?search=${query}`
+    },
+    {
+      provider: "Britannica",
+      description: "A vetted encyclopedia entry.",
+      url: `https://www.britannica.com/search?query=${query}`
+    },
+    {
+      provider: "Google Scholar",
+      description: "Academic papers and citations.",
+      url: `https://scholar.google.com/scholar?q=${query}`
+    },
+    {
+      provider: "YouTube",
+      description: "Video explanations and walkthroughs.",
+      url: `https://www.youtube.com/results?search_query=${query}`
+    },
+    {
+      provider: "Quizlet",
+      description: "Flashcards and practice sets.",
+      url: `https://quizlet.com/search?query=${query}&type=all`
     }
   ];
 }
@@ -709,6 +773,7 @@ function renderExploreFurther(chapter, weakTopics) {
 
   const disclosure = document.createElement("details");
   disclosure.className = "external-study-suggestions__disclosure";
+  disclosure.open = true;
   disclosure.append(createText("summary", "Explore further (external)", "external-study-suggestions__summary"));
   const body = document.createElement("div");
   body.className = "external-study-suggestions__body";
@@ -782,6 +847,7 @@ function renderChapterWorkspace(chapter, record, sections) {
     panel.className = "chapter-workspace__panel";
     panel.setAttribute("role", "tabpanel");
     panel.setAttribute("aria-labelledby", button.id);
+    panel.tabIndex = 0;
     panel.dataset.workspacePanel = tab.id;
     panel.hidden = index !== 0;
     panels.set(tab.id, panel);
@@ -802,9 +868,9 @@ function renderChapterWorkspace(chapter, record, sections) {
   cheatPanel.append(renderWorkspaceResourceHeader(
     chapter,
     "Cheat Sheet",
-    Boolean(globalThis.ExamCramCheatSheet?.hasUsableCheatSheet?.(cheatSheet))
+    Boolean(globalThis.NeatMindCheatSheet?.hasUsableCheatSheet?.(cheatSheet))
   ));
-  if (globalThis.ExamCramCheatSheet?.hasUsableCheatSheet?.(cheatSheet)) {
+  if (globalThis.NeatMindCheatSheet?.hasUsableCheatSheet?.(cheatSheet)) {
     cheatPanel.append(renderChapterCheatSheet(cheatSheet));
   } else {
     cheatPanel.append(renderWorkspaceEmptyState(chapter, "The Cheat Sheet has not been generated yet."));
@@ -930,10 +996,10 @@ async function requestChapterResourceGeneration(chapter, action) {
       await sidePanelOpen;
       setArtifactStatus(`${action === "regenerate" ? "Regeneration" : "Retry"} queued for ${chapter.importedChapterTitle || chapter.title}.`, false);
     } catch (error) {
-      setArtifactStatus(error?.message || "Open Exam-Cram to generate this chapter's resources.", true);
+      setArtifactStatus(error?.message || "Open NeatMind to generate this chapter's resources.", true);
     }
   } else {
-    setArtifactStatus("Resource generation is queued. Open Exam-Cram to continue.", false);
+    setArtifactStatus("Resource generation is queued. Open NeatMind to continue.", false);
   }
 }
 
@@ -951,10 +1017,11 @@ function renderVisualNoteFocus(chapter, record, selectedNote) {
   message.className = "chapter-focus-message";
   message.setAttribute("role", "status");
   message.setAttribute("aria-live", "polite");
+  const selectedNoteStudyMs = getNoteStudyMs(selectedNote.id);
   message.append(
     createText("span", "Selected Visual Note", "chapter-focus-message__eyebrow"),
     createText("h3", selectedNote.title),
-    createText("p", `Saved ${formatDate(selectedNote.activityAt || selectedNote.generatedAt)} · ${selectedNote.concepts.length} grounded ${selectedNote.concepts.length === 1 ? "concept" : "concepts"}`),
+    createText("p", `Saved ${formatDate(selectedNote.activityAt || selectedNote.generatedAt)} · ${selectedNote.concepts.length} grounded ${selectedNote.concepts.length === 1 ? "concept" : "concepts"}${selectedNoteStudyMs ? ` · ${formatStudyDuration(selectedNoteStudyMs)} studied` : ""}`),
     createText("small", chapter.title, "chapter-focus-message__source")
   );
   wrapper.append(message);
@@ -1035,7 +1102,7 @@ function renderChapterNotePreview(chapter, record, preferredArtifactId = "") {
   }
 
   const cheatSheet = normalizeChapterCheatSheet(artifact);
-  if (globalThis.ExamCramCheatSheet?.hasUsableCheatSheet?.(cheatSheet)) {
+  if (globalThis.NeatMindCheatSheet?.hasUsableCheatSheet?.(cheatSheet)) {
     section.append(renderChapterCheatSheet(cheatSheet));
   }
 
@@ -1093,12 +1160,21 @@ function handleStorageChanged(changes, area) {
   let shouldRender = false;
   let metricsChanged = false;
   if (changes[STORAGE.journey]) {
-    journey = globalThis.ExamCramJourney.normalizeJourney(changes[STORAGE.journey].newValue);
+    journey = globalThis.NeatMindJourney.normalizeJourney(changes[STORAGE.journey].newValue);
     shouldRender = true;
   }
   if (changes[STORAGE.focus]) {
     focusState = changes[STORAGE.focus].newValue || {};
     metricsChanged = true;
+  }
+  if (changes[STORAGE.studyTime]) {
+    studyTimeState = globalThis.NeatMindStudyTime?.normalizeStudyTimeState?.(
+      changes[STORAGE.studyTime].newValue,
+      Date.now()
+    ) || changes[STORAGE.studyTime].newValue || {};
+    renderHeaderMetrics();
+    renderStudyRail();
+    renderDetails();
   }
   if (changes[STORAGE.sessions]) {
     savedArtifacts = normalizeSavedArtifacts(changes[STORAGE.sessions].newValue);
@@ -1110,13 +1186,12 @@ function handleStorageChanged(changes, area) {
 
 function handleBeforeUnload() {
   window.removeEventListener("keydown", handlePageKeyDown);
-  if (focusMetricsTimer) clearInterval(focusMetricsTimer);
   globalThis.chrome?.storage?.onChanged?.removeListener?.(handleStorageChanged);
   forestController.destroy();
 }
 
 function normalizeChapterCheatSheet(artifact) {
-  const api = globalThis.ExamCramCheatSheet;
+  const api = globalThis.NeatMindCheatSheet;
   if (!api?.normalizeCheatSheet) return artifact?.cheatSheet || null;
   const normalize = typeof api.normalizeCheatSheetForRender === "function"
     ? api.normalizeCheatSheetForRender
@@ -1382,7 +1457,7 @@ async function openExternalStudySuggestion(chapter, concept, suggestion, button)
   try {
     if (!globalThis.chrome?.tabs?.create) {
       window.open(safeUrl, "_blank", "noopener");
-      setArtifactStatus("External page opened. In the installed extension, open Exam-Cram on that page and choose Save source to chapter.");
+      setArtifactStatus("External page opened. In the installed extension, open NeatMind on that page and choose Save source to chapter.");
       return;
     }
     await globalThis.chrome.tabs.create({ url: safeUrl, active: true });
@@ -1438,7 +1513,7 @@ async function openSavedArtifact(artifactId, button) {
     await draftSave;
     notifyArtifactReady(exactArtifact.id);
     await sidePanelOpen;
-    setArtifactStatus(`Opened “${exactArtifact.title || "saved note"}” in Exam-Cram.`);
+    setArtifactStatus(`Opened “${exactArtifact.title || "saved note"}” in NeatMind.`);
   } catch (error) {
     setArtifactStatus(error?.message || "The saved note could not be opened.", true);
   } finally {
@@ -1476,13 +1551,13 @@ async function openStudyPanel() {
   const sidePanelOpen = globalThis.chrome?.sidePanel?.open ? openSidePanelFromGesture() : null;
   try {
     if (!sidePanelOpen) {
-      page.createNoteHelp.textContent = "Open Exam-Cram from the Chrome toolbar while viewing the page you want to study.";
+      page.createNoteHelp.textContent = "Open NeatMind from the Chrome toolbar while viewing the page you want to study.";
       return;
     }
     await sidePanelOpen;
-    page.createNoteHelp.textContent = "Exam-Cram is open. Name a Journey chapter, collect related pages, then build the visual note.";
+    page.createNoteHelp.textContent = "NeatMind is open. Name a Journey chapter, collect related pages, then build the visual note.";
   } catch (error) {
-    page.createNoteHelp.textContent = error?.message || "Open Exam-Cram from the Chrome toolbar to create a visual note.";
+    page.createNoteHelp.textContent = error?.message || "Open NeatMind from the Chrome toolbar to create a visual note.";
   } finally {
     page.createNote.disabled = false;
   }
@@ -1516,7 +1591,7 @@ function saveSummaryThroughWorker(currentJourney, summary) {
     payload: { summary }
   };
   if (!globalThis.chrome?.runtime?.sendMessage) {
-    const outcome = globalThis.ExamCramJourneyWorker.reduceJourneyOperation(currentJourney, message, Date.now());
+    const outcome = globalThis.NeatMindJourneyWorker.reduceJourneyOperation(currentJourney, message, Date.now());
     localStorage.setItem(STORAGE.journey, JSON.stringify(outcome.journey));
     return Promise.resolve({ journey: outcome.journey, result: outcome.result });
   }

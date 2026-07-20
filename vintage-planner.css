@@ -1151,6 +1151,9 @@
   --muted: var(--planner-ink-soft);
   --faint: var(--planner-ink-faint);
   --line: var(--planner-paper-edge);
+  /* The forest's light salmon error reads well on dark leather but washes out
+     on this paper surface, so use a dark red that stays legible on cream. */
+  --error: #b3261e;
   border: 7px solid var(--planner-leather-800);
   border-radius: var(--planner-radius-frame);
   background: var(--planner-paper);
@@ -1160,8 +1163,14 @@
 
 .vintage-planner--forest .forest-state-card__eyebrow,
 .vintage-planner--forest .forest-drawer__eyebrow {
-  color: var(--planner-oxblood);
+  color: var(--planner-oxblood-dark);
   font-family: var(--planner-font-ui);
+}
+
+/* The study rail keeps the dark base surface, so its eyebrow needs a light
+   accent instead of the oxblood used on the paper panels. */
+.vintage-planner--forest .learning-outline .forest-state-card__eyebrow {
+  color: #f0c37d;
 }
 
 .vintage-planner--forest .forest-state-card h2,
@@ -1188,6 +1197,8 @@
   --muted: var(--planner-ink-soft);
   --faint: var(--planner-ink-faint);
   --line: var(--planner-paper-edge);
+  /* Dark red so error/warning status text stays legible on the paper drawer. */
+  --error: #b3261e;
   border: 7px solid var(--planner-leather-800);
   border-top-color: var(--planner-leather-600);
   border-radius: var(--planner-radius-frame);
@@ -1299,6 +1310,27 @@
   box-shadow: 0 4px 12px rgba(69, 45, 27, 0.07);
 }
 
+/* The journey summary text keeps the dark base theme's light colors, which
+   vanish on the paper drawer. Repaint intro, section headings, and the list
+   content to dark ink / oxblood so the summary reads on the light surface. */
+.vintage-planner--forest .summary-intro,
+.vintage-planner--forest .summary-section ul,
+.vintage-planner--forest .summary-section li {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .summary-evidence {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .summary-section {
+  border-top-color: var(--planner-paper-edge);
+}
+
+.vintage-planner--forest .summary-section h3 {
+  color: var(--planner-oxblood-dark);
+}
+
 .vintage-planner--forest .study-context button,
 .vintage-planner--forest .source-leaf button,
 .vintage-planner--forest .summary-actions button,
@@ -1333,6 +1365,161 @@
   background: var(--planner-paper-soft);
   color: var(--planner-ink);
   scrollbar-color: var(--planner-brass) transparent;
+}
+
+/* Visual Note preview, its concept cards, the note summary, the cheat sheet,
+   and the selected-note banner all inherit the dark base theme's light text
+   (and, for the tutor "root" card, a dark background). On the paper drawer
+   that renders light-on-light or dark-on-dark. Repaint every surface and text
+   colour so the Visual Note and Cheat Sheet read clearly. */
+.vintage-planner--forest .chapter-note-preview,
+.vintage-planner--forest .chapter-note-summary,
+.vintage-planner--forest .chapter-cheat-sheet {
+  border-top-color: var(--planner-paper-edge);
+}
+
+.vintage-planner--forest .chapter-note-preview__eyebrow,
+.vintage-planner--forest .chapter-focus-message__eyebrow {
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .chapter-note-preview__header h3 {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .chapter-note-preview__open {
+  border-color: var(--planner-oxblood-dark);
+  border-radius: var(--planner-radius-control);
+  background: var(--planner-oxblood);
+  color: #fff6df;
+}
+
+.vintage-planner--forest .visual-tutor-preview__root,
+.vintage-planner--forest .visual-tutor-preview__node {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper-soft);
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .visual-tutor-preview__root::after {
+  background: var(--planner-paper-edge);
+}
+
+.vintage-planner--forest .visual-tutor-preview__root span,
+.vintage-planner--forest .visual-tutor-preview__node p {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .visual-tutor-preview__root strong,
+.vintage-planner--forest .visual-tutor-preview__node strong {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .visual-tutor-preview__node span {
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .visual-tutor-preview__node:hover,
+.vintage-planner--forest .visual-tutor-preview__node.is-selected {
+  border-color: var(--planner-brass);
+  background: var(--planner-paper-deep);
+}
+
+.vintage-planner--forest .chapter-note-summary h4,
+.vintage-planner--forest .chapter-cheat-sheet h4 {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .chapter-note-summary ul,
+.vintage-planner--forest .chapter-note-summary li {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .chapter-cheat-sheet__table tr {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper-soft);
+}
+
+.vintage-planner--forest .chapter-cheat-sheet__table th,
+.vintage-planner--forest .chapter-cheat-sheet__table td {
+  border-bottom-color: var(--planner-paper-edge);
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .chapter-cheat-sheet__table th::before,
+.vintage-planner--forest .chapter-cheat-sheet__table td::before {
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .chapter-cheat-sheet__table tr > :first-child {
+  border-left-color: var(--planner-oxblood);
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .chapter-focus-message h3 {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .chapter-focus-message p {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .chapter-focus-message__source {
+  color: var(--planner-ink-faint);
+}
+
+/* External study suggestions ship with a cool base-theme palette (blue text on
+   dark translucent panels). On the paper drawer that is low-contrast, so
+   repaint the caution frame, notice, and provider cards for cream paper. */
+.vintage-planner--forest .external-study-suggestions {
+  border-color: var(--planner-oxblood);
+  background: var(--planner-paper-soft);
+}
+
+.vintage-planner--forest .external-study-suggestions__summary {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .external-study-suggestions__summary::marker {
+  color: var(--planner-oxblood);
+}
+
+.vintage-planner--forest .external-study-suggestions__body {
+  border-top-color: var(--planner-paper-edge);
+}
+
+.vintage-planner--forest .external-study-suggestions__eyebrow,
+.vintage-planner--forest .external-study-suggestions__notice {
+  color: var(--planner-oxblood-dark);
+}
+
+.vintage-planner--forest .external-study-concept h3 {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .external-study-card {
+  border-color: var(--planner-paper-edge);
+  background: var(--planner-paper);
+}
+
+.vintage-planner--forest .external-study-card strong {
+  color: var(--planner-ink);
+}
+
+.vintage-planner--forest .external-study-card p {
+  color: var(--planner-ink-soft);
+}
+
+.vintage-planner--forest .external-study-card button {
+  border-color: var(--planner-oxblood-dark);
+  background: var(--planner-oxblood);
+  color: #fff6df;
+}
+
+/* Keep an error/warning status readable AND still red on the paper drawer: the
+   generic paper rule would otherwise repaint it plain ink and drop the signal. */
+.vintage-planner--forest .artifact-open-status[data-state="error"] {
+  color: var(--error);
 }
 
 .vintage-planner--forest .summary-actions select {
@@ -1655,4 +1842,213 @@
 
 .vintage-planner--panel .dashboard__stat-unit {
   color: var(--planner-ink-soft, #655442);
+}
+
+/* Learning Forest readability and evidence navigation
+   ----------------------------------------------------
+   The forest itself should remain atmospheric, but the labels and the study
+   surface need to read as deliberately placed controls rather than text that
+   happens to sit on top of the particle field.  Keep one primary vertical
+   scrollport for chapter evidence so a wheel or touch gesture never has to
+   fight the nested resource panels. */
+.vintage-planner--forest .forest-label {
+  min-height: 48px;
+  border-color: rgba(242, 213, 159, 0.52);
+  background:
+    linear-gradient(135deg, rgba(82, 51, 31, 0.98), rgba(49, 29, 18, 0.96));
+  color: #fff8e7;
+  box-shadow: 0 7px 18px rgba(23, 12, 7, 0.34), inset 0 1px rgba(255, 248, 232, 0.1);
+  text-shadow: 0 1px 1px rgba(25, 13, 7, 0.72);
+}
+
+.vintage-planner--forest .forest-label::before {
+  width: 9px;
+  background: var(--planner-brass-soft);
+  box-shadow: 0 0 8px rgba(232, 213, 170, 0.48);
+}
+
+.vintage-planner--forest .forest-label__eyebrow {
+  color: #f2cf90;
+  font-size: 9px;
+}
+
+.vintage-planner--forest .forest-label__title {
+  color: inherit;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.vintage-planner--forest .forest-label:hover,
+.vintage-planner--forest .forest-label:focus-visible,
+.vintage-planner--forest .forest-label.is-selected {
+  border-color: var(--planner-brass-soft);
+  background: linear-gradient(135deg, #8a623c, #57331f);
+  color: #fffdf4;
+  box-shadow: 0 10px 24px rgba(23, 12, 7, 0.42), 0 0 0 1px rgba(232, 213, 170, 0.16);
+}
+
+.vintage-planner--forest .forest-ribbon__status,
+.vintage-planner--forest .forest-ribbon__index-button,
+.vintage-planner--forest .forest-ribbon__plot {
+  color: #f9e7c4;
+  text-shadow: 0 1px 1px rgba(25, 13, 7, 0.72);
+}
+
+.vintage-planner--forest .forest-ribbon__plot-number,
+.vintage-planner--forest .forest-ribbon__plot-meta {
+  color: #eacb91;
+}
+
+.vintage-planner--forest .learning-outline {
+  border-color: rgba(232, 213, 170, 0.44);
+  background: linear-gradient(145deg, rgba(73, 46, 29, 0.98), rgba(46, 27, 18, 0.98));
+  box-shadow: 0 16px 38px rgba(23, 12, 7, 0.34), inset 0 1px rgba(255, 244, 220, 0.1);
+  backdrop-filter: none;
+}
+
+.vintage-planner--forest .learning-outline h2,
+.vintage-planner--forest .learning-outline__file-heading strong,
+.vintage-planner--forest .learning-outline__chapter strong {
+  color: #fff6df;
+}
+
+.vintage-planner--forest .learning-outline__file-heading span,
+.vintage-planner--forest .learning-outline__chapter span,
+.vintage-planner--forest .learning-outline__chapter small,
+.vintage-planner--forest .learning-outline__tree > p {
+  color: #e8cfaa;
+}
+
+.vintage-planner--forest .learning-outline__file {
+  border-color: rgba(232, 213, 170, 0.26);
+}
+
+.vintage-planner--forest .learning-outline__file-heading {
+  background: rgba(232, 213, 170, 0.1);
+}
+
+.vintage-planner--forest .learning-outline__chapter:hover,
+.vintage-planner--forest .learning-outline__chapter.is-selected {
+  background: rgba(232, 213, 170, 0.12);
+}
+
+.vintage-planner--forest .learning-outline__chapter.is-selected {
+  box-shadow: inset 3px 0 var(--planner-brass);
+}
+
+.vintage-planner--forest .forest-drawer,
+.vintage-planner--forest .forest-drawer.is-note-only {
+  height: min(68dvh, 660px);
+  max-height: calc(100dvh - 112px);
+}
+
+.vintage-planner--forest .forest-drawer {
+  will-change: transform, opacity;
+}
+
+.vintage-planner--forest .forest-drawer__chrome {
+  box-shadow: 0 4px 12px rgba(69, 45, 27, 0.1);
+}
+
+/* The drawer owns vertical evidence reading. Resource panels grow naturally
+   inside it, removing the old scroll-within-scroll trap. */
+.vintage-planner--forest .forest-drawer__panel {
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 18px 22px 28px;
+  scroll-behavior: smooth;
+  scroll-padding-block: 14px 28px;
+  scrollbar-color: var(--planner-brass) var(--planner-paper-deep);
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y pinch-zoom;
+}
+
+.vintage-planner--forest .chapter-workspace__tabs {
+  top: 0;
+  box-shadow: 0 6px 14px rgba(69, 45, 27, 0.12);
+}
+
+.vintage-planner--forest .chapter-workspace__panel {
+  max-height: none;
+  overflow: visible;
+  padding: 16px 2px 6px;
+}
+
+.vintage-planner--forest .source-leaf__content-body {
+  max-height: min(46dvh, 420px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  scrollbar-color: var(--planner-brass) var(--planner-paper-deep);
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y pinch-zoom;
+}
+
+.vintage-planner--forest .forest-drawer__panel::-webkit-scrollbar,
+.vintage-planner--forest .source-leaf__content-body::-webkit-scrollbar,
+.vintage-planner--forest .learning-outline::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.vintage-planner--forest .forest-drawer__panel::-webkit-scrollbar-track,
+.vintage-planner--forest .source-leaf__content-body::-webkit-scrollbar-track,
+.vintage-planner--forest .learning-outline::-webkit-scrollbar-track {
+  background: var(--planner-paper-deep);
+}
+
+.vintage-planner--forest .forest-drawer__panel::-webkit-scrollbar-thumb,
+.vintage-planner--forest .source-leaf__content-body::-webkit-scrollbar-thumb,
+.vintage-planner--forest .learning-outline::-webkit-scrollbar-thumb {
+  border: 3px solid var(--planner-paper-deep);
+  border-radius: 999px;
+  background: var(--planner-brass);
+}
+
+.vintage-planner--forest .forest-drawer__panel:focus-visible,
+.vintage-planner--forest .chapter-workspace__panel:focus-visible {
+  outline: 3px solid rgba(180, 136, 67, 0.56);
+  outline-offset: -3px;
+}
+
+@media (max-width: 560px) {
+  .vintage-planner--forest .forest-drawer,
+  .vintage-planner--forest .forest-drawer.is-note-only {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    width: auto;
+    height: min(76dvh, 680px);
+    max-height: calc(100dvh - 96px);
+    border-width: 5px;
+    transform: translateY(calc(100% + 72px));
+  }
+
+  .vintage-planner--forest .forest-drawer.is-open,
+  .vintage-planner--forest .forest-drawer.is-note-only.is-open {
+    transform: translateY(0);
+  }
+
+  .vintage-planner--forest .forest-drawer__chrome {
+    padding: 14px 14px 10px;
+  }
+
+  .vintage-planner--forest .forest-drawer__panel {
+    padding: 14px 14px 22px;
+  }
+
+  .vintage-planner--forest .chapter-workspace__tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .vintage-planner--forest .chapter-workspace__tabs button:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .vintage-planner--forest .forest-label {
+    width: min(154px, calc(50vw - 22px));
+  }
 }

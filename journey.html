@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="dark">
-    <title>Learning Forest · Exam-Cram</title>
+    <title>Learning Forest · NeatMind</title>
     <link rel="stylesheet" href="journey.css">
     <link rel="stylesheet" href="vintage-planner.css">
   </head>
@@ -24,7 +24,7 @@
           <div class="forest-topbar__meta">
             <div class="forest-topbar__stats" aria-label="Journey metrics">
               <span><strong id="pageProgress">0%</strong> progress</span>
-              <span title="Focus time recorded by Focus sessions while you browse"><strong id="pageFocusTime">0m</strong> focus</span>
+              <span title="Total study time, recorded automatically per chapter and note as you study"><strong id="pageFocusTime">0m</strong> focus</span>
             </div>
             <span id="forestParticleCount" class="forest-particle-count" role="status">Generating forest</span>
           </div>
@@ -75,7 +75,7 @@
         <span class="forest-state-card__eyebrow">Plant your first note</span>
         <h2>No learning trees yet</h2>
         <p>Collect related pages under a Journey chapter, then build and save a visual note. Each named chapter grows into its own tree.</p>
-        <button id="pageCreateNoteButton" type="button">Open Exam-Cram</button>
+        <button id="pageCreateNoteButton" type="button">Open NeatMind</button>
         <small id="pageCreateNoteHelp">Choose a Journey chapter before collecting or creating a note.</small>
       </section>
 
@@ -101,13 +101,13 @@
           </div>
         </div>
 
-        <section id="chapterPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="chapterTab">
+        <section id="chapterPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="chapterTab" tabindex="0">
           <section id="pageStudyContext" class="study-context" aria-live="polite" aria-label="Last studied source"></section>
           <article id="chapterInspector" class="chapter-inspector"></article>
           <p id="pageArtifactStatus" class="artifact-open-status" role="status" hidden></p>
         </section>
 
-        <section id="summaryPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="summaryTab" hidden>
+        <section id="summaryPanel" class="forest-drawer__panel" role="tabpanel" aria-labelledby="summaryTab" tabindex="0" hidden>
           <div class="summary-actions">
             <label for="pageSummaryRange">Summary range</label>
             <select id="pageSummaryRange">
@@ -137,7 +137,9 @@
       <div id="pageLoadState" class="page-load-state" role="status">Loading your learning journey...</div>
     </main>
 
+    <script src="branding-utils.js"></script>
     <script src="focus-utils.js"></script>
+    <script src="study-time-utils.js"></script>
     <script src="journey-utils.js"></script>
     <script src="journey-worker-utils.js"></script>
     <script src="cheat-sheet-utils.js"></script>
