@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 require("../journey-utils.js");
 const Worker = require("../journey-worker-utils.js");
-const Journey = globalThis.ExamCramJourney;
+const Journey = globalThis.NeatMindJourney;
 
 function operation(type, opId, expectedRevision, payload = {}) {
   return { type, opId, expectedRevision, payload };

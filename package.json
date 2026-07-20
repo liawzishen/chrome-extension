@@ -1,5 +1,5 @@
 {
-  "name": "exam-cram-assistant",
+  "name": "neatmind",
   "version": "0.7.0",
   "private": true,
   "description": "Chrome study extension with visual lessons, focus controls, video learning, and a persistent learning journey.",
@@ -14,7 +14,7 @@
     "security:secrets": "node scripts/verify-publish-safety.mjs",
     "security:audit": "npm run security:secrets && npm audit --audit-level=high",
     "test": "node --test tests/*.test.js",
-    "check": "node --check popup.js && node --check server.js && node --check preview-server.js && node --check export-utils.js && node --check export.js && node --check focus-utils.js && node --check background.js && node --check journey-utils.js && node --check journey-worker-utils.js && node --check journey-tree-utils.js && node --check journey-page.js && node --check video-utils.js && node --check offscreen.js && node --check cheat-sheet-utils.js && node --check journey-tree-entry.js && node --check build-journey-tree.mjs && node --check export-vendor-entry.js && node --check build-export-vendor.mjs && node --check document-reader-utils.js && node --check document-frame-reader.js && node --check document-reader-vendor-entry.js && node --check pdf-worker-entry.js && node --check build-document-reader-vendor.mjs"
+    "check": "node --check branding-utils.js && node --check popup.js && node --check server.js && node --check preview-server.js && node --check export-utils.js && node --check export.js && node --check focus-utils.js && node --check background.js && node --check journey-utils.js && node --check journey-worker-utils.js && node --check journey-tree-utils.js && node --check journey-page.js && node --check video-utils.js && node --check offscreen.js && node --check cheat-sheet-utils.js && node --check journey-tree-entry.js && node --check build-journey-tree.mjs && node --check export-vendor-entry.js && node --check build-export-vendor.mjs && node --check document-reader-utils.js && node --check document-frame-reader.js && node --check document-reader-vendor-entry.js && node --check pdf-worker-entry.js && node --check build-document-reader-vendor.mjs"
   },
   "engines": {
     "node": ">=18"

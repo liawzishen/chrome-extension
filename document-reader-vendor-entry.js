@@ -16,8 +16,8 @@ function installPromiseWithResolversPolyfill() {
 }
 
 installPromiseWithResolversPolyfill();
-globalThis.ExamCramPdfVendorReady = import("pdfjs-dist/legacy/build/pdf.mjs").then((pdfjs) => {
+globalThis.NeatMindPdfVendorReady = import("pdfjs-dist/legacy/build/pdf.mjs").then((pdfjs) => {
   const vendor = Object.freeze({ pdfjs });
-  globalThis.ExamCramPdfVendor = vendor;
+  globalThis.NeatMindPdfVendor = vendor;
   return vendor;
 });

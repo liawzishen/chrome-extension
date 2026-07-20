@@ -2,7 +2,7 @@
 .env
 .env.*
 !.env.example
-.exam-cram-backend-token
+.neatmind-backend-token
 *.pem
 *.key
 *.p12

@@ -38,7 +38,7 @@ async (page) => {
     }
   };
   await page.evaluate((fixture) => {
-    window.__examCramMindMapFixture = fixture;
+    window.__neatMindMindMapFixture = fixture;
     window.renderVisualTutorNote({
       title: fixture.visualModel.title,
       objective: fixture.visualModel.objective,

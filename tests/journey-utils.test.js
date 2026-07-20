@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 
 require("../journey-utils.js");
 
-const Journey = globalThis.ExamCramJourney;
+const Journey = globalThis.NeatMindJourney;
 
 function questionAttempt(index, overrides = {}) {
   return {

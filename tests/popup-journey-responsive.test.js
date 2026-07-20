@@ -29,7 +29,7 @@ test("Smart Import rejects selections above twelve before reading", () => {
 });
 
 test("Smart Import falls back to the deterministic local classifier", () => {
-  assert.match(script, /catch\s*\{[\s\S]*?ExamCramJourney\.classifySourcesLocally\(readableFiles, journey\)/);
+  assert.match(script, /catch\s*\{[\s\S]*?NeatMindJourney\.classifySourcesLocally\(readableFiles, journey\)/);
 });
 
 test("Smart Import sends only excerpt data to the source classifier", () => {
@@ -37,8 +37,8 @@ test("Smart Import sends only excerpt data to the source classifier", () => {
 });
 
 test("Smart Import passes all assignments through the capacity planner", () => {
-  assert.match(script, /ExamCramJourney\.planBulkFiling\(plannedAssignments, journey\)/);
-  assert.match(script, /state\.pendingImport = \{[\s\S]*?files,[\s\S]*?plan: globalThis\.ExamCramJourney\.planBulkFiling\(assignments, journey\)/);
+  assert.match(script, /NeatMindJourney\.planBulkFiling\(plannedAssignments, journey\)/);
+  assert.match(script, /state\.pendingImport = \{[\s\S]*?files,[\s\S]*?plan: globalThis\.NeatMindJourney\.planBulkFiling\(assignments, journey\)/);
   assert.match(script, /pending\.assignments = plannedAssignments;[\s\S]*?pending\.plan = plan;/);
 });
 
@@ -48,7 +48,7 @@ test("backend endpoint rewriting supports source classification", () => {
 });
 
 test("Smart Import re-plans capacity whenever a chapter dropdown changes", () => {
-  assert.match(script, /select\.addEventListener\("change", \(event\) => \{[\s\S]*?pending\.plan = globalThis\.ExamCramJourney\.planBulkFiling\(pending\.assignments, pending\.journey\);[\s\S]*?renderImportReview\(\)/);
+  assert.match(script, /select\.addEventListener\("change", \(event\) => \{[\s\S]*?pending\.plan = globalThis\.NeatMindJourney\.planBulkFiling\(pending\.assignments, pending\.journey\);[\s\S]*?renderImportReview\(\)/);
   assert.match(script, /openNewChapterDialog\(event, \{ importFileId: row\.fileId \}\)/);
   assert.match(script, /if \(importFileId\)[\s\S]*?Assigned by you during import review\.[\s\S]*?planBulkFiling/);
 });
@@ -273,7 +273,7 @@ test("artifact actions become full-width cards through 640px", () => {
 });
 
 test("Dashboard builds and renders the accessible Today's plan section outside Journey", () => {
-  assert.match(script, /ExamCramJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds, studyGoal \}\)/);
+  assert.match(script, /NeatMindJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds, studyGoal \}\)/);
   assert.match(script, /const persistedView = viewId === "notesView" \? "pageView" : viewId/);
   assert.match(script, /function buildTodayPlanSection\(plan\)/);
   assert.match(script, /section\.setAttribute\("aria-label", "Today's study plan"\)/);
@@ -305,8 +305,8 @@ test("Today's plan styles use semantic UI tokens", () => {
 });
 
 test("AI Journey summaries send bounded local habit and due-concept context", () => {
-  assert.match(script, /ExamCramJourney\.buildHabitProfile\(journey, focusHistory, summaryNow\)/);
-  assert.match(script, /ExamCramJourney\.getDueConcepts\(journey, \{ now: summaryNow, limit: 5 \}\)/);
+  assert.match(script, /NeatMindJourney\.buildHabitProfile\(journey, focusHistory, summaryNow\)/);
+  assert.match(script, /NeatMindJourney\.getDueConcepts\(journey, \{ now: summaryNow, limit: 5 \}\)/);
   assert.match(script, /\.map\(\(\{ conceptLabel, effectiveStrength, state \}\) => \(\{ conceptLabel, effectiveStrength, state \}\)\)/);
   assert.match(script, /\.\.\.\(habitProfile \? \{ habitProfile \} : \{\}\)/);
   assert.match(script, /\.\.\.\(dueConcepts \? \{ dueConcepts \} : \{\}\)/);

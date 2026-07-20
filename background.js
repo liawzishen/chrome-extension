@@ -1,11 +1,11 @@
 "use strict";
 
-importScripts("focus-utils.js", "journey-utils.js", "journey-worker-utils.js", "video-utils.js");
+importScripts("branding-utils.js", "focus-utils.js", "journey-utils.js", "journey-worker-utils.js", "video-utils.js");
 
-const Focus = globalThis.ExamCramFocus;
-const Journey = globalThis.ExamCramJourney;
-const JourneyWorker = globalThis.ExamCramJourneyWorker;
-const Video = globalThis.ExamCramVideo;
+const Focus = globalThis.NeatMindFocus;
+const Journey = globalThis.NeatMindJourney;
+const JourneyWorker = globalThis.NeatMindJourneyWorker;
+const Video = globalThis.NeatMindVideo;
 const FOCUS_MESSAGE_TYPES = new Set(Object.values(Focus.MESSAGE_TYPES));
 const CHAPTER_FOCUS_MESSAGE_TYPES = new Set(Object.values(Focus.CHAPTER_MESSAGE_TYPES || {}));
 const JOURNEY_MESSAGE_TYPES = new Set(Object.values(JourneyWorker.MESSAGE_TYPES));
@@ -25,9 +25,9 @@ const VIDEO_EVENT_TYPES = new Set([
   Video.MESSAGE_TYPES.STOPPED,
   Video.MESSAGE_TYPES.ERROR
 ]);
-const JOURNEY_STORAGE_KEY = "examCramLearningJourney";
-const VIDEO_CAPTURE_STORAGE_KEY = "examCramVideoCaptureState";
-const VIDEO_CAPTURE_AUTHORIZATION_KEY = "examCramVideoCaptureAuthorization";
+const JOURNEY_STORAGE_KEY = "neatMindLearningJourney";
+const VIDEO_CAPTURE_STORAGE_KEY = "neatMindVideoCaptureState";
+const VIDEO_CAPTURE_AUTHORIZATION_KEY = "neatMindVideoCaptureAuthorization";
 const VIDEO_CAPTURE_PROTOCOL_VERSION = 3;
 const VIDEO_CAPTURE_AUTHORIZATION_TTL_MS = 60 * 1000;
 const DEFAULT_BACKEND_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
@@ -42,27 +42,37 @@ let creatingVideoOffscreenDocument = null;
 let latestVideoProgressState = null;
 const videoStreamReservations = Video.createStreamReservationRegistry();
 
+async function migrateBrandStorage() {
+  const branding = globalThis.NeatMindBranding;
+  if (!branding?.migrateStorageArea) return;
+  await Promise.all([
+    branding.migrateStorageArea(chrome.storage.local),
+    branding.migrateStorageArea(chrome.storage.session)
+  ]);
+}
+
+function initializeBackgroundState(reason, videoReason) {
+  void migrateBrandStorage().catch((error) => {
+    console.warn(`[NeatMind] Could not migrate stored data: ${safeErrorMessage(error) || "unknown error"}`);
+  }).finally(() => {
+    void configureGlobalSidePanel(reason);
+    void enqueueOperation(async () => {
+      await restrictStorageToTrustedContexts();
+      return reconcileFocusState(reason);
+    }).then(broadcastFocusState).catch((error) => logFocusError(`${reason} reconciliation`, error));
+    void enqueueVideoOperation(() => reconcileVideoCaptureState(videoReason)).catch(() => undefined);
+    void enqueueOperation(() => reconcileChapterFocusState(reason))
+      .then(broadcastChapterFocusState)
+      .catch((error) => logFocusError(`chapter focus ${reason}`, error));
+  });
+}
+
 chrome.runtime.onInstalled.addListener(() => {
-  void configureGlobalSidePanel("extension install");
-  void enqueueOperation(async () => {
-    await restrictStorageToTrustedContexts();
-    return reconcileFocusState("installed");
-  }).then(broadcastFocusState).catch((error) => logFocusError("install reconciliation", error));
-  void enqueueVideoOperation(() => reconcileVideoCaptureState("extension update")).catch(() => undefined);
-  void enqueueOperation(() => reconcileChapterFocusState("installed"))
-    .then(broadcastChapterFocusState)
-    .catch((error) => logFocusError("chapter focus install reconciliation", error));
+  initializeBackgroundState("installed", "extension update");
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  void configureGlobalSidePanel("browser startup");
-  void enqueueOperation(() => reconcileFocusState("browser startup"))
-    .then(broadcastFocusState)
-    .catch((error) => logFocusError("startup reconciliation", error));
-  void enqueueVideoOperation(() => reconcileVideoCaptureState("browser restart")).catch(() => undefined);
-  void enqueueOperation(() => reconcileChapterFocusState("browser startup"))
-    .then(broadcastChapterFocusState)
-    .catch((error) => logFocusError("chapter focus startup reconciliation", error));
+  initializeBackgroundState("browser startup", "browser restart");
 });
 
 chrome.action.onClicked.addListener((tab) => {
@@ -76,15 +86,15 @@ chrome.action.onClicked.addListener((tab) => {
       const opening = chrome.sidePanel.open({ windowId });
       if (opening && typeof opening.catch === "function") {
         void opening.catch((error) => {
-          console.warn(`[Exam-Cram Panel] action click: ${safeErrorMessage(error) || "could not open the side panel"}`);
+          console.warn(`[NeatMind Panel] action click: ${safeErrorMessage(error) || "could not open the side panel"}`);
         });
       }
     } catch (error) {
-      console.warn(`[Exam-Cram Panel] action click: ${safeErrorMessage(error) || "could not open the side panel"}`);
+      console.warn(`[NeatMind Panel] action click: ${safeErrorMessage(error) || "could not open the side panel"}`);
     }
   }
   void authorizeArmedVideoCaptureFromAction(tab).catch((error) => {
-    console.warn(`[Exam-Cram Video] toolbar authorization: ${safeErrorMessage(error) || "could not start tab audio"}`);
+    console.warn(`[NeatMind Video] toolbar authorization: ${safeErrorMessage(error) || "could not start tab audio"}`);
   });
 });
 
@@ -147,7 +157,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       ok: false,
       error: {
         code: "UNAUTHORIZED_SENDER",
-        message: "Exam-Cram controls are only available to this extension."
+        message: "NeatMind controls are only available to this extension."
       }
     });
     return false;
@@ -187,7 +197,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (VIDEO_EVENT_TYPES.has(message?.type)) {
     if (message.target !== "service-worker" || !isVideoOffscreenSender(sender)) {
-      sendResponse({ ok: false, error: serializeVideoError(new Video.VideoCaptureError("UNAUTHORIZED_CAPTURE_EVENT", "The capture event did not come from Exam-Cram's offscreen recorder.")) });
+      sendResponse({ ok: false, error: serializeVideoError(new Video.VideoCaptureError("UNAUTHORIZED_CAPTURE_EVENT", "The capture event did not come from NeatMind's offscreen recorder.")) });
       return false;
     }
     const eventOperation = message.type === Video.MESSAGE_TYPES.PROGRESS
@@ -224,7 +234,7 @@ void enqueueOperation(() => reconcileChapterFocusState("worker restart"))
 
 async function configureGlobalSidePanel(reason) {
   if (typeof chrome.sidePanel?.setPanelBehavior !== "function") {
-    console.warn(`[Exam-Cram Panel] ${reason}: Chrome 116 or newer is required for the persistent side panel.`);
+    console.warn(`[NeatMind Panel] ${reason}: Chrome 116 or newer is required for the persistent side panel.`);
     return false;
   }
   try {
@@ -235,7 +245,7 @@ async function configureGlobalSidePanel(reason) {
     await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false });
     return true;
   } catch (error) {
-    console.warn(`[Exam-Cram Panel] ${reason}: ${safeErrorMessage(error) || "could not configure action-click behavior"}`);
+    console.warn(`[NeatMind Panel] ${reason}: ${safeErrorMessage(error) || "could not configure action-click behavior"}`);
     return false;
   }
 }
@@ -483,7 +493,7 @@ async function authorizeArmedVideoCaptureFromAction(tab) {
   if (!Number.isInteger(tabId) || tabId !== authorization.tabId) {
     await broadcastVideoCaptureAuthorization({
       ...toPublicVideoCaptureAuthorization(authorization, "wrong-tab"),
-      message: "Return to the video tab you armed, then click the Exam-Cram toolbar icon there."
+      message: "Return to the video tab you armed, then click the NeatMind toolbar icon there."
     });
     return false;
   }
@@ -527,7 +537,7 @@ function requestVideoCaptureStreamId(tabIdValue) {
     if (typeof chrome.tabCapture?.getMediaStreamId !== "function") {
       throw new Video.VideoCaptureError(
         "TAB_CAPTURE_UNAVAILABLE",
-        "Chrome 116 or newer is required for tab-audio capture. Update Chrome, then reload Exam-Cram."
+        "Chrome 116 or newer is required for tab-audio capture. Update Chrome, then reload NeatMind."
       );
     }
     // This function is reached only from chrome.action.onClicked after an
@@ -1047,8 +1057,8 @@ async function stopVideoCapture(reason, discard) {
 }
 
 async function transcribeVideoChunk(chunk, jobId) {
-  const settingsResult = await chrome.storage.local.get("examCramSettings");
-  const settings = settingsResult.examCramSettings || {};
+  const settingsResult = await chrome.storage.local.get("neatMindSettings");
+  const settings = settingsResult.neatMindSettings || {};
   const configuredEndpoint = Object.prototype.hasOwnProperty.call(settings, "apiEndpoint")
     ? settings.apiEndpoint
     : DEFAULT_BACKEND_ENDPOINT;
@@ -1088,7 +1098,7 @@ async function transcribeVideoChunk(chunk, jobId) {
   } catch {
     throw new Video.VideoCaptureError(
       "TRANSCRIPTION_INVALID_RESPONSE",
-      "The configured backend returned a non-JSON audio transcription response. Restart or update the Exam-Cram backend."
+      "The configured backend returned a non-JSON audio transcription response. Restart or update the NeatMind backend."
     );
   }
   if (!response.ok) {
@@ -1111,7 +1121,7 @@ async function transcribeVideoChunk(chunk, jobId) {
   if (!segments) {
     throw new Video.VideoCaptureError(
       "TRANSCRIPTION_INVALID_RESPONSE",
-      "The backend response did not include a transcript segment list. Restart or update the Exam-Cram backend."
+      "The backend response did not include a transcript segment list. Restart or update the NeatMind backend."
     );
   }
   if (!segments.length) {
@@ -1127,8 +1137,8 @@ async function transcribeVideoChunk(chunk, jobId) {
 }
 
 async function preflightVideoTranscriptionBackend() {
-  const settingsResult = await chrome.storage.local.get("examCramSettings");
-  const settings = settingsResult.examCramSettings || {};
+  const settingsResult = await chrome.storage.local.get("neatMindSettings");
+  const settings = settingsResult.neatMindSettings || {};
   const configuredEndpoint = Object.prototype.hasOwnProperty.call(settings, "apiEndpoint")
     ? settings.apiEndpoint
     : DEFAULT_BACKEND_ENDPOINT;
@@ -1136,7 +1146,7 @@ async function preflightVideoTranscriptionBackend() {
   if (!endpoint) {
     throw new Video.VideoCaptureError(
       "BACKEND_REQUIRED",
-      "Configure a trusted HTTPS or local Exam-Cram backend before starting tab-audio transcription."
+      "Configure a trusted HTTPS or local NeatMind backend before starting tab-audio transcription."
     );
   }
   const token = getBoundBackendAccessToken(settings, endpoint);
@@ -1159,8 +1169,8 @@ async function preflightVideoTranscriptionBackend() {
     throw new Video.VideoCaptureError(
       "TRANSCRIPTION_BACKEND_UNAVAILABLE",
       controller.signal.aborted
-        ? "The Exam-Cram backend did not respond before recording. Start or restart it, then try again."
-        : `The Exam-Cram backend could not be reached or does not allow ${extensionOrigin}. Start it and add this exact origin to ALLOWED_EXTENSION_ORIGINS.`,
+        ? "The NeatMind backend did not respond before recording. Start or restart it, then try again."
+        : `The NeatMind backend could not be reached or does not allow ${extensionOrigin}. Start it and add this exact origin to ALLOWED_EXTENSION_ORIGINS.`,
       { cause: String(error?.message || error || "network error").slice(0, 200) }
     );
   } finally {
@@ -1178,7 +1188,7 @@ async function preflightVideoTranscriptionBackend() {
     const code = String(payload?.code || "TRANSCRIPTION_BACKEND_NOT_READY").slice(0, 80);
     throw new Video.VideoCaptureError(
       code,
-      payload?.error || "The Exam-Cram backend is not ready for Gemini WAV transcription. Restart it and try again."
+      payload?.error || "The NeatMind backend is not ready for Gemini WAV transcription. Restart it and try again."
     );
   }
   return payload;
@@ -1327,7 +1337,7 @@ async function updateVideoCaptureBadge(active) {
   if (active) {
     await chrome.action.setBadgeText({ text: "REC" });
     await chrome.action.setBadgeBackgroundColor({ color: "#b3261e" });
-    await chrome.action.setTitle({ title: "Exam-Cram — transcribing current tab audio" });
+    await chrome.action.setTitle({ title: "NeatMind — transcribing current tab audio" });
     return;
   }
   const focusState = await loadFocusState().catch(() => Focus.createDefaultFocusState(Date.now()));
@@ -1432,7 +1442,7 @@ async function installVideoPlayerObserver(tabId, jobId) {
         return b.width * b.height - a.width * a.height;
       })[0];
       if (!video) return false;
-      const previous = window.__examCramVideoObserver;
+      const previous = window.__neatMindVideoObserver;
       if (previous?.cleanup) previous.cleanup();
       const send = (action) => chrome.runtime.sendMessage({
         type: "VIDEO_PLAYER_EVENT",
@@ -1456,7 +1466,7 @@ async function installVideoPlayerObserver(tabId, jobId) {
       Object.entries(handlers).forEach(([event, handler]) => video.addEventListener(event, handler));
       const pageHide = () => send("navigation");
       window.addEventListener("pagehide", pageHide, { once: true });
-      window.__examCramVideoObserver = {
+      window.__neatMindVideoObserver = {
         cleanup() {
           Object.entries(handlers).forEach(([event, handler]) => video.removeEventListener(event, handler));
           window.removeEventListener("pagehide", pageHide);
@@ -1836,10 +1846,10 @@ async function updateFocusBadge(stateValue, now = Date.now()) {
   }
   await chrome.action.setTitle({
     title: state.status === "break"
-      ? "Exam-Cram — five-minute Focus break"
+      ? "NeatMind — five-minute Focus break"
       : state.status === "active"
-        ? `Exam-Cram — Focus mode: ${Math.ceil(state.remainingMs / 60000)} min left`
-        : "Exam-Cram Assistant"
+        ? `NeatMind — Focus mode: ${Math.ceil(state.remainingMs / 60000)} min left`
+        : "NeatMind"
   });
 }
 
@@ -1872,5 +1882,5 @@ function safeErrorMessage(error) {
 }
 
 function logFocusError(context, error) {
-  console.warn(`[Exam-Cram Focus] ${context}: ${safeErrorMessage(error) || "unknown error"}`);
+  console.warn(`[NeatMind Focus] ${context}: ${safeErrorMessage(error) || "unknown error"}`);
 }

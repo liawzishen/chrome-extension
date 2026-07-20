@@ -41,7 +41,7 @@ const VISUAL_EDGE_TYPES = new Set([
   "part_of",
   "transforms"
 ]);
-const BACKEND_TOKEN_FILE = join(process.cwd(), ".exam-cram-backend-token");
+const BACKEND_TOKEN_FILE = join(process.cwd(), ".neatmind-backend-token");
 const BACKEND_ACCESS_TOKEN = loadBackendAccessToken();
 const CONFIGURED_EXTENSION_ORIGINS = new Set(
   parseOriginList(process.env.ALLOWED_EXTENSION_ORIGINS)
@@ -81,7 +81,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && request.url === "/health") {
       sendJson(response, 200, {
         ok: true,
-        service: "exam-cram-backend"
+        service: "neatmind-backend"
       });
       return;
     }
@@ -174,7 +174,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -188,7 +188,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -202,7 +202,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -240,7 +240,7 @@ server.maxRequestsPerSocket = 100;
 
 if (require.main === module) {
   server.listen(PORT, SERVER_HOST, () => {
-    console.log(`Exam-Cram ${AI_PROVIDER} backend running at http://${SERVER_HOST}:${PORT} using ${getActiveModel()}`);
+    console.log(`NeatMind ${AI_PROVIDER} backend running at http://${SERVER_HOST}:${PORT} using ${getActiveModel()}`);
     console.log(`Backend access token loaded from ${process.env.BACKEND_ACCESS_TOKEN ? "BACKEND_ACCESS_TOKEN" : BACKEND_TOKEN_FILE}.`);
     if (CONFIGURED_EXTENSION_ORIGINS.size === 0) {
       console.warn("No Chrome extension origin is configured. Add ALLOWED_EXTENSION_ORIGINS to .env before using the loaded extension.");
@@ -381,7 +381,7 @@ function assertAuthorizedRequest(request) {
     if (isTrustedLoopbackExtensionRequest(request)) return;
     throw createHttpError(
       403,
-      "A valid Exam-Cram backend access token is required.",
+      "A valid NeatMind backend access token is required.",
       "BACKEND_TOKEN_REQUIRED"
     );
   }
@@ -392,7 +392,7 @@ function assertAuthorizedRequest(request) {
   if (!valid) {
     throw createHttpError(
       403,
-      "The supplied Exam-Cram backend access token is invalid.",
+      "The supplied NeatMind backend access token is invalid.",
       "BACKEND_TOKEN_INVALID"
     );
   }
@@ -433,7 +433,7 @@ function redactSensitiveText(value) {
 function logSanitizedServerError(error) {
   const code = String(error?.code || "BACKEND_ERROR").replace(/[^A-Z0-9_-]/gi, "").slice(0, 80) || "BACKEND_ERROR";
   const message = redactSensitiveText(error?.message || "Unexpected server error.");
-  console.error(`[Exam-Cram Backend] ${code}: ${message}`);
+  console.error(`[NeatMind Backend] ${code}: ${message}`);
 }
 
 function getPublicErrorMessage(error, statusCode) {
@@ -1304,7 +1304,7 @@ function normalizeAudioTranscriptionError(error, attemptCount) {
   let message = String(error?.message || "Gemini could not transcribe this audio chunk.");
   if ([401, 403].includes(providerStatus)) {
     code = "GEMINI_AUTH_FAILED";
-    message = "Gemini rejected the backend API key. Update GEMINI_API_KEY and restart the Exam-Cram backend.";
+    message = "Gemini rejected the backend API key. Update GEMINI_API_KEY and restart the NeatMind backend.";
   } else if (providerStatus === 429) {
     code = "GEMINI_RATE_LIMITED";
     message = "Gemini rate-limited audio transcription. Wait briefly, then try again.";
@@ -1980,7 +1980,7 @@ function buildPrompt(input) {
 
   return `Act like a strong AI tutor, not a simple quiz generator.
 
-First understand the whole page: identify the main concepts, relationships, formulas/rules, process steps, common misconceptions, and what a student would likely ask an AI tutor about this material. Then produce a visual teaching note and a varied exam-cram quiz.
+First understand the whole page: identify the main concepts, relationships, formulas/rules, process steps, common misconceptions, and what a student would likely ask an AI tutor about this material. Then produce a visual teaching note and a varied NeatMind quiz.
 
 Return only valid JSON in this exact shape:
 {
@@ -2092,7 +2092,7 @@ ${getSourceProvenanceContext(input)}`;
 
 function buildQuizOnlyPrompt(input) {
   const difficultyGuide = getDifficultyGuide(input.difficulty);
-  return `Create a varied exam-cram quiz from the immutable saved source snapshot below.
+  return `Create a varied NeatMind quiz from the immutable saved source snapshot below.
 
 Return only valid JSON in this exact shape:
 {
@@ -3144,7 +3144,7 @@ function reportGroundingRepair(itemKind, index, error, values = {}) {
           ? "sourceAnchor"
           : "detail";
   const value = cleanOutputText(values[field] || values.detail || values.sourceAnchor || "").slice(0, 220);
-  console.warn("[Exam-Cram] Corrected AI grounding issue.", {
+  console.warn("[NeatMind] Corrected AI grounding issue.", {
     item: `${itemKind} ${Number(index) + 1}`,
     field,
     value,

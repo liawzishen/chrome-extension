@@ -20,7 +20,7 @@ test("Dashboard is the first tab and default active view", () => {
 });
 
 test("Dashboard persists one normalized local study goal", () => {
-  assert.match(script, /studyGoal:\s*"examCramStudyGoal"/);
+  assert.match(script, /studyGoal:\s*"neatMindStudyGoal"/);
   assert.match(script, /async function getStudyGoal\(\)[\s\S]*?normalizeStudyGoal\(stored\)/);
   assert.match(script, /async function saveStudyGoal\(goal\)[\s\S]*?setStorage\(STORAGE_KEYS\.studyGoal, normalized\)/);
   assert.match(script, /async function handleSaveStudyGoal\(event\)[\s\S]*?normalizeStudyGoal\(\{[\s\S]*?await saveStudyGoal\(normalized\)[\s\S]*?await renderDashboard\(\)[\s\S]*?showStatus\("Study goal saved\."\)/);
@@ -28,7 +28,7 @@ test("Dashboard persists one normalized local study goal", () => {
 
 test("Dashboard builds the goal-aware plan locally from one parallel read", () => {
   assert.match(script, /const \[journey, storedFocus, savedItems, studyGoal\] = await Promise\.all\(\[[\s\S]*?getJourney\(\)[\s\S]*?STORAGE_KEYS\.focusState[\s\S]*?STORAGE_KEYS\.sessions[\s\S]*?getStudyGoal\(\)/);
-  assert.match(script, /ExamCramJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds, studyGoal \}\)/);
+  assert.match(script, /NeatMindJourney\.buildStudyPlan\(journey, focusHistory, \{ now: Date\.now\(\), savedNoteIds, studyGoal \}\)/);
   const dashboardStart = script.indexOf("async function renderDashboard()");
   const dashboardEnd = script.indexOf("async function handleSaveStudyGoal", dashboardStart);
   assert.doesNotMatch(script.slice(dashboardStart, dashboardEnd), /\bfetch\s*\(|DEFAULT_API_ENDPOINT|generate/i);

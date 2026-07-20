@@ -7,7 +7,7 @@ const { PDFDocument } = require("pdf-lib");
 
 require("../export-utils.js");
 
-const api = globalThis.ExamCramExport;
+const api = globalThis.NeatMindExport;
 
 function studyItem(overrides = {}) {
   return {

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=1280, height=720"/>
+<script src="vendor/gsap.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:1280px; height:720px; overflow:hidden; background:#241811; }
+body { font-family:"Inter",-apple-system,"Segoe UI",Roboto,sans-serif; color:#f4ebd7; }
+.scene-bg { position:absolute; inset:0; }
+.kicker { position:absolute; font-size:20px; letter-spacing:4px; text-transform:uppercase; color:#d9a441; font-weight:700; }
+.cap { position:absolute; left:70px; bottom:56px; max-width:1140px; font-size:38px; font-weight:700; color:#f7efdd; line-height:1.25; text-shadow:0 3px 18px rgba(0,0,0,.5); }
+.cap.small { font-size:30px; }
+.center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+.card { background:#f4ebd7; border-radius:18px; box-shadow:0 22px 60px rgba(0,0,0,.5); color:#2c1e14; }
+.chip { position:absolute; border-radius:14px; box-shadow:0 12px 30px rgba(0,0,0,.45); }
+.wordmark { font-family:Georgia,"Times New Roman",serif; font-weight:700; color:#f7efdd; }
+.rust { color:#c56a4f; }
+.grn { color:#3f9d63; }
+img.shot { display:block; border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.55); border:1px solid rgba(0,0,0,.15); }
+.gate { position:absolute; border:3px solid #d9a441; border-radius:16px; color:#f7efdd; }
+.pill { position:absolute; border-radius:999px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.ring { position:absolute; border:5px solid #e0b24d; border-radius:14px; box-shadow:0 0 30px rgba(224,178,77,.6); }
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="s4" data-start="0" data-duration="12" data-width="1280" data-height="720" style="position:relative;width:1280px;height:720px;overflow:hidden;background:#241811;">
+<div id="s4-k" class="clip kicker" data-start="0" data-duration="12" data-track-index="1" style="left:70px;top:56px;">ANTI-HALLUCINATION · TWO GATES</div>
+<div id="s4-g1" class="clip gate" data-start="0" data-duration="12" data-track-index="1" style="position:absolute;left:360px;top:250px;width:200px;height:220px;"><div style="position:absolute;top:-42px;width:100%;text-align:center;font-size:22px;font-weight:700;color:#e7d9bd;">Lexical<br/>evidence</div></div>
+<div id="s4-g2" class="clip gate" data-start="0" data-duration="12" data-track-index="1" style="position:absolute;left:720px;top:250px;width:200px;height:220px;"><div style="position:absolute;top:-42px;width:100%;text-align:center;font-size:22px;font-weight:700;color:#e7d9bd;">Semantic<br/>verdict</div></div>
+<div id="s4-g1c" class="clip " data-start="2.0" data-duration="10" data-track-index="2" style="position:absolute;left:435px;top:335px;width:52px;height:52px;border-radius:50%;background:#3f9d63;color:#fff;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;">✓</div>
+<div id="s4-g2c" class="clip " data-start="3.4" data-duration="10" data-track-index="2" style="position:absolute;left:795px;top:335px;width:52px;height:52px;border-radius:50%;background:#3f9d63;color:#fff;display:flex;align-items:center;justify-content:center;font-size:34px;font-weight:800;">✓</div>
+<div id="s4-pass" class="clip " data-start="0.6" data-duration="4.6" data-track-index="3" style="position:absolute;left:120px;top:315px;width:150px;height:92px;background:#f4ebd7;color:#2c1e14;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px;box-shadow:0 12px 30px rgba(0,0,0,.4);">Answer A</div>
+<div id="s4-fail" class="clip " data-start="5.6" data-duration="6.4" data-track-index="3" style="position:absolute;left:120px;top:315px;width:150px;height:92px;background:#f4ebd7;color:#2c1e14;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:20px;box-shadow:0 12px 30px rgba(0,0,0,.4);">Answer B</div>
+<div id="s4-stamp" class="clip " data-start="8.4" data-duration="3.6" data-track-index="4" style="position:absolute;left:690px;top:300px;transform:rotate(-8deg);background:#9c3a2b;color:#fff;padding:10px 20px;border-radius:8px;font-weight:800;font-size:22px;">REJECTED · not grounded</div>
+<div id="s4-log" class="clip " data-start="0" data-duration="12" data-track-index="1" style="position:absolute;left:70px;bottom:120px;font-family:'JetBrains Mono',monospace;font-size:16px;color:#a98d68;">backend-error.log · "visual node not grounded → repaired from its cited source phrase"</div>
+<div id="s4-c1" class="clip cap" data-start="0.6" data-duration="7.0" data-track-index="4" style="">Two gates before any AI answer reaches you.</div>
+<div id="s4-c2" class="clip cap" data-start="7.8" data-duration="4.2" data-track-index="4" style="">Fail either check → <span class="rust">never shown.</span></div>
+</div>
+<script>
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({ paused:true });
+tl.from("#s4-k",{opacity:0,duration:.5},0);
+      tl.from("#s4-g1",{opacity:0,duration:.4},0.2);
+      tl.from("#s4-g2",{opacity:0,duration:.4},0.4);
+      tl.from("#s4-pass",{x:-160,opacity:0,duration:.8,ease:"power1.inOut"},0.6);
+      tl.to("#s4-pass",{x:840,duration:3.0,ease:"none"},1.4);
+      tl.from("#s4-g1c",{opacity:0,scale:.2,duration:.35},2.0);
+      tl.from("#s4-g2c",{opacity:0,scale:.2,duration:.35},3.4);
+      tl.to("#s4-pass",{opacity:0,duration:.3},4.9);
+      tl.from("#s4-fail",{x:-160,opacity:0,duration:.8,ease:"power1.inOut"},5.6);
+      tl.to("#s4-fail",{x:560,duration:2.2,ease:"none"},6.3);
+      tl.to("#s4-fail",{backgroundColor:"#e7b3a8",duration:.3},8.3);
+      tl.from("#s4-stamp",{opacity:0,scale:1.4,duration:.35},8.4);
+      tl.to("#s4-fail",{y:120,opacity:0,duration:.7},9.4);
+      tl.from("#s4-c1",{opacity:0,y:20,duration:.5},0.6);
+      tl.from("#s4-c2",{opacity:0,y:20,duration:.5},7.8);
+window.__timelines["s4"] = tl;
+</script>
+</body>
+</html>

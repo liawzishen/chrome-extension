@@ -1,29 +1,29 @@
-(function attachExamCramFocus(root, factory) {
+(function attachNeatMindFocus(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) {
     module.exports = api;
   }
-  root.ExamCramFocus = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createExamCramFocus() {
+  root.NeatMindFocus = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function createNeatMindFocus() {
   "use strict";
 
   const SCHEMA_VERSION = 1;
-  const STORAGE_KEY = "examCramFocusState";
-  const END_ALARM = "examCramFocus:end";
-  const BREAK_ALARM = "examCramFocus:break";
+  const STORAGE_KEY = "neatMindFocusState";
+  const END_ALARM = "neatMindFocus:end";
+  const BREAK_ALARM = "neatMindFocus:break";
   const BREAK_DURATION_MS = 5 * 60 * 1000;
   const MIN_DURATION_MINUTES = 1;
   const MAX_DURATION_MINUTES = 12 * 60;
   const MAX_RULES = 50;
   const MAX_PATH_LENGTH = 180;
   const MAX_HISTORY = 40;
-  const CHAPTER_STORAGE_KEY = "examCramChapterFocusState";
-  const CHAPTER_IDLE_ALARM = "examCramChapterFocus:idle";
+  const CHAPTER_STORAGE_KEY = "neatMindChapterFocusState";
+  const CHAPTER_IDLE_ALARM = "neatMindChapterFocus:idle";
   const CHAPTER_IDLE_TIMEOUT_MS = 90 * 1000;
   const MAX_CHAPTER_HISTORY = 500;
   const FOCUS_SESSION_TIME_LABEL = "Focus session time";
   const GLOBAL_OPTIONAL_HOST_PATTERN = "*://*/*";
-  const EXTENSION_RELOAD_REQUIRED_MESSAGE = "Reload Exam-Cram from chrome://extensions to activate updated permissions.";
+  const EXTENSION_RELOAD_REQUIRED_MESSAGE = "Reload NeatMind from chrome://extensions to activate updated permissions.";
   const DNR_RULE_ID_BASE = 840000;
   const DNR_RULE_ID_LIMIT = DNR_RULE_ID_BASE + MAX_RULES;
   const MESSAGE_TYPES = Object.freeze({

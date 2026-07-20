@@ -1,5 +1,5 @@
 import { mountLearningForest } from './journey-tree/forest.js';
 
-globalThis.ExamCramLearningForest = Object.freeze({
+globalThis.NeatMindLearningForest = Object.freeze({
   mount: mountLearningForest
 });

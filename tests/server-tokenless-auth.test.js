@@ -102,7 +102,7 @@ test("health is minimal and every response carries defensive no-store headers", 
   const body = await response.json();
 
   assert.equal(response.status, 200);
-  assert.deepEqual(body, { ok: true, service: "exam-cram-backend" });
+  assert.deepEqual(body, { ok: true, service: "neatmind-backend" });
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");

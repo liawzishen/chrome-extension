@@ -6,10 +6,12 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const excludedDirectories = new Set([
   ".git", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
 ]);
-const excludedFiles = new Set([".env", ".exam-cram-backend-token"]);
+const excludedFiles = new Set([".env", ".neatmind-backend-token"]);
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml"]);
+// Retained verbatim in the licensed, third-party GSAP distribution used by the demo reel.
+const allowedPublicEmails = new Set(["jack@greensock.com"]);
 const requiredIgnoreEntries = [
-  ".env", ".env.*", ".exam-cram-backend-token", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
+  ".env", ".env.*", ".neatmind-backend-token", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
 ];
 
 const candidates = [];
@@ -34,7 +36,7 @@ for (const filename of candidates) {
     if (pattern.test(content)) findings.push(`${displayName}: ${label}`);
   });
   const emails = content.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
-  emails.filter((email) => !/(?:example\.(?:com|org|net|test)|\.test|\.invalid|users\.noreply\.github\.com)$/i.test(email))
+  emails.filter((email) => !allowedPublicEmails.has(email.toLowerCase()) && !/(?:example\.(?:com|org|net|test)|\.test|\.invalid|users\.noreply\.github\.com)$/i.test(email))
     .forEach(() => findings.push(`${displayName}: possible personal email address`));
   localSecrets.forEach(({ name, value }) => {
     if (content.includes(value)) findings.push(`${displayName}: matches local secret ${name}`);
@@ -81,7 +83,7 @@ async function loadLocalSecrets() {
       secrets.push({ name: match[1], value });
     }
   });
-  const backendToken = (await readFile(resolve(projectRoot, ".exam-cram-backend-token"), "utf8").catch(() => "")).trim();
+  const backendToken = (await readFile(resolve(projectRoot, ".neatmind-backend-token"), "utf8").catch(() => "")).trim();
   if (backendToken.length >= 12) secrets.push({ name: "BACKEND_ACCESS_TOKEN_FILE", value: backendToken });
   return secrets;
 }

@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Exam-Cram tab capture harness</title>
+    <title>NeatMind tab capture harness</title>
     <style>
       body { max-width: 720px; margin: 64px auto; padding: 0 24px; font: 16px/1.55 system-ui, sans-serif; }
       button { min-height: 44px; padding: 0 18px; }
@@ -17,7 +17,7 @@
     <video id="captureVideo" controls poster="/tests/fixtures/capture-harness-poster.png"></video>
     <script>
       document.getElementById("startTone").addEventListener("click", async () => {
-        if (window.__examCramHarnessAudio) return;
+        if (window.__neatMindHarnessAudio) return;
         const context = new AudioContext();
         const oscillator = context.createOscillator();
         const gain = context.createGain();
@@ -26,7 +26,7 @@
         oscillator.connect(gain).connect(context.destination);
         oscillator.start();
         await context.resume();
-        window.__examCramHarnessAudio = { context, oscillator, gain };
+        window.__neatMindHarnessAudio = { context, oscillator, gain };
         document.getElementById("startTone").textContent = "Test tone playing";
       });
     </script>

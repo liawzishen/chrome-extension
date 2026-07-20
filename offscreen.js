@@ -1,7 +1,7 @@
 (function initVideoOffscreen(root) {
   "use strict";
 
-  const Video = root.ExamCramVideo;
+  const Video = root.NeatMindVideo;
   if (!Video) throw new Error("video-utils.js must load before offscreen.js");
 
   const Types = Video.MESSAGE_TYPES;

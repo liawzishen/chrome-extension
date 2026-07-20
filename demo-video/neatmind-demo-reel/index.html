@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, height=720" />
+    <style>
+      * { margin:0; padding:0; box-sizing:border-box; }
+      html, body { width:1280px; height:720px; overflow:hidden; background:#241811; }
+    </style>
+  </head>
+  <body>
+    <!-- Full NeatMind demo reel: 8 scenes sequenced end to end (82s @ 1280x720).
+         Each scene is a standalone composition; edit any sN.html independently.
+         Render the whole reel with:  npm run render  (or: npx hyperframes render) -->
+    <div id="root" data-composition-id="main" data-start="0" data-duration="82"
+         data-width="1280" data-height="720"
+         style="position:relative;width:1280px;height:720px;overflow:hidden;background:#241811;">
+      <div class="clip" data-composition-id="e1" data-composition-src="s1.html" data-start="0"  data-duration="9"  data-track-index="0"></div>
+      <div class="clip" data-composition-id="e2" data-composition-src="s2.html" data-start="9"  data-duration="8"  data-track-index="0"></div>
+      <div class="clip" data-composition-id="e3" data-composition-src="s3.html" data-start="17" data-duration="15" data-track-index="0"></div>
+      <div class="clip" data-composition-id="e4" data-composition-src="s4.html" data-start="32" data-duration="12" data-track-index="0"></div>
+      <div class="clip" data-composition-id="e5" data-composition-src="s5.html" data-start="44" data-duration="9"  data-track-index="0"></div>
+      <div class="clip" data-composition-id="e6" data-composition-src="s6.html" data-start="53" data-duration="12" data-track-index="0"></div>
+      <div class="clip" data-composition-id="e7" data-composition-src="s7.html" data-start="65" data-duration="9"  data-track-index="0"></div>
+      <div class="clip" data-composition-id="e8" data-composition-src="s8.html" data-start="74" data-duration="8"  data-track-index="0"></div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["main"] = gsap.timeline({ paused: true });
+    </script>
+    <script src="vendor/gsap.min.js"></script>
+  </body>
+</html>

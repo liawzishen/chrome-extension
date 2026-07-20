@@ -182,6 +182,6 @@ test("cheat-sheet and review actions share the evidence dispatcher", () => {
   assert.match(cheatSheet, /openEvidenceAtSource/);
   assert.match(cheatSheet, /Open and highlight source/);
   assert.match(score, /openEvidenceAtSource/);
-  assert.match(highlighter, /CSS\.highlights\.set\("exam-cram-evidence"/);
+  assert.match(highlighter, /CSS\.highlights\.set\("neatmind-evidence"/);
   assert.match(highlighter, /window\.find\(candidate/);
 });

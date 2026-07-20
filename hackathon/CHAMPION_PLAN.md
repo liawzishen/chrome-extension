@@ -1,7 +1,7 @@
 # Champion Plan — OpenAI Build Week (Education track)
 
 > Written 2026-07-18. Submission deadline: **2026-07-21 17:00 PDT** (2026-07-22 08:00 MYT) — about 3 days remaining.
-> This plan maps the properties of winning Devpost/GitHub hackathon projects onto Exam-Cram, organized by the three judging criteria in play: **Design**, **Potential Impact**, and **Quality of the Idea**.
+> This plan maps the properties of winning Devpost/GitHub hackathon projects onto NeatMind, organized by the three judging criteria in play: **Design**, **Potential Impact**, and **Quality of the Idea**.
 
 ## What champion projects have in common
 
@@ -13,7 +13,7 @@ From Devpost's own judging guidance and judge interviews, winning submissions co
 4. **A judge can run the project in minutes.** Low-friction setup and a scripted happy path.
 5. **The README makes a credible, specific problem case** with a defined audience, and shows care and enthusiasm (polish signals effort).
 
-Exam-Cram now has a clean-machine judge path (`npm ci`, `npm run preview`, zero API key), a deterministic 60-second math demo, lexical-plus-semantic quiz grounding, adaptive Journey review scheduling, and documented Codex collaboration. The remaining submission work is external publication logistics: video, Devpost URL, and usage-rights confirmation.
+NeatMind now has a clean-machine judge path (`npm ci`, `npm run preview`, zero API key), a deterministic 60-second math demo, lexical-plus-semantic quiz grounding, adaptive Journey review scheduling, and documented Codex collaboration. The remaining submission work is external publication logistics: video, Devpost URL, and usage-rights confirmation.
 
 ## Criterion 1 — Design (complete, coherent product experience)
 
@@ -32,7 +32,7 @@ Exam-Cram now has a clean-machine judge path (`npm ci`, `npm run preview`, zero 
 **Judge question:** does it solve a real problem for a real audience, and does the demo actually address that problem?
 
 **Actions:**
-- **B1. Lead with the specific problem, not the category.** Frame: students study from scattered pages, PDFs, and videos; generic AI summaries are unverifiable, so students either re-verify everything or trust silently wrong material. Exam-Cram's evidence-linked loop is the direct answer: evidence-linked artifacts expose their supporting source excerpt, and backend quiz answers must pass lexical-plus-semantic checks before acceptance.
+- **B1. Lead with the specific problem, not the category.** Frame: students study from scattered pages, PDFs, and videos; generic AI summaries are unverifiable, so students either re-verify everything or trust silently wrong material. NeatMind's evidence-linked loop is the direct answer: evidence-linked artifacts expose their supporting source excerpt, and backend quiz answers must pass lexical-plus-semantic checks before acceptance.
 - **B2. Make the audience concrete.** "Students in any subject" is broad; anchor it with one vivid persona in the description and video (e.g., a student revising linear equations from their own saved source) and then state it generalizes because it is source-led, not content-library-led.
 - **B3. Demonstrate the problem→solution link on screen.** In the video, show a grounding repair or the "Report unsupported claim" control and say why it exists: this is the anti-hallucination mechanism judges can *see* working, which is what "the solution actually addresses the problem based on what's demonstrated" asks for.
 - **B4. Use the pilot-metrics plan as forward credibility.** The existing 5–10 student pilot design (time to first completed loop, citation trust rating, 7-day return) shows impact is measurable, not aspirational. Put it as the closing line of the Devpost description.
@@ -42,7 +42,7 @@ Exam-Cram now has a clean-machine judge path (`npm ci`, `npm run preview`, zero 
 **Judge question:** how novel is it versus existing concepts?
 
 **Actions:**
-- **C1. Name the differentiator explicitly: evidence-grounded study, not AI summarization.** Position against the obvious comparables (ChatGPT summaries, Quizlet, generic "chat with PDF" tools): those generate *plausible* study material; Exam-Cram keeps evidence-linked concepts and cheat-sheet rows tied to saved sources, while backend quiz answers must pass lexical and provider semantic verification before they are accepted.
+- **C1. Name the differentiator explicitly: evidence-grounded study, not AI summarization.** Position against the obvious comparables (ChatGPT summaries, Quizlet, generic "chat with PDF" tools): those generate *plausible* study material; NeatMind keeps evidence-linked concepts and cheat-sheet rows tied to saved sources, while backend quiz answers must pass lexical and provider semantic verification before they are accepted.
 - **C2. Highlight the evidence-to-mastery loop as the novel unit.** The idea is not any single feature but the closed loop: source → validated visual note → source-checked quiz → recorded mastery → visible next step. Use the existing mermaid architecture diagram in the Devpost description.
 - **C3. Include the grounding-repair log as proof of novelty.** The sanitized `backend-error.log` entries ("AI visual node example is not grounded in the saved source → repaired from its cited source phrase") are rare, concrete evidence that the validation layer is real. A short screenshot or quote in the description differentiates from projects that merely claim grounding.
 

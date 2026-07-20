@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=1280, height=720"/>
+<script src="vendor/gsap.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+html,body { width:1280px; height:720px; overflow:hidden; background:#241811; }
+body { font-family:"Inter",-apple-system,"Segoe UI",Roboto,sans-serif; color:#f4ebd7; }
+.scene-bg { position:absolute; inset:0; }
+.kicker { position:absolute; font-size:20px; letter-spacing:4px; text-transform:uppercase; color:#d9a441; font-weight:700; }
+.cap { position:absolute; left:70px; bottom:56px; max-width:1140px; font-size:38px; font-weight:700; color:#f7efdd; line-height:1.25; text-shadow:0 3px 18px rgba(0,0,0,.5); }
+.cap.small { font-size:30px; }
+.center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); }
+.card { background:#f4ebd7; border-radius:18px; box-shadow:0 22px 60px rgba(0,0,0,.5); color:#2c1e14; }
+.chip { position:absolute; border-radius:14px; box-shadow:0 12px 30px rgba(0,0,0,.45); }
+.wordmark { font-family:Georgia,"Times New Roman",serif; font-weight:700; color:#f7efdd; }
+.rust { color:#c56a4f; }
+.grn { color:#3f9d63; }
+img.shot { display:block; border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.55); border:1px solid rgba(0,0,0,.15); }
+.gate { position:absolute; border:3px solid #d9a441; border-radius:16px; color:#f7efdd; }
+.pill { position:absolute; border-radius:999px; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.ring { position:absolute; border:5px solid #e0b24d; border-radius:14px; box-shadow:0 0 30px rgba(224,178,77,.6); }
+</style>
+</head>
+<body>
+<div id="root" data-composition-id="s8" data-start="0" data-duration="8" data-width="1280" data-height="720" style="position:relative;width:1280px;height:720px;overflow:hidden;background:#241811;">
+<div id="s8-mark" class="clip center wordmark" data-start="0.3" data-duration="7.7" data-track-index="1" style="top:34%;font-size:96px;">NeatMind</div>
+<div id="s8-tag" class="clip center" data-start="1.6" data-duration="6.4" data-track-index="1" style="top:50%;font-size:36px;color:#e7d9bd;font-weight:600;text-align:center;width:1100px;">Study you can trust — and come back to.</div>
+<div id="s8-track" class="clip center" data-start="3.0" data-duration="5.0" data-track-index="1" style="top:62%;font-size:26px;color:#d9a441;font-weight:700;text-align:center;width:1100px;">OpenAI Build Week · Education track</div>
+<div id="s8-repo" class="clip center" data-start="3.6" data-duration="4.4" data-track-index="1" style="top:72%;font-family:'JetBrains Mono',monospace;font-size:18px;color:#a98d68;text-align:center;width:1160px;">github.com/liawzishen/chrome-extension · Codex 019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f</div>
+</div>
+<script>
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({ paused:true });
+tl.from("#s8-mark",{opacity:0,scale:.85,duration:.7},0.3);
+      tl.from("#s8-tag",{opacity:0,y:18,duration:.6},1.6);
+      tl.from("#s8-track",{opacity:0,duration:.6},3.0);
+      tl.from("#s8-repo",{opacity:0,duration:.6},3.6);
+window.__timelines["s8"] = tl;
+</script>
+</body>
+</html>

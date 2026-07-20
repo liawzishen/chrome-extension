@@ -1,10 +1,10 @@
-# Exam-Cram Devpost submission handoff
+# NeatMind Devpost submission handoff
 
 ## Ready-to-paste Devpost description
 
 Students preparing for an exam often switch between scattered pages, PDFs, lecture videos, and personal notes. A generic AI summary can sound useful while being hard to verify, so the learner either rechecks everything or trusts an answer they cannot trace.
 
-Exam-Cram is built for a student such as Aina, a first-year learner revising linear equations from a class page before a quiz. She saves the source she is already using, explores a visual note whose concepts expose quoted evidence, completes source-checked practice, and sees the result in a persistent Journey chapter. The same source-led loop works for pages, PDFs, videos, and notes rather than relying on a subject-specific content library.
+NeatMind is built for a student such as Aina, a first-year learner revising linear equations from a class page before a quiz. She saves the source she is already using, explores a visual note whose concepts expose quoted evidence, completes source-checked practice, and sees the result in a persistent Journey chapter. The same source-led loop works for pages, PDFs, videos, and notes rather than relying on a subject-specific content library.
 
 Trust is the product feature: lexical evidence checks run for every quiz, and backend-generated quizzes also require a separate provider-backed semantic verdict for every answer against its quoted evidence before the client accepts them. The zero-key mathematics demo is deterministic and uses curated, extractive evidence so a judge can inspect the full loop without a provider key. Weak concepts can surface opt-in external study suggestions, but that external lane is visibly labelled and kept separate from evidence-linked material until the learner explicitly saves an opened page as a chapter source.
 

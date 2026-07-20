@@ -1,4 +1,4 @@
-const EXPORT_STORAGE_PREFIX = "examCramExportPayload";
+const EXPORT_STORAGE_PREFIX = "neatMindExportPayload";
 
 const elements = {
   document: document.getElementById("exportDocument"),
@@ -18,12 +18,12 @@ let storageKey = "";
 initExport();
 
 async function initExport() {
-  const api = globalThis.ExamCramExport;
+  const api = globalThis.NeatMindExport;
   const exportId = new URLSearchParams(location.search).get("exportId") || "";
   const payload = await readExportPayload(exportId);
   const rawModel = payload?.exportModel || payload?.model || payload?.item;
   if (!api || !rawModel || payload?.exportId !== exportId || !api.isExportPayloadFresh(payload)) {
-    showEmpty("No export is ready. Return to Exam-Cram, open a visual note, and choose Export.");
+    showEmpty("No export is ready. Return to NeatMind, open a visual note, and choose Export.");
     return;
   }
 
@@ -31,7 +31,7 @@ async function initExport() {
   storageKey = `${EXPORT_STORAGE_PREFIX}:${exportId}`;
   exportModel = api.createExportModel(rawModel);
   selections = api.sanitizeSelections(payload.selections, exportModel);
-  document.title = `${exportModel.title} — Exam-Cram Export`;
+  document.title = `${exportModel.title} — NeatMind Export`;
   renderOptions();
   renderPreview();
   elements.options.addEventListener("change", handleSelectionChange);
@@ -40,7 +40,7 @@ async function initExport() {
 }
 
 function renderOptions() {
-  const api = globalThis.ExamCramExport;
+  const api = globalThis.NeatMindExport;
   const availability = api.getAvailability(exportModel);
   const filenameBase = api.buildFilename(exportModel, "docx").replace(/\.docx$/i, "");
   elements.filename.textContent = `${filenameBase}.docx / .pdf`;
@@ -61,7 +61,7 @@ function renderOptions() {
 }
 
 function renderPreview() {
-  elements.document.innerHTML = globalThis.ExamCramExport.buildExportBody(exportModel, selections);
+  elements.document.innerHTML = globalThis.NeatMindExport.buildExportBody(exportModel, selections);
   const hasSelection = Object.values(selections).some(Boolean);
   elements.docxButton.disabled = !hasSelection;
   elements.pdfButton.disabled = !hasSelection;
@@ -71,13 +71,13 @@ function renderPreview() {
 
 function handleSelectionChange(event) {
   if (!(event.target instanceof HTMLInputElement)) return;
-  selections = globalThis.ExamCramExport.sanitizeSelections({ ...selections, [event.target.value]: event.target.checked }, exportModel);
+  selections = globalThis.NeatMindExport.sanitizeSelections({ ...selections, [event.target.value]: event.target.checked }, exportModel);
   renderPreview();
   persistSelections().catch(() => {});
 }
 
 async function download(format) {
-  const api = globalThis.ExamCramExport;
+  const api = globalThis.NeatMindExport;
   const button = format === "docx" ? elements.docxButton : elements.pdfButton;
   const other = format === "docx" ? elements.pdfButton : elements.docxButton;
   const original = button.textContent;
