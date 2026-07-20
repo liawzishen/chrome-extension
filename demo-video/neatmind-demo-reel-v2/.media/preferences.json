@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "preferences": {
+    "destination": {
+      "value": "youtube",
+      "confirmed_in": [
+        "neatmind-demo-reel-v2"
+      ],
+      "updated_at": "2026-07-20T15:25:40.876Z"
+    },
+    "aspect": {
+      "value": "1920x1080",
+      "confirmed_in": [
+        "neatmind-demo-reel-v2"
+      ],
+      "updated_at": "2026-07-20T15:25:40.972Z"
+    },
+    "language": {
+      "value": "en",
+      "confirmed_in": [
+        "neatmind-demo-reel-v2"
+      ],
+      "updated_at": "2026-07-20T15:25:41.085Z"
+    },
+    "flow": {
+      "value": "companion",
+      "confirmed_in": [
+        "neatmind-demo-reel-v2"
+      ],
+      "updated_at": "2026-07-20T15:25:41.180Z"
+    },
+    "storyboard": {
+      "value": "yes",
+      "confirmed_in": [
+        "neatmind-demo-reel-v2"
+      ],
+      "updated_at": "2026-07-20T15:25:41.292Z"
+    }
+  },
+  "sightings": {}
+}

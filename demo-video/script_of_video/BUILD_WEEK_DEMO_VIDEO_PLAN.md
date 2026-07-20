@@ -2,6 +2,8 @@
 
 > **Status:** Planning and scriptwriting only. No video implementation, rendering, generated animation, application changes, or new feature code are included in this document. This revision was verified against the repository at commit `f345792`.
 >
+> **Reconciliation note (this revision):** in parallel with this document, Codex independently built a 12-scene Remotion pipeline (`demo-video/neatmind-remotion/`) and produced a rendered `out/NeatMind_Build_Week_Demo.mp4`, along with its own uncommitted rewrite of this file. This revision **reconciles the two**: it adopts Codex's fuller 12-scene structure (it already covers the Learning Forest and adaptive-planning beats this document's earlier 11-scene version only partially addressed), corrects several claims that went beyond verified repository behavior, fixes recurring wording issues ("Codex GPT-5.6" as one name; "irrelevant Java content" as the memorable hook), and folds in this document's own guardrails (no-pure-black, study-goal accuracy limits, session-ID redaction) that Codex's version didn't carry. See `../RECONCILIATION_NOTES.md` for the itemized, scene-by-scene fix list against the actual Remotion source — this document is the claims/evidence authority; that file is the implementation fix list for files this session cannot edit directly (they live in the main checkout, not this worktree).
+>
 > **Target:** 150 seconds, 1920 × 1080, 16:9, 30 FPS. Absolute submission maximum: 180 seconds.
 >
 > **Audience:** OpenAI Build Week judges.
@@ -55,6 +57,21 @@ NeatMind is a Chrome Manifest V3 study companion. A learner deliberately selects
 8. Return to **Dashboard**, set a **Study Goal** (focus chapters, target date, daily study time), and show the **Until target** countdown and the generated **Today's Plan** next action.
 
 > Production note: steps 6–8 need at least one real Journey chapter to exist so the goal form can select focus chapters and the plan can show a concrete recovery step. A fresh install shows "All Journey chapters" and an onboarding step, which is a weaker demo. Capture the goal segment on a profile that already has the demo chapter and one submitted quiz.
+
+### Adaptive planning — corrected to verified behavior only
+
+Codex's draft described NeatMind as adjusting six dimensions of the learner's plan. Checked against `journey-utils.js`, only some of these are real:
+
+| Codex's draft claim | Verified? | Repository evidence |
+| --- | --- | --- |
+| Which concepts to review next | **Yes** | `getDueConcepts` ranks by weak state, effective strength, and overdue `nextReviewAt` |
+| Urgency/timing of future reviews | **Yes** | SM-2-lite scheduling: `intervalDays`/`easeFactor` shrink or grow per concept based on right/wrong history |
+| Suggested session length | **Partial** | Step count (`goalMaxSteps`) scales with the goal's `dailyMinutes` or, with no goal, the learner's typical Focus session length (`habit.typicalSessionMinutes`) — this is a declared-setting/habit lookup, not the system detecting "you seem tired today" |
+| Difficulty and type of practice | **No** | Quiz difficulty is a manual setting at generation time (`server.js` difficulty modes); no code adjusts it based on learner state |
+| Balance of explanation vs. active recall vs. revision | **No** | No such balancing logic exists |
+| Most appropriate "study mode" | **No** | No "study mode" concept exists anywhere in the codebase |
+
+**Video-safe framing:** "NeatMind tracks which concepts are due or weak, brings them back sooner or later based on how you did last time, and sizes today's plan to your goal or your usual session length." Do not claim it adjusts practice difficulty/type, balances teaching styles, or picks a "mode" — none of that is implemented. "Confidence" is also not a tracked signal; do not list it as an input.
 
 ### Technical architecture
 
@@ -121,6 +138,8 @@ Line numbers are indicative for commit `f345792`; the file and named symbol are 
 | Report an unsupported claim without changing the source | `popup.js:7753` (`"Report unsupported claim"`), `popup.js:7801` | `f345792` | Confirmed | Use |
 | Source-bound quiz with semantic grounding check | `server.js:747`, `server.js:689` (`verifyQuizAnswersSemantically`) | `f345792` | Confirmed | Use |
 | Per-concept review scheduling (SM-2-lite) | `journey-utils.js:1646` (`getDueConcepts`), `journey-utils.js:1528` (`nextReviewAt`/`intervalDays`) | `f345792` | Confirmed | Use, plain language |
+| Plan step count scales with goal/habit session length | `journey-utils.js:1927` (`goalMaxSteps`/`maxSteps`), `journey-utils.js` `buildHabitProfile` | `f345792` | Confirmed | Use, qualified — a settings/habit lookup, not live behavior sensing |
+| Adaptive difficulty/practice-type selection, explanation/recall/revision balancing, or a "study mode" | Not found in `journey-utils.js`, `popup.js`, or `server.js` | `f345792` | Unconfirmed | Do not use — corrects Codex's draft "Adaptive Learning" section |
 | Local Journey storage | `background.js:307` (`chrome.storage.local`) | `f345792` | Confirmed | Use |
 | Learner-defined study goal (label, target date, focus chapters, days/week, daily minutes) | `popup.html:95` (`#dashboardGoalForm`), `journey-utils.js:50` (`normalizeStudyGoal`), `popup.js:10098` (`handleSaveStudyGoal`) | `f345792` | Confirmed | Use |
 | Goal-aware study plan and next action | `journey-utils.js:1862` (`buildStudyPlan`), `popup.js:10252` (`today-plan`) | `f345792` | Confirmed | Use |
@@ -251,58 +270,73 @@ Real product on screen
 
 ## 8. Timed Storyboard
 
-Section layout follows the product-first structure. Total 150 seconds.
+**Reconciled with Codex's 12-scene structure** (adds a dedicated Learning Forest beat and splits the Codex/GPT-5.6 story across two scenes for more breathing room). Total 150 seconds. The full prose beat sheet as Codex wrote it — screen directions, card copy, etc. — lives in the diff at `demo-video/script_of_video/` history; the table below is this document's authoritative, claim-checked version. Scene-by-scene fixes needed in the actual Remotion source are itemized in `../RECONCILIATION_NOTES.md`.
 
 | Section | Timing |
 | --- | ---: |
-| Product-first hook | 0:00–0:07 |
-| User problem | 0:07–0:17 |
-| Product explanation | 0:17–0:27 |
-| Main working demonstration | 0:27–1:27 |
-| Security and data | 1:27–1:43 |
-| Codex and GPT-5.6 collaboration | 1:43–2:10 |
-| Impact and recap | 2:10–2:23 |
-| Closing and end-card hold | 2:23–2:30 |
+| Hook | 0:00–0:07 |
+| Introduce NeatMind | 0:07–0:17 |
+| Zero-setup demo | 0:17–0:28 |
+| Evidence-checked learning | 0:28–0:43 |
+| Inspect/challenge evidence | 0:43–0:56 |
+| Quiz → Journey | 0:56–1:13 |
+| Learning Forest | 1:13–1:21 |
+| Study Goal & Today's Plan | 1:21–1:36 |
+| Trust in three ideas | 1:36–1:48 |
+| Codex collaboration | 1:48–2:09 |
+| GPT-5.6 contribution | 2:09–2:20 |
+| Closing | 2:20–2:30 |
 
 | # | Time | Section | Objective | Voice-over | Screen / action | On-screen text | Motion | Evidence |
 | ---: | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 00:00–00:07 | Product-first hook | Show the real product immediately | "This is NeatMind — a study companion that keeps every lesson tied to its source." | Live side panel: an evidence-linked lesson with a visible source chip. | `NeatMind` | Gentle push-in on real UI. | `README.md:1`, `popup.js:3480` |
-| 2 | 00:07–00:17 | User problem | Name the problem over real UI | "Before an exam, students jump between tabs, PDFs, videos, and notes — and fast summaries are hard to trust." | Real tabs/PDF/video/note thumbnails framing the panel. | `Scattered · hard to trust` | Soft parallax; no full-screen abstract. | `README.md:1` |
-| 3 | 00:17–00:27 | Product explanation | State what NeatMind does | "NeatMind turns a source you choose into an evidence-linked lesson, active recall, and a next study step." | Four-stage loop resolving into the app header. | `Source → Evidence → Practice → Next step` | Sequential reveal over live UI. | `README.md:1` |
-| 4 | 00:27–00:41 | Main demo | Prove zero-setup evidence | "Here's the zero-setup demo — no account, site access, or provider key. I open a short linear-equations note; it names its source and marks each claim evidence checked." | Dashboard → Create → Paste Notes → math demo; source banner. | `Evidence checked` | Cursor taps; 105% zoom on banner. | `README.md:21`, `popup.js:3480` |
-| 5 | 00:41–00:53 | Main demo | Show inspectable, challengeable evidence | "Open 'Subtract 3' — the explanation sits beside the exact supporting sentence. If something looks wrong, report it without changing the source." | Concept panel, quote, and report control. | `Exact supporting sentence` | Rack focus concept → quote. | `popup.js:7753`, `popup.js:7801` |
-| 6 | 00:53–01:05 | Main demo | Turn recall into durable progress | "Now a source-bound question, tied to the saved note and its fingerprint. Answering records real progress — saved to your Journey." | Select `x = 6` → submit → Journey card updates. | `Saved to Journey` | Match cut quiz chip → Journey card. | `server.js:747`, `background.js:307` |
-| 7 | 01:05–01:27 | Main demo | Show learner-defined goal and next action | "On the Dashboard, I turn that into a goal — focus chapters, a target date, a daily study time. NeatMind counts down the days left and builds today's plan: a recovery quiz on my weakest concept, and the next step to take." | Dashboard goal form fills in; **Until target** stat; **Today's Plan** step with a **Go** action. | `Study goal → Today's Plan` | Calm form fill; highlight the top plan step. | `popup.html:95`, `journey-utils.js:1862`, `popup.js:10252` |
-| 8 | 01:27–01:43 | Security & data | Explain trust in three ideas | "A word on trust. NeatMind asks for site access only when you choose to study. Progress stays in Chrome's local storage. Optional AI runs through a protected backend that limits each request." | Permission banner; data-flow diagram with five small labels. | `Origin check · Validation · Safe errors` | Solid local lines; dotted optional path. | `README.md:426`, `background.js:307` |
-| 9 | 01:43–02:10 | Codex & GPT-5.6 | Human-led collaboration | "I led the product — the problem and the grounding standard. When quiz generation returned too few questions and some off-source content, I asked Codex, using GPT-5.6, to trace the whole path — UI, prompts, and validation. It proposed focused fixes; I reviewed them, and that grounding is what you just saw. GPT-5.6 worked through Codex in development, not as the runtime model." | Sanitized defect card → Codex trace → grounding/test card → human review → match cut to demo. | `Requirement → Trace → Fix → Reviewed` | Causal timeline; match cut to product. | `feedback/2026-07-15-fix-quiz-generation-grounding.md`, `hackathon/CODEX_COLLABORATION.md:5` |
-| 10 | 02:10–02:23 | Impact & recap | Land the value | "NeatMind makes your study material inspectable, reusable, and something you can act on — with a plan that comes from your own evidence." | Quick recap montage: evidence, Journey, Today's Plan. | `Inspect · Practice · Plan` | Slow, steady holds on each. | `README.md:1`, `journey-utils.js:1862` |
-| 11 | 02:23–02:30 | Closing & hold | End memorably, then hold silent | "NeatMind — study you can inspect, practice, and keep." *(then silence)* | App header/wordmark over a blurred Journey; ≥3 s music-only hold. | `NeatMind` | Deliberate line, then still hold; fade. | `README.md:1` |
+| 1 | 00:00–00:07 | Hook | Show the real product immediately | "Before an exam, students jump between tabs, PDFs, videos, and scattered notes." | Live side panel: an evidence-linked lesson already visible. | `NeatMind` | Gentle push-in on real UI. | `README.md:1`, `popup.js:3480` |
+| 2 | 00:07–00:17 | Introduce NeatMind | State what NeatMind does | "NeatMind turns learner-selected material into evidence-linked lessons, active-recall practice, and a study journey that continues adapting as the learner progresses." | Four-stage loop (Source→Evidence→Practice→Journey) resolving into the app header. | `Source → Evidence → Practice → Journey` | Sequential reveal over live UI. | `README.md:1` |
+| 3 | 00:17–00:28 | Zero-setup demo | Prove easy judge entry | "Here's the zero-setup demo — a note from a short linear-equations source. It needs no account, site-access approval, or provider key." | Dashboard → Create → Paste Notes → math demo. | `Zero-setup judge demo` | Cursor taps; controlled crop. | `README.md:21` |
+| 4 | 00:28–00:43 | Evidence-checked learning | Show visible evidence status | "The lesson identifies its source and marks the generated concepts as evidence checked. Instead of asking the learner to trust a summary blindly, NeatMind keeps the supporting material visible." | Evidence-checked banner; zoom to the Subtract 3 concept. | `Evidence checked` | Highlight sweep; slow zoom banner→concept. | `popup.js:3480` |
+| 5 | 00:43–00:56 | Inspect/challenge evidence | Show inspectable, challengeable evidence | "Open 'Subtract 3,' and the explanation appears beside the exact supporting sentence. If something is unsupported, the learner can report the claim without changing the original source." | Concept panel, quote, and report control. | `Exact supporting evidence` | Drawn evidence line; rack focus concept→quote. | `popup.js:7753`, `popup.js:7801` |
+| 6 | 00:56–01:13 | Quiz → Journey | Turn recall into durable progress | "Next, the learner completes a source-bound question. Choosing x equals six and submitting the answer records progress beyond a disposable chat. Journey keeps the chapter, source, result, and next action together." | Select `x = 6` → submit → Journey card updates. | `Saved to Journey` | Match cut quiz chip → Journey card. | `server.js:747`, `background.js:307` |
+| 7 | 01:13–01:21 | Learning Forest | Memorable long-term-progress visual | "Progress becomes visible in the Learning Forest — each chapter grows as it develops." | Seed→seedling→tree; cursor clicks a tree; compact stage/notes/practice panel. | `Learning Forest` | Ambient leaf motion; one controlled growth animation. | `journey-utils.js` growth-stage thresholds, `journey-utils.js:1699` `getChapterStatus` |
+| 8 | 01:21–01:36 | Study Goal & Today's Plan | Show learner-defined goal and next action | "On the Dashboard, I set a goal — focus chapters, a target date, a daily time. NeatMind counts down and builds today's plan: the next step, ready to go." | Dashboard goal form fills in; **Until target** stat; **Today's Plan** step with a **Go** action. | `Study goal → Today's Plan` | Calm form fill; highlight the top plan step. | `popup.html:95`, `journey-utils.js:1862`, `popup.js:10252` |
+| 9 | 01:36–01:48 | Trust in three ideas | Explain security/data simply | "NeatMind asks for site access only when you choose. Progress stays in local storage. Optional AI runs through a protected, limited backend." | Permission banner; data-flow diagram with five small labels. | `Origin check · Validation · Safe errors` | Solid local lines; dotted optional path. | `README.md:426`, `background.js:307` |
+| 10 | 01:48–02:09 | Codex collaboration | Human-led collaboration, professional framing | "I led the product — the problem and the grounding standard. When quiz generation returned the wrong number of questions and included off-source content, I asked Codex, using GPT-5.6, to trace the whole path. It proposed focused fixes, and I reviewed the result." | Human defect card → Codex trace card (UI→prompt→parser→validation) → test/grounding card → human review card. | `Requirement → Trace → Fix → Reviewed` | Causal timeline; match cut toward the demo. | `feedback/2026-07-15-fix-quiz-generation-grounding.md`, `hackathon/CODEX_COLLABORATION.md:5` |
+| 11 | 02:09–02:20 | GPT-5.6 contribution | Explain GPT-5.6 accurately | "Through Codex, GPT-5.6 traced the interface, the prompt, and validation, and helped verify the fix — an engineering collaborator, not this demo's runtime model." | Collaboration loop behind a clean product shot. | `GPT-5.6 through Codex` | Slow pullback. | `hackathon/CODEX_COLLABORATION.md:5` |
+| 12 | 02:20–02:30 | Closing | End memorably, then hold silent | "Evidence you can inspect. Practice you can keep. A journey that grows with you." *(then silence)* | App header/wordmark over a blurred Learning Forest; ≥3 s music-only hold. | `NeatMind` | Deliberate line, then still hold; fade. | `README.md:1` |
+
+### Fixes applied vs. Codex's draft (do not reintroduce)
+
+- **Scene 3 wording:** Codex's "no account, provider key, or extension permission" reopened the ambiguity Section 4F already closed. Fixed to "no account, site-access approval, or provider key," scoped to *this built-in demo*.
+- **Scene 8 content:** Codex's draft invented a stylized "Practice level: Standard → Guided recall" text card and a literal "Next review: Friday" — neither exists in the product (no "practice level" field; due dates are relative, not named weekdays). Replaced with the real, verified Dashboard Study Goal + Today's Plan UI (already planned and evidence-cited in this document).
+- **Scene 10 wording:** "Codex GPT-5.6" (as one name) and "irrelevant Java content" (as the memorable hook) both reappeared in Codex's draft after this document had already corrected them once (Section 6D). Fixed back to "Codex, using GPT-5.6," and a professional wrong-count/off-source-content framing.
+- **Scene 11 wording:** same "Codex GPT-5.6" fix applied to the collaboration-loop label and narration.
+- **No-pure-black rule (Section 10) and the study-goal accuracy guardrails (Section 4, "do NOT overclaim")** are not mentioned anywhere in Codex's draft; both carry forward unchanged and apply to every scene above, especially 7 and 8.
 
 ## 9. Continuous Voice-Over Script
 
-Approximately 281 words. Deliver at ~135 words per minute with the pauses noted below. Bracketed cues are visual-only holds, not spoken.
+281 words across 12 scenes (reconciled with Codex's structure). Deliver at ~133 WPM overall with the pauses noted below. Bracketed cues are visual-only holds, not spoken.
 
-This is NeatMind — a study companion that keeps every lesson tied to its source. [hold on live UI]
+Before an exam, students jump between tabs, PDFs, videos, and scattered notes. [hold on live UI]
 
-Before an exam, students jump between tabs, PDFs, videos, and notes — and fast summaries are hard to trust. [pause]
+NeatMind turns learner-selected material into evidence-linked lessons, active-recall practice, and a study journey that continues adapting as the learner progresses. [pause]
 
-NeatMind turns a source you choose into an evidence-linked lesson, active recall, and a next study step. [pause]
+Here's the zero-setup demo — a note from a short linear-equations source. It needs no account, site-access approval, or provider key. [cursor taps, let the demo run]
 
-Here's the zero-setup demo — no account, site access, or provider key. I open a short linear-equations note; it names its source and marks each claim evidence checked. [let the banner breathe]
+The lesson identifies its source and marks the generated concepts as evidence checked. Instead of asking the learner to trust a summary blindly, NeatMind keeps the supporting material visible. [let the banner breathe]
 
-Open "Subtract 3" — the explanation sits beside the exact supporting sentence. If something looks wrong, report it without changing the source. [pause]
+Open "Subtract 3," and the explanation appears beside the exact supporting sentence. If something is unsupported, the learner can report the claim without changing the original source. [pause]
 
-Now a source-bound question, tied to the saved note and its fingerprint. Answering records real progress — saved to your Journey. [pause]
+Next, the learner completes a source-bound question. Choosing x equals six and submitting the answer records progress beyond a disposable chat. Journey keeps the chapter, source, result, and next action together. [let the match cut land]
 
-On the Dashboard, I turn that into a goal — focus chapters, a target date, a daily study time. NeatMind counts down the days left and builds today's plan: a recovery quiz on my weakest concept, and the next step to take. [let the plan appear]
+Progress becomes visible in the Learning Forest — each chapter grows as it develops. [ambient forest motion]
 
-A word on trust. NeatMind asks for site access only when you choose to study. Progress stays in Chrome's local storage. Optional AI runs through a protected backend that limits each request. [pause]
+On the Dashboard, I set a goal — focus chapters, a target date, a daily time. NeatMind counts down and builds today's plan: the next step, ready to go. [let the plan appear]
 
-I led the product — the problem and the grounding standard. When quiz generation returned too few questions and some off-source content, I asked Codex, using GPT-5.6, to trace the whole path — UI, prompts, and validation. It proposed focused fixes; I reviewed them, and that grounding is what you just saw. GPT-5.6 worked through Codex in development, not as the runtime model. [pause]
+NeatMind asks for site access only when you choose. Progress stays in local storage. Optional AI runs through a protected, limited backend. [pause]
 
-NeatMind makes your study material inspectable, reusable, and something you can act on — with a plan that comes from your own evidence. [pause]
+I led the product — the problem and the grounding standard. When quiz generation returned the wrong number of questions and included off-source content, I asked Codex, using GPT-5.6, to trace the whole path. It proposed focused fixes, and I reviewed the result. [causal card timeline]
 
-NeatMind — study you can inspect, practice, and keep. [silent end-card hold, ≥3 seconds]
+Through Codex, GPT-5.6 traced the interface, the prompt, and validation, and helped verify the fix — an engineering collaborator, not this demo's runtime model. [slow pullback]
+
+Evidence you can inspect. Practice you can keep. A journey that grows with you. [silent end-card hold, ≥3 seconds]
 
 ## 10. Visual and Motion Direction
 
@@ -334,24 +368,25 @@ Speaking rate is computed per scene from spoken words and speaking seconds (scen
 
 | Scene | Duration (s) | Word count | Visual-only (s) | Speaking (s) | Required WPM | Status |
 | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | 7 | 14 | 0.8 | 6.2 | 135 | Comfortable |
-| 2 | 10 | 18 | 2.0 | 8.0 | 135 | Comfortable |
-| 3 | 10 | 17 | 2.0 | 8.0 | 128 | Comfortable |
-| 4 | 14 | 27 | 2.0 | 12.0 | 135 | Comfortable |
-| 5 | 12 | 21 | 2.0 | 10.0 | 126 | Comfortable |
-| 6 | 12 | 20 | 2.0 | 10.0 | 120 | Comfortable |
-| 7 | 22 | 41 | 4.0 | 18.0 | 137 | Acceptable |
-| 8 | 16 | 32 | 2.5 | 13.5 | 142 | Acceptable |
-| 9 | 27 | 61 | 2.0 | 25.0 | 146 | Acceptable |
-| 10 | 13 | 22 | 3.0 | 10.0 | 132 | Comfortable |
-| 11 | 7 | 8 | 3.0 (silent hold) | 4.0 | 120 | Comfortable |
+| 1 | 7 | 12 | 0.5 | 6.5 | 111 | Comfortable |
+| 2 | 10 | 20 | 2.0 | 8.0 | 150 | Acceptable |
+| 3 | 11 | 20 | 1.0 | 10.0 | 120 | Comfortable |
+| 4 | 15 | 29 | 2.0 | 13.0 | 134 | Comfortable |
+| 5 | 13 | 27 | 2.0 | 11.0 | 147 | Acceptable |
+| 6 | 17 | 31 | 2.5 | 14.5 | 128 | Comfortable |
+| 7 | 8 | 13 | 0.5 | 7.5 | 104 | Comfortable |
+| 8 | 15 | 28 | 2.5 | 12.5 | 134 | Comfortable |
+| 9 | 12 | 22 | 2.0 | 10.0 | 132 | Comfortable |
+| 10 | 21 | 42 | 3.0 | 18.0 | 140 | Comfortable |
+| 11 | 11 | 23 | 1.5 | 9.5 | 145 | Acceptable |
+| 12 | 10 | 14 | 4.0 (incl. ≥3 s silent hold) | 6.0 | 140 | Comfortable |
 
 | Measure | Planned result |
 | --- | ---: |
 | Spoken narration | 281 words |
-| Overall speaking rate | ~135 WPM |
-| Total speaking time | ~124.7 seconds |
-| Visual-only / silent time | ~25 seconds |
+| Overall speaking rate | ~133 WPM |
+| Total speaking time | ~126.5 seconds |
+| Visual-only / silent time | ~23.5 seconds |
 | Complete video duration | 150 seconds |
 | Maximum allowed duration | 180 seconds |
 
@@ -368,17 +403,17 @@ Approve narration, timestamps, per-scene claims, the evidence matrix, and the st
 **Decision record (this revision):**
 
 - **Narration (Section 9):** 281 words, ~135 WPM, prepared and internally consistent with the per-scene timing audit (Section 11). Ready for creator sign-off.
-- **Timestamps / storyboard (Section 8):** 11 scenes, 150 s total, product-first structure. Ready for creator sign-off.
+- **Timestamps / storyboard (Section 8):** 12 scenes (reconciled with Codex's structure), 150 s total, product-first structure. Ready for creator sign-off.
 - **Claims / evidence (Section 4):** every spoken claim maps to a file+symbol+commit row; no unverified claim remains in the script. Ready for creator sign-off.
 - **Background color rule (Section 10):** locked as a hard constraint — no pure black anywhere in the frame; use the two verified warm-dark tokens instead. Applies to every future gate, including Gate 2's preflight test.
-- **Feature decision (Section 15):** the Study Goal segment (Scene 7) uses the *existing, shipped* Dashboard Study Goal + Today's Plan feature (State A). No new feature was proposed, approved, or implemented to support this script — the segment is demo-script work only, not code work.
+- **Feature decision (Section 15):** the Study Goal segment (Scene 8) uses the *existing, shipped* Dashboard Study Goal + Today's Plan feature (State A). No new feature was proposed, approved, or implemented to support this script — the segment is demo-script work only, not code work.
 - **Still open before Gate 1 can formally close:** the six items in Section 16 (runtime GPT-5.6 confirmation, transcript/session-ID display approval, asset reuse, end-card credit, judge URL, and which specific goal to capture). Gate 1 is script-*ready*, not yet script-*signed*.
 
 This document remains planning/script only. Gate 2 (technical preflight) is the first step that touches Hyperframes, installs any video-production dependency, or renders a frame — none of that has started, and it will not start without a separate explicit go-ahead, since it falls outside this task's current scope.
 
 ### Gate 2 — Technical preflight
 
-After script approval, build only a 10–15 second test containing: real UI capture, one caption, voice-over, music, and one representative transition. Use it to confirm whether Hyperframes is reliable for this project before committing to the full build.
+Superseded by events: Codex's Remotion build already passed this gate in practice (a full render exists). Treat the existing `out/NeatMind_Build_Week_Demo.mp4` as the preflight artifact — review it against the fix list in `../RECONCILIATION_NOTES.md` rather than building a fresh 10–15 second test.
 
 ### Gate 3 — Rough animatic
 
@@ -392,22 +427,24 @@ Review detailed motion, diagrams, typography, cursor movement, transitions, and 
 
 Verify runtime, captions, audio, absence of sensitive information, UI readability, copyright/rights, YouTube compression, submission requirements, and the **no-pure-black background rule** (Section 10) before publishing.
 
-## 13. Future Technical Production Recommendation
+## 13. Production Pipeline (superseded by events — Remotion is now the further-along path)
 
-### Recommendation: Hyperframes after explicit approval
+### What actually happened
 
-Hyperframes is the better future fit because NeatMind is already HTML/CSS/JavaScript-focused, and an existing user-owned untracked Hyperframes draft is present in `demo-video/`. Do not modify or reuse that draft until the creator explicitly approves reuse.
+Two implementation paths were explored in parallel:
 
-### Future-only implementation architecture
+1. **HyperFrames** (this session, `demo-video/neatmind-demo-reel-v2/`) — reached a reviewed 11-frame plan (`STORYBOARD.md`) and a live storyboard-review checkpoint, but **no scenes were built or rendered**.
+2. **Remotion** (Codex, `demo-video/neatmind-remotion/`) — independently reached a complete 12-scene composition and an actual rendered `out/NeatMind_Build_Week_Demo.mp4`, with real narration audio and reused UI screenshots already in place.
 
-- One 150-second 1920 × 1080, 30 FPS composition: **4,500 frames**.
-- Eleven scene components matching the storyboard.
-- Shared browser frame, caption rail, evidence badge, data-flow diagram, Codex timeline, study-goal/plan card, and end-card components.
-- Separate asset groups for screen captures, sanitized development proof, music/SFX, and captions.
-- Shared motion utilities for controlled zooms, cursor taps, text reveals, and flow-line timing.
-- H.264/AAC MP4 output; absolute maximum remains 5,400 frames / 180 seconds.
-- **Background/build note:** any invented background, transition bed, or end-card component must use the Journey near-black gradient (`#070909`/`#020303`/`#050606` + ember radial tint) or the vintage-planner leather browns (`#26170f`/`#342015`) — never `#000000`. See Section 10.
-- Only after Gate approvals: capture current UI, assemble scenes, validate timing/contrast/captions, review final preview, then render.
+Given Remotion is materially further along — a working render already exists — **it is the pragmatic primary path going forward**, not HyperFrames. The HyperFrames project is parked, not deleted; its `STORYBOARD.md` and `BRIEF.md` remain a valid, independently-reviewed reference if the Remotion path needs to be abandoned later.
+
+### What the Remotion output still needs before it can ship
+
+None of the fixes below have been applied to the actual Remotion source yet — that source lives in the main checkout, outside this worktree's write access. See `../RECONCILIATION_NOTES.md` for the itemized, file-and-line-level fix list; the corrected claims/wording/timing above (Sections 4, 8, 9, 11) are what that source needs to be brought into line with.
+
+- **Background/build note (carries forward unchanged):** any invented background, transition bed, or end-card component must use the Journey near-black gradient (`#070909`/`#020303`/`#050606` + ember radial tint) or the vintage-planner leather browns (`#26170f`/`#342015`) — never `#000000`. Not yet verified against the actual Remotion component colors — check before shipping.
+- Twelve scene components now (not eleven) — see Section 8's reconciled table.
+- H.264/AAC MP4 output at 1920×1080/30fps/150s remains the target; the existing render should be checked against this before being treated as final.
 
 ## 14. Asset and Compliance Checklist
 
@@ -475,7 +512,9 @@ Only decisions that genuinely require creator input:
 5. What creator name/title should appear on the end card?
 6. What public judge-access URL will be submitted?
 7. For the study-goal segment, which goal should be shown (name, focus chapters, target date, daily time) so the "Until target" countdown and top plan step read cleanly on the demo profile?
+8. Confirm the Remotion pipeline (`demo-video/neatmind-remotion/`) as the primary path over HyperFrames, and confirm whether the fixes in `../RECONCILIATION_NOTES.md` should be applied by Codex directly, or handed back to this session in a worktree that includes that project.
+9. Commit Codex's uncommitted work in the main checkout (the Remotion project and this plan-doc rewrite) before it's at risk of being lost — whose job is that, and on which branch?
 
 ---
 
-**REVISED PLANNING COMPLETE — WAITING FOR SCRIPT AND FEATURE DECISIONS**
+**RECONCILED WITH CODEX'S REMOTION BUILD — WAITING ON THE OPEN QUESTIONS IN SECTION 16 (ESPECIALLY #8–9) BEFORE THE REMOTION SOURCE IS CORRECTED AND TREATED AS FINAL**
