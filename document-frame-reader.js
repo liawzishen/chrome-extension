@@ -103,6 +103,6 @@
     chunks,
     stats: { inspectedNodes, outputCharacters, shadowRoots, truncated: Boolean(stack.length) }
   };
-  globalThis.__EXAM_CRAM_FRAME_SNAPSHOT__ = snapshot;
+  globalThis.__NEAT_MIND_FRAME_SNAPSHOT__ = snapshot;
   return snapshot;
 })();

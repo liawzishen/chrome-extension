@@ -1,9 +1,9 @@
-(function attachExamCramJourneyWorker(root, factory) {
-  const Journey = root.ExamCramJourney
-    || (typeof require === "function" ? (require("./journey-utils.js"), root.ExamCramJourney) : null);
+(function attachNeatMindJourneyWorker(root, factory) {
+  const Journey = root.NeatMindJourney
+    || (typeof require === "function" ? (require("./journey-utils.js"), root.NeatMindJourney) : null);
   const api = factory(Journey);
   if (typeof module === "object" && module.exports) module.exports = api;
-  root.ExamCramJourneyWorker = api;
+  root.NeatMindJourneyWorker = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createJourneyWorkerUtils(Journey) {
   "use strict";
 

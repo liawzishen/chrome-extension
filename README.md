@@ -1,6 +1,6 @@
-# Exam-Cram Assistant
+# NeatMind
 
-Exam-Cram is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker. Backend-generated quizzes must pass lexical evidence checks and a provider-backed semantic check of every answer against its quoted evidence before the client accepts them.
+NeatMind is a source-grounded study companion for the open web. It turns pages, notes, and videos into interactive visual lessons and active-recall quizzes, keeps generated evidence connected to its supporting passage or timestamp, records demonstrated learning in a dated chapter Journey, and provides a lightweight timed Focus blocker. Backend-generated quizzes must pass lexical evidence checks and a provider-backed semantic check of every answer against its quoted evidence before the client accepts them.
 
 The project is available under the [MIT License](LICENSE).
 
@@ -16,7 +16,7 @@ read across pages and videos
   -> protect the study session
 ```
 
-This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; Exam-Cram is optimizing for traceability, active learning, persistence, and a clear next study action.
+This is intentionally not another general-purpose browser chatbot. Broad assistants already compete on model count and feature volume; NeatMind is optimizing for traceability, active learning, persistence, and a clear next study action.
 
 ## Judge Quick Start (no API key)
 
@@ -29,9 +29,34 @@ For the fastest end-to-end evaluation, run `npm ci`, then `npm run preview`, and
 
 The preview starts on **Dashboard**. Choose **Create**, then **Paste Notes**, then **Try 60-sec math demo**. The curated route uses no API key, browser permission, extension setup, or database cleanup. See [the system architecture](ARCHITECTURE.md) for component boundaries and data contracts, and [the Devpost handoff](hackathon/DEVPOST_SUBMISSION.md) for the ready-to-paste description, video beat sheet, and pilot-measurement plan.
 
-## OpenAI Build Week Submission Evidence
+## Build Beyond Hackathon submission guide
 
-Exam-Cram Assistant is prepared for the **Education** track. The primary `/feedback` Codex Session ID for the thread with the most recorded core implementation work is:
+This repository accompanies the [NeatMind Devpost project](https://devpost.com/software/exam-cram-assistant) for the [Build Beyond Hackathon](https://build-beyond-hackathon.devpost.com/). The official project guidance has no theme restriction or track selection, so this README focuses on making the product easy to evaluate against the published criteria.
+
+The project overview should explain the idea, how it works, main features, technology stack, and intended audience. This README covers those topics through the introduction, [Current Capabilities](#current-capabilities), [Why NeatMind](#why-neatmind), and installation sections. The official guide states: "Every submission must include at least one visual showcasing the project."
+
+### Judging-criteria map
+
+| Official criterion | How this repository supports evaluation |
+| --- | --- |
+| Technical Execution (30%) | The [judge quick start](#judge-quick-start-no-api-key), architecture, verification commands, and deterministic no-key demo make the end-to-end flow reproducible. |
+| Originality & Creativity (25%) | The evidence-to-mastery loop combines source-linked visual notes, evidence-checked quizzes, recovery practice, and a persistent Learning Journey. |
+| Impact & Usefulness (20%) | The product targets students who study from scattered pages, PDFs, notes, and videos but need a trustworthy next study action. |
+| UX & Design (15%) | The side-panel design, responsive import flow, evidence navigation, and Learning Journey are documented below and can be exercised in the preview. |
+| Clarity of Submission (10%) | The quick start, architecture, source code, and [submission handoff](hackathon/DEVPOST_SUBMISSION.md) give judges a concise route through the project. |
+
+### Final Devpost checklist
+
+- [ ] Verify that the Devpost entry includes at least one current visual: a demo video, screenshot, presentation, or equivalent project visual.
+- [ ] Link the public source repository and/or a live demo, which the official guidelines recommend so judges can explore the project further.
+- [ ] Add every team member in Devpost and describe each contributor's work, if the project is not a solo entry.
+- [ ] Re-read the [official Build Beyond rules](https://build-beyond-hackathon.devpost.com/rules) and the live challenge page immediately before submitting; they control eligibility, deadline, and any organizer updates.
+
+## Historical OpenAI Build Week development record
+
+> This section preserves a prior OpenAI Build Week collaboration record. It is development provenance only; it is not a current Build Beyond submission requirement or track.
+
+For that historical event, NeatMind was prepared for the **Education** track. The primary `/feedback` Codex Session ID for the thread with the most recorded core implementation work is:
 
 `019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f` — **Fix quiz generation grounding**
 
@@ -53,7 +78,7 @@ A separate [design-test conversation](feedback/2026-07-16-design-test-review-md-
 | Grounding | Lexical source checks for all quizzes; backend quizzes additionally require provider semantic verification of every answer against its quoted evidence |
 | Review scheduling | Per-concept SM-2-lite intervals use the cumulative wrong-answer ratio; difficult concepts return sooner than mastered concepts |
 | External study | Opt-in external suggestions remain visibly separate from saved evidence until the learner explicitly saves a page to the chapter |
-| Unpacked build | `release/exam-cram-extension` |
+| Unpacked build | `release/neatmind-extension` |
 | Verification | Build, syntax, test, secret-scan, dependency-audit, and package commands are documented below |
 | Publication safety | The extension packager copies an explicit runtime allowlist and excludes local credentials |
 
@@ -78,9 +103,9 @@ The side panel applies Apple Human Interface Guidelines as cross-platform web pr
 - **Legibility and clear action priority:** system typography, a restrained weight scale, semantic contrast, one filled primary action, and sentence-case labels replace ornamental type and equally weighted controls. See [Typography](https://developer.apple.com/design/human-interface-guidelines/typography) and [Color](https://developer.apple.com/design/human-interface-guidelines/color).
 - **Direct, accessible interaction:** important controls retain at least 44px hit regions, keyboard focus is visible, tabs support arrow/Home/End navigation, and reduced-motion, reduced-transparency, and higher-contrast preferences have explicit fallbacks. See Apple's [UI design tips](https://developer.apple.com/design/tips/) and [Accessibility](https://developer.apple.com/design/human-interface-guidelines/accessibility/).
 
-## Why Exam-Cram
+## Why NeatMind
 
-| Need | Exam-Cram approach |
+| Need | NeatMind approach |
 |---|---|
 | Trust | Visual concepts and quiz questions retain source evidence; backend quiz answers additionally require a provider semantic verdict against their quoted evidence. |
 | Active learning | Quiz generation validates option quality and records submitted performance separately from passive activity. |
@@ -117,14 +142,14 @@ Representative discussions:
 
 The comparison uses official product or pricing pages for business claims. Plans and limits can change.
 
-| Product | What it does especially well | Business pattern | Lesson for Exam-Cram |
+| Product | What it does especially well | Business pattern | Lesson for NeatMind |
 |---|---|---|---|
 | [NotebookLM](https://support.google.com/notebooklm/answer/16213268) | Source workspaces, grounded chat, mind maps, quizzes, and overviews | Free standard limits plus higher-limit Google AI, Workspace, and enterprise plans | Source grounding and workspace clarity matter more than generic chat breadth. |
 | [Recall](https://app.getrecall.ai/pricing) | Persistent knowledge graph, summaries, chat, quiz, and spaced repetition | Freemium subscription tiers | The saved knowledge graph and review loop justify recurring value. |
 | [Glasp](https://glasp.co/pricing) | Web/PDF/video highlighting, discovery, summaries, and export | Free core plus Pro subscription and student discount | Capture and export can stay free while higher AI usage is metered. |
 | [Knowt](https://knowt.com/plans?tab=Plus) and [Quizlet](https://quizlet.com/features/ai-study-tools) | Established practice modes, content libraries, imports, and school workflows | Free entry plus learner/institution subscriptions | Practice quality and migration are stronger differentiators than summary generation. |
 | [Eightify](https://eightify.app/) | Fast timestamped YouTube topics and jumps | Free installation with paid in-app access | Video value should be visible immediately through topics and exact moments. |
-| [MaxAI](https://www.maxai.me/pricing/) and [Sider](https://sider.ai/pricing) | Broad page/PDF/video assistants and multiple models | Free allowances plus subscriptions or usage credits | Competing on feature count is unattractive; Exam-Cram should stay learning-specific. |
+| [MaxAI](https://www.maxai.me/pricing/) and [Sider](https://sider.ai/pricing) | Broad page/PDF/video assistants and multiple models | Free allowances plus subscriptions or usage credits | Competing on feature count is unattractive; NeatMind should stay learning-specific. |
 | [LeechBlock NG](https://chromewebstore.google.com/detail/leechblock-ng/blaaajhemilngeeffpbfkdjjoefldkok) | Highly configurable browser blocking | Free/open source | Basic browser-only blocking has a strong free expectation. |
 | [Freedom](https://support.freedom.to/en/articles/13764747-what-s-included-in-free-and-premium-plans) | Cross-device blocking, schedules, exceptions, and locked sessions | Free immediate sessions plus Premium scheduling/strict controls | Advanced cross-device and scheduled controls, not the basic timer, can support paid value. |
 
@@ -174,7 +199,7 @@ Requirements:
    npm run package:extension
    ```
 
-2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `release/exam-cram-extension`. Do not load or distribute the project root; the release folder contains only the runtime files listed by `scripts/extension-files.mjs`.
+2. Open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `release/neatmind-extension`. Do not load or distribute the project root; the release folder contains only the runtime files listed by `scripts/extension-files.mjs`.
 3. Copy the extension ID shown by Chrome. Use only that value in the origin setting described below; do not add it to source files or documentation.
 4. Copy the environment template and edit the private copy:
 
@@ -197,14 +222,14 @@ Requirements:
    npm start
    ```
 
-10. In Exam-Cram Settings, keep the bundled endpoint and leave the token field empty:
+10. In NeatMind Settings, keep the bundled endpoint and leave the token field empty:
 
     ```text
     Endpoint: http://127.0.0.1:8787/api/study-session
     Backend access token: leave blank for the allowlisted bundled backend
     ```
 
-11. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; Exam-Cram reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
+11. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; NeatMind reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
 
 The provider key stays in the backend `.env` and is never placed in the extension. The bundled server accepts tokenless API posts only when it is listening on loopback, the socket is loopback, and Chrome supplies an exact origin listed in `ALLOWED_EXTENSION_ORIGINS`. Preview pages, missing or different origins, and other clients require the generated or configured bearer token. A supplied wrong token is rejected even when the request uses the trusted extension origin.
 
@@ -232,21 +257,21 @@ Open `http://127.0.0.1:8788`, choose **Create** from Dashboard, select **Paste N
 - **Current page** reports the live browser title, domain, readability/permission state, and selected Journey chapter.
 - **This note is from...** always identifies the pinned artifact separately. Refreshing page context never replaces the pinned note or quiz.
 - The panel autosaves the selected tool view, pasted notes, stable selected chapter ID, settings choices, pinned artifact, and in-progress quiz answers. A saved custom-backend token is bound to that endpoint's origin and is cleared rather than reused if the origin changes.
-- If Chrome reports `Only permissions specified in the manifest may be requested`, reload Exam-Cram from `chrome://extensions`; the running extension is still using an older manifest.
+- If Chrome reports `Only permissions specified in the manifest may be requested`, reload NeatMind from `chrome://extensions`; the running extension is still using an older manifest.
 
 ### Required reload after updating an unpacked build
 
 Refreshing the side panel is not the same as reloading the extension. A refreshed panel can load newer UI files while Chrome still runs the previous service worker, which produces errors such as `The message port closed before a response was received`.
 
-1. Close the Exam-Cram side panel.
+1. Close the NeatMind side panel.
 2. Open `chrome://extensions`.
-3. Find Exam-Cram Assistant and choose **Reload**.
+3. Find NeatMind and choose **Reload**.
 4. Open the video page and start playback.
-5. Click the Exam-Cram toolbar icon to open the global panel.
+5. Click the NeatMind toolbar icon to open the global panel.
 6. Choose **Create note from video**, then **Auto-transcribe** and **Start tab audio** if the video has no usable captions.
-7. Keep that playing video tab active and click the Exam-Cram toolbar icon once more, or press `Ctrl+Shift+Y`. This authorizes the exact armed request and starts recording automatically.
+7. Keep that playing video tab active and click the NeatMind toolbar icon once more, or press `Ctrl+Shift+Y`. This authorizes the exact armed request and starts recording automatically.
 
-Exam-Cram performs backend preflight before the final toolbar invocation and never stores an unused Chrome stream ID. Navigation intentionally cancels the armed request; on the new video page, press **Start tab audio** again and then use the toolbar action once to authorize and start it.
+NeatMind performs backend preflight before the final toolbar invocation and never stores an unused Chrome stream ID. Navigation intentionally cancels the armed request; on the new video page, press **Start tab audio** again and then use the toolbar action once to authorize and start it.
 
 ## Core Workflows
 
@@ -264,11 +289,11 @@ Generation checks the tab ID, canonical URL, and content fingerprint before show
 ### Study HTML and PDF documents
 
 - For an open web HTML page, choose **Create note from page**.
-- Exam-Cram combines readable content from the top page, accessible child frames, and open shadow roots. Hidden, inert, navigation, form, script, style, canvas, and duplicate content are excluded within strict node, time, chunk, and text budgets.
+- NeatMind combines readable content from the top page, accessible child frames, and open shadow roots. Hidden, inert, navigation, form, script, style, canvas, and duplicate content are excluded within strict node, time, chunk, and text budgets.
 - For an open PDF URL, grant that document host when requested and choose **Create note from page**. The PDF is fetched without cookies, parsed locally, and only bounded extracted text enters the normal note-generation path.
 - For a local `.html`, `.htm`, or `.pdf`, choose **Open HTML or PDF file**. This file picker works even when Chrome's file-URL toggle is off.
-- To read a local file already open in a Chrome tab, enable **Allow access to file URLs** on Exam-Cram's `chrome://extensions` details page, then refresh the source.
-- Password-protected PDFs must be unlocked and saved as an unprotected copy. Image-only/scanned PDFs require an OCR copy because Exam-Cram does not upload pages for silent OCR. These cases, malformed PDFs, and PDFs with too little selectable study text receive PDF-specific messages rather than the HTML readability error.
+- To read a local file already open in a Chrome tab, enable **Allow access to file URLs** on NeatMind's `chrome://extensions` details page, then refresh the source.
+- Password-protected PDFs must be unlocked and saved as an unprotected copy. Image-only/scanned PDFs require an OCR copy because NeatMind does not upload pages for silent OCR. These cases, malformed PDFs, and PDFs with too little selectable study text receive PDF-specific messages rather than the HTML readability error.
 
 Selecting a document prepares it as the current source; choose **Create note from document** to generate the visual note. **Refresh page** clears the selected file and returns the source card to the active browser tab.
 
@@ -289,7 +314,7 @@ Selecting a document prepares it as the current source; choose **Create note fro
 
 ### Explore further without blurring evidence
 
-When a chapter has weak concepts, Journey offers a collapsed **Explore further (external)** lane for each one. These are opt-in links to external study searches and are labelled as external, not evidence-checked, and styled separately from source-backed artifacts. Choosing **Open and prepare to save** opens the page and preselects the same chapter in Exam-Cram; the learner must review it and explicitly choose **Save source to chapter**. Only then does the page become a bounded source snapshot and enter the normal grounding loop.
+When a chapter has weak concepts, Journey offers a collapsed **Explore further (external)** lane for each one. These are opt-in links to external study searches and are labelled as external, not evidence-checked, and styled separately from source-backed artifacts. Choosing **Open and prepare to save** opens the page and preselects the same chapter in NeatMind; the learner must review it and explicitly choose **Save source to chapter**. Only then does the page become a bounded source snapshot and enter the normal grounding loop.
 
 ### Study a video
 
@@ -301,14 +326,14 @@ The extension tries:
 4. automatic public-YouTube analysis through Gemini
 5. explicit audio-only tab capture for the detected playing tab
 
-Exam-Cram no longer depends on YouTube's private player-response or caption-track URLs. Those internal endpoints are not a stable extension interface; unopened captions therefore fall through to the documented Gemini public-video route or the explicit tab-audio path.
+NeatMind no longer depends on YouTube's private player-response or caption-track URLs. Those internal endpoints are not a stable extension interface; unopened captions therefore fall through to the documented Gemini public-video route or the explicit tab-audio path.
 
 For tab capture:
 
 - the video must be playing before capture begins
 - the user sees a consent dialog and a persistent `REC` badge
 - **Start tab audio** binds a 60-second armed request to the detected tab, canonical URL, and exact media fingerprint; it does not ask Chrome for a stream ID or begin recording yet
-- the next Exam-Cram toolbar action—or `Ctrl+Shift+Y` / `Command+Shift+Y` action shortcut—supplies Chrome's qualifying invocation, creates the one-use stream ID in the service worker, and immediately starts the offscreen recorder; there is no second Start click
+- the next NeatMind toolbar action—or `Ctrl+Shift+Y` / `Command+Shift+Y` action shortcut—supplies Chrome's qualifying invocation, creates the one-use stream ID in the service worker, and immediately starts the offscreen recorder; there is no second Start click
 - before `REC`, the worker checks the Gemini backend, exact extension-origin allowlist, optional custom token, and provider key; the bundled loopback backend does not require a token to be copied into Settings
 - `REC` advances from live input before the first transcript response and reports elapsed audio, signal, total chunks, processing/transcribed/failed chunk counts, and validated timestamped segments separately
 - every emitted chunk must finish with at least one valid segment or a persisted provider error; a failed request can no longer leave the interface indefinitely at `0 segments`
@@ -384,13 +409,13 @@ The MV3 worker stores an absolute deadline, recreates alarms after restart, inst
 - Page/video reading and tab capture are explicit user actions.
 - HTML/PDF reading is explicit. Remote PDFs are fetched without cookies or a referrer; local file-picker input stays in memory until a note is created. Only bounded extracted text is stored with the source-grounded note and sent to the configured backend; raw PDF bytes are never stored or exported.
 - PDF JavaScript evaluation is disabled. Attachments, forms, actions, and external links inside a PDF are not executed by the reader.
-- Website access is granted per site through **Allow this site**. Focus separately requests only the distracting-site origins still missing, and Exam-Cram does not inspect browsing history.
+- Website access is granted per site through **Allow this site**. Focus separately requests only the distracting-site origins still missing, and NeatMind does not inspect browsing history.
 - The local backend binds to `127.0.0.1`, validates the exact configured extension Origin, and permits that trusted loopback extension to connect without manual token entry. Other clients require the separate access token.
 - Provider keys exist only in the backend `.env`. A custom backend token is stored in extension-local settings, which is convenient but is not an operating-system password vault; use a scoped token and protect the browser profile.
 
 ## Security And Publication
 
-No application can be guaranteed impossible to compromise. Exam-Cram reduces exposed authority, validates trust boundaries, bounds resource use, and adds repeatable release checks. See [SECURITY.md](SECURITY.md) for the supported release line, credential-response guidance, and private reporting process.
+No application can be guaranteed impossible to compromise. NeatMind reduces exposed authority, validates trust boundaries, bounds resource use, and adds repeatable release checks. See [SECURITY.md](SECURITY.md) for the supported release line, credential-response guidance, and private reporting process.
 
 ### Runtime protections
 
@@ -419,7 +444,7 @@ npm run package:extension
 
 - `security:secrets` scans publishable text for common credential formats, private-key material, personal home paths, non-placeholder email addresses, and exact locally configured secrets; it also verifies the required ignore rules. It is a guardrail, not a substitute for reviewing the staged diff.
 - `security:audit` runs the publish-safety scan and fails on high-severity npm advisories.
-- `package:extension` rebuilds bundled dependencies, deletes the previous package directory, and copies only the explicit runtime allowlist into `release/exam-cram-extension`. Load, inspect, or zip that folder rather than the project root.
+- `package:extension` rebuilds bundled dependencies, deletes the previous package directory, and copies only the explicit runtime allowlist into `release/neatmind-extension`. Load, inspect, or zip that folder rather than the project root.
 
 ### GitHub safeguards
 

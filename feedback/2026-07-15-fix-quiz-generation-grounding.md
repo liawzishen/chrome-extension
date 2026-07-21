@@ -67,7 +67,7 @@ source page / evidence reference
 correct answer
 student answer
 result
-The primary concept must come from the visual note’s concept map. That lets Exam-Cram know that a wrong answer is about, for example, “TCP congestion control,” not only that question 4 was wrong.
+The primary concept must come from the visual note’s concept map. That lets NeatMind know that a wrong answer is about, for example, “TCP congestion control,” not only that question 4 was wrong.
 2. Diagnose weak concepts
 After submission:
 Collect all incorrect answers.

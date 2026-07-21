@@ -1,7 +1,9 @@
 export const EXTENSION_FILES = Object.freeze([
   "manifest.json",
   "background.js",
+  "branding-utils.js",
   "focus-utils.js",
+  "study-time-utils.js",
   "journey-utils.js",
   "journey-worker-utils.js",
   "video-utils.js",

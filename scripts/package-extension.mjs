@@ -6,7 +6,7 @@ import { EXTENSION_FILES } from "./extension-files.mjs";
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const projectRoot = resolve(scriptDirectory, "..");
 const releaseRoot = resolve(projectRoot, "release");
-const target = resolve(releaseRoot, "exam-cram-extension");
+const target = resolve(releaseRoot, "neatmind-extension");
 const localSecretValues = await loadLocalSecretValues();
 
 if (!target.startsWith(`${releaseRoot}${sep}`)) {
@@ -53,7 +53,7 @@ async function loadLocalSecretValues() {
     const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
     if (sensitiveName && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) values.push(value);
   });
-  const generatedToken = (await readFile(resolve(projectRoot, ".exam-cram-backend-token"), "utf8").catch(() => "")).trim();
+  const generatedToken = (await readFile(resolve(projectRoot, ".neatmind-backend-token"), "utf8").catch(() => "")).trim();
   if (generatedToken.length >= 12) values.push(generatedToken);
   return values;
 }

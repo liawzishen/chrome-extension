@@ -31,7 +31,7 @@ function createWorkerHarness({ authorization, tabUrl = authorization?.sourceSnap
   const events = [];
   const localStore = new Map();
   const sessionStore = new Map();
-  if (authorization) sessionStore.set("examCramVideoCaptureAuthorization", structuredClone(authorization));
+  if (authorization) sessionStore.set("neatMindVideoCaptureAuthorization", structuredClone(authorization));
   const listeners = {};
   const runtimeMessages = [];
   const offscreenMessages = [];
@@ -55,12 +55,12 @@ function createWorkerHarness({ authorization, tabUrl = authorization?.sourceSnap
   };
   const chrome = {
     runtime: {
-      id: "exam-cram-test",
+      id: "neatmind-test",
       lastError: null,
       getManifest: () => manifest,
-      getURL: (resource = "") => `chrome-extension://exam-cram-test/${resource}`,
+      getURL: (resource = "") => `chrome-extension://neatmind-test/${resource}`,
       getContexts: async () => offscreenOpen
-        ? [{ contextType: "OFFSCREEN_DOCUMENT", documentUrl: "chrome-extension://exam-cram-test/offscreen.html" }]
+        ? [{ contextType: "OFFSCREEN_DOCUMENT", documentUrl: "chrome-extension://neatmind-test/offscreen.html" }]
         : [],
       onInstalled: event("runtime.onInstalled"),
       onStartup: event("runtime.onStartup"),
@@ -214,14 +214,14 @@ test("real worker action consumes one armed request and starts the exact offscre
   await waitFor(() => harness.offscreenMessages.some((message) => message.type === "VIDEO_OFFSCREEN_START"));
 
   assert.deepEqual(harness.streamRequests, [{ targetTabId: 17 }]);
-  assert.equal(harness.sessionStore.has("examCramVideoCaptureAuthorization"), false);
+  assert.equal(harness.sessionStore.has("neatMindVideoCaptureAuthorization"), false);
   const start = harness.offscreenMessages.find((message) => message.type === "VIDEO_OFFSCREEN_START");
   assert.equal(start.streamId, "one-use-stream-id");
   assert.equal(start.sourceSnapshot.sourceFingerprint, authorization.sourceSnapshot.sourceFingerprint);
   assert.equal(start.sourceSnapshot.tabId, authorization.tabId);
   assert.equal(start.mediaStartMs, authorization.mediaTimeMs);
-  assert.equal(harness.localStore.get("examCramVideoCaptureState")?.status, "starting");
-  assert.ok(harness.events.indexOf("session.remove:examCramVideoCaptureAuthorization") < harness.events.indexOf("tabCapture.getMediaStreamId:17"));
+  assert.equal(harness.localStore.get("neatMindVideoCaptureState")?.status, "starting");
+  assert.ok(harness.events.indexOf("session.remove:neatMindVideoCaptureAuthorization") < harness.events.indexOf("tabCapture.getMediaStreamId:17"));
   assert.ok(harness.events.indexOf("tabCapture.getMediaStreamId:17") < harness.events.indexOf("offscreen.message:VIDEO_OFFSCREEN_START"));
 });
 
@@ -231,7 +231,7 @@ test("real worker refuses a changed page and expires the armed request without t
     tabUrl: "https://video.example.test/replaced"
   });
   changed.listeners["action.onClicked"](changed.tab);
-  await waitFor(() => !changed.sessionStore.has("examCramVideoCaptureAuthorization"));
+  await waitFor(() => !changed.sessionStore.has("neatMindVideoCaptureAuthorization"));
   assert.equal(changed.streamRequests.length, 0);
   assert.equal(changed.offscreenMessages.length, 0);
   assert.ok(changed.runtimeMessages.some((message) => (
@@ -243,7 +243,7 @@ test("real worker refuses a changed page and expires the armed request without t
     authorization: makeAuthorization({ expiresAt: Date.now() - 1 })
   });
   expired.listeners["action.onClicked"](expired.tab);
-  await waitFor(() => !expired.sessionStore.has("examCramVideoCaptureAuthorization"));
+  await waitFor(() => !expired.sessionStore.has("neatMindVideoCaptureAuthorization"));
   assert.equal(expired.streamRequests.length, 0);
   assert.ok(expired.runtimeMessages.some((message) => (
     message.type === "VIDEO_CAPTURE_AUTHORIZATION_CHANGED"

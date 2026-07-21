@@ -1,10 +1,10 @@
-(function attachExamCramVideo(root, factory) {
+(function attachNeatMindVideo(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) {
     module.exports = api;
   }
-  root.ExamCramVideo = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createExamCramVideo() {
+  root.NeatMindVideo = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function createNeatMindVideo() {
   "use strict";
 
   const SCHEMA_VERSION = 1;
@@ -51,7 +51,7 @@
     if (missing.length || !Number.isFinite(minimumChrome) || minimumChrome < 116) {
       throw new VideoCaptureError(
         "CAPTURE_MANIFEST_STALE",
-        "Reload Exam-Cram from chrome://extensions to activate the Chrome 116+ tab-audio permissions.",
+        "Reload NeatMind from chrome://extensions to activate the Chrome 116+ tab-audio permissions.",
         { missingPermissions: missing, minimumChromeVersion: minimumChrome || 0 }
       );
     }
@@ -67,7 +67,7 @@
     if (/extension has not been invoked|activetab|user gesture/.test(searchable)) {
       return new VideoCaptureError(
         "TAB_CAPTURE_NOT_INVOKED",
-        "Chrome did not authorize this page for tab capture. Keep the video playing, press Start tab audio to arm the request, then click the Exam-Cram toolbar icon once on that same tab. Recording starts automatically, and navigation cancels the request.",
+        "Chrome did not authorize this page for tab capture. Keep the video playing, press Start tab audio to arm the request, then click the NeatMind toolbar icon once on that same tab. Recording starts automatically, and navigation cancels the request.",
         details
       );
     }
@@ -89,14 +89,14 @@
       && /worker|reservation|runtime message/.test(String(phase).toLowerCase())) {
       return new VideoCaptureError(
         "VIDEO_WORKER_RELOAD_REQUIRED",
-        "Exam-Cram's loaded video worker is out of date or unavailable. Open chrome://extensions, click Reload for Exam-Cram, then reopen the video and try again.",
+        "NeatMind's loaded video worker is out of date or unavailable. Open chrome://extensions, click Reload for NeatMind, then reopen the video and try again.",
         details
       );
     }
     if (/could not establish connection|receiving end does not exist|message port closed|offscreen/.test(searchable)) {
       return new VideoCaptureError(
         "OFFSCREEN_CAPTURE_UNAVAILABLE",
-        "The tab-audio recorder did not load. Reload Exam-Cram from chrome://extensions, reopen the video, and try again.",
+        "The tab-audio recorder did not load. Reload NeatMind from chrome://extensions, reopen the video, and try again.",
         details
       );
     }

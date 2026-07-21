@@ -1,15 +1,16 @@
 const STORAGE_KEYS = {
-  sessions: "examCramSessions",
-  settings: "examCramSettings",
-  exportPayload: "examCramExportPayload",
-  journey: "examCramLearningJourney",
-  studyGoal: "examCramStudyGoal",
-  focusState: "examCramFocusState",
-  lastChapter: "examCramLastChapter",
-  sessionDraft: "examCramSessionDraft",
-  panelState: "examCramPanelState",
-  pendingChapterAction: "examCramPendingChapterAction",
-  claimReports: "examCramUnsupportedClaimReports"
+  sessions: "neatMindSessions",
+  settings: "neatMindSettings",
+  exportPayload: "neatMindExportPayload",
+  journey: "neatMindLearningJourney",
+  studyGoal: "neatMindStudyGoal",
+  focusState: "neatMindFocusState",
+  studyTime: "neatMindStudyTimeState",
+  lastChapter: "neatMindLastChapter",
+  sessionDraft: "neatMindSessionDraft",
+  panelState: "neatMindPanelState",
+  pendingChapterAction: "neatMindPendingChapterAction",
+  claimReports: "neatMindUnsupportedClaimReports"
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
@@ -44,6 +45,9 @@ const state = {
   chapterRestoreFallback: { id: "", title: "" },
   focusState: null,
   focusCountdownTimer: null,
+  studyTimeState: null,
+  studySession: null,
+  studyTickTimer: null,
   sourceRefreshTimer: null,
   sourceDetectionSequence: 0,
   sourceDetectionError: "",
@@ -304,14 +308,23 @@ function init() {
   elements.clearLearningMemoryButton?.addEventListener("click", handleClearLearningMemory);
   elements.apiEndpointInput?.addEventListener("change", handleBackendEndpointChange);
 
-  void initializePersistentPanel();
-  loadSettings();
-  syncCustomFocusDurationControl();
-  renderLibrary();
-  void loadFocusState();
-  void loadVideoCaptureState();
-  void loadVideoCaptureAuthorizationState();
-  void refreshCrossSiteAccessState();
+  ["pointerdown", "keydown", "wheel", "touchstart"].forEach((eventName) => {
+    document.addEventListener(eventName, handleStudyActivity, { passive: true });
+  });
+  document.addEventListener("visibilitychange", handleStudyVisibilityChange);
+  window.addEventListener("pagehide", flushStudyOnHide);
+
+  void initializeBrandStorage().finally(() => {
+    void initializePersistentPanel();
+    loadSettings();
+    syncCustomFocusDurationControl();
+    renderLibrary();
+    void loadFocusState();
+    void loadStudyTime();
+    void loadVideoCaptureState();
+    void loadVideoCaptureAuthorizationState();
+    void refreshCrossSiteAccessState();
+  });
 
   if (globalThis.chrome?.tabs?.onActivated) {
     globalThis.chrome.tabs.onActivated.addListener(() => scheduleSourceRefresh());
@@ -377,6 +390,124 @@ function scheduleSourceRefresh() {
   }, 220);
 }
 
+// ---- Automatic study-time tracking -------------------------------------
+//
+// While the side panel is open and a chapter is selected, elapsed active
+// time is credited to that chapter (and the open note). Accrual pauses when
+// the panel is hidden, the learner switches chapters, or activity goes idle.
+// The Learning Forest reads the accumulated totals from storage.
+const STUDY_TICK_MS = 15 * 1000;
+
+function studyTimeApi() {
+  return globalThis.NeatMindStudyTime || null;
+}
+
+function getStudyContext() {
+  const chapterId = String(state.selectedChapter?.id || "").slice(0, 100);
+  const noteId = chapterId ? String(state.currentSession?.id || "").slice(0, 100) : "";
+  return { chapterId, noteId };
+}
+
+function isStudyPanelActive() {
+  return Boolean(studyTimeApi())
+    && document.visibilityState === "visible"
+    && Boolean(getStudyContext().chapterId);
+}
+
+async function loadStudyTime() {
+  const api = studyTimeApi();
+  if (!api) return;
+  const stored = await getStorage(STORAGE_KEYS.studyTime, null).catch(() => null);
+  state.studyTimeState = api.normalizeStudyTimeState(stored, Date.now());
+  reconcileStudySession(Date.now());
+}
+
+function persistStudyTime() {
+  if (!state.studyTimeState) return;
+  void setStorage(STORAGE_KEYS.studyTime, state.studyTimeState).catch(() => {});
+}
+
+function reconcileStudySession(now = Date.now()) {
+  const api = studyTimeApi();
+  if (!api) return;
+  if (!state.studyTimeState) state.studyTimeState = api.createDefaultStudyTimeState(now);
+  const context = getStudyContext();
+  if (!isStudyPanelActive()) {
+    stopStudySession(now);
+    return;
+  }
+  if (!state.studySession) {
+    state.studySession = api.createStudySession(context.chapterId, context.noteId, now);
+    ensureStudyTick();
+    return;
+  }
+  if (state.studySession.chapterId !== context.chapterId || state.studySession.noteId !== context.noteId) {
+    const flushed = api.flushStudySession(state.studyTimeState, state.studySession, now);
+    state.studyTimeState = flushed.state;
+    state.studySession = api.createStudySession(context.chapterId, context.noteId, now);
+    persistStudyTime();
+    ensureStudyTick();
+  }
+}
+
+function pumpStudySession(now = Date.now()) {
+  const api = studyTimeApi();
+  if (!api || !state.studySession) return;
+  const flushed = api.flushStudySession(state.studyTimeState, state.studySession, now);
+  state.studyTimeState = flushed.state;
+  state.studySession = flushed.session;
+  persistStudyTime();
+  if (flushed.idle) {
+    state.studySession = null;
+    stopStudyTick();
+  }
+}
+
+function stopStudySession(now = Date.now()) {
+  const api = studyTimeApi();
+  if (!api || !state.studySession) return;
+  const flushed = api.flushStudySession(state.studyTimeState, state.studySession, now);
+  state.studyTimeState = flushed.state;
+  state.studySession = null;
+  stopStudyTick();
+  persistStudyTime();
+}
+
+function ensureStudyTick() {
+  if (state.studyTickTimer) return;
+  state.studyTickTimer = setInterval(() => {
+    const now = Date.now();
+    reconcileStudySession(now);
+    pumpStudySession(now);
+  }, STUDY_TICK_MS);
+}
+
+function stopStudyTick() {
+  if (!state.studyTickTimer) return;
+  clearInterval(state.studyTickTimer);
+  state.studyTickTimer = null;
+}
+
+function handleStudyActivity() {
+  const api = studyTimeApi();
+  if (!api) return;
+  if (!state.studySession) {
+    reconcileStudySession(Date.now());
+    return;
+  }
+  state.studySession = api.touchStudySession(state.studySession, Date.now());
+}
+
+function handleStudyVisibilityChange() {
+  const now = Date.now();
+  if (document.visibilityState === "hidden") stopStudySession(now);
+  else reconcileStudySession(now);
+}
+
+function flushStudyOnHide() {
+  stopStudySession(Date.now());
+}
+
 async function initializePersistentPanel() {
   let initialView = "dashboardView";
   let restoredArtifact = false;
@@ -394,6 +525,16 @@ async function initializePersistentPanel() {
   await consumePendingChapterAction().catch(() => {});
 }
 
+async function initializeBrandStorage() {
+  const branding = globalThis.NeatMindBranding;
+  if (!branding) return;
+  if (globalThis.chrome?.storage?.local) {
+    await branding.migrateStorageArea?.(globalThis.chrome.storage.local);
+    return;
+  }
+  branding.migrateLocalStorage?.(globalThis.localStorage);
+}
+
 async function consumePendingChapterAction(providedAction = null) {
   const action = providedAction || await getStorage(STORAGE_KEYS.pendingChapterAction, null);
   if (!action?.chapterId) return false;
@@ -401,7 +542,7 @@ async function consumePendingChapterAction(providedAction = null) {
   await removeStorage(STORAGE_KEYS.pendingChapterAction).catch(() => {});
   if (!requestedAt || Date.now() - requestedAt > 10 * 60 * 1000) return false;
   const journey = await getJourney();
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, String(action.chapterId));
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, String(action.chapterId));
   if (!chapter) {
     showStatus("That chapter is no longer available in the Learning Tree.", true);
     return false;
@@ -452,8 +593,8 @@ async function refreshCrossSiteAccessState() {
   elements.accessBanner.classList.toggle("hidden", granted);
   if (!granted && elements.accessBannerText) {
     elements.accessBannerText.textContent = permissionPattern === "file:///*"
-      ? "Grant file access only when you want Exam-Cram to read a local HTML or PDF source."
-      : "Grant access to this website only. Exam-Cram reads its page after you choose a study action.";
+      ? "Grant file access only when you want NeatMind to read a local HTML or PDF source."
+      : "Grant access to this website only. NeatMind reads its page after you choose a study action.";
     elements.grantCrossSiteAccessButton.textContent = permissionPattern === "file:///*" ? "Allow this file" : "Allow this site";
   }
   return granted;
@@ -472,7 +613,7 @@ async function handleGrantCrossSiteAccess() {
         else resolve(Boolean(value));
       });
     });
-    if (!granted) throw new Error("Page access was not granted. Exam-Cram will stay open without reading this source.");
+    if (!granted) throw new Error("Page access was not granted. NeatMind will stay open without reading this source.");
     await refreshCrossSiteAccessState();
     await detectActiveSource();
     showStatus("This source is available. Its content is read only when you choose a study action.");
@@ -665,7 +806,7 @@ async function handleStudyPage() {
   startProgress("Reading page content...", 8);
   try {
     const page = state.importedDocument || await extractCurrentPage();
-    globalThis.ExamCramDocumentReader.assertReadableContent(page.text, page.documentType || "html");
+    globalThis.NeatMindDocumentReader.assertReadableContent(page.text, page.documentType || "html");
     updateGenerationProgress(25, "Creating a source-grounded visual note...");
     await createAndRecordStudyArtifact({
       title: page.title || "Current page",
@@ -735,6 +876,7 @@ function selectChapterAcrossControls(chapterId) {
   });
   state.selectedChapter = { id: matchedChapterId, title: selectedTitle };
   updateChapterSelectionSlots();
+  reconcileStudySession(Date.now());
 }
 
 function updateChapterSelectionSlots() {
@@ -1035,12 +1177,12 @@ async function handleCreateChapter(event) {
         ...pending.journey.chapters.map((chapter) => chapter.title),
         ...pending.plan.newChapterTitles
       ];
-      assignment.chapterTitle = globalThis.ExamCramJourney.normalizeChapterTitleProposal(title, existingTitles);
+      assignment.chapterTitle = globalThis.NeatMindJourney.normalizeChapterTitleProposal(title, existingTitles);
       assignment.isNewChapter = !pending.journey.chapters.some((chapter) => (
         chapter.title.toLowerCase() === assignment.chapterTitle.toLowerCase()
       ));
       assignment.reason = "Assigned by you during import review.";
-      pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
+      pending.plan = globalThis.NeatMindJourney.planBulkFiling(pending.assignments, pending.journey);
       state.pendingImportChapterFileId = "";
       if (elements.newChapterDialog?.open) elements.newChapterDialog.close("assigned");
       renderImportReview();
@@ -1048,7 +1190,7 @@ async function handleCreateChapter(event) {
       return;
     }
     const created = await mutateJourney("JOURNEY_CREATE_CHAPTER", { title });
-    const chapter = globalThis.ExamCramJourney.findChapter(created.journey, created.result?.chapterId);
+    const chapter = globalThis.NeatMindJourney.findChapter(created.journey, created.result?.chapterId);
     if (!chapter) throw new Error("The new chapter could not be selected.");
     selectChapterAcrossControls(chapter.id);
     await setStorage(STORAGE_KEYS.lastChapter, chapter.title);
@@ -1078,8 +1220,8 @@ async function readImportedDocument(file) {
 }
 
 async function extractDocumentSource(file) {
-  const Reader = globalThis.ExamCramDocumentReader;
-  if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  const Reader = globalThis.NeatMindDocumentReader;
+  if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
   const name = String(file?.name || "Local document").slice(0, 180);
   const hintedKind = /\.pdf$/i.test(name) || file?.type === "application/pdf" ? "pdf" : "html";
   const maxBytes = hintedKind === "pdf" ? Reader.MAX_PDF_BYTES : Reader.MAX_HTML_BYTES;
@@ -1177,7 +1319,7 @@ async function handleBulkImportSelected(event) {
       id: crypto.randomUUID(),
       files,
       assignments,
-      plan: globalThis.ExamCramJourney.planBulkFiling(assignments, journey),
+      plan: globalThis.NeatMindJourney.planBulkFiling(assignments, journey),
       journey,
       usedLocalClassification: false,
       retryingFileIds: new Set(),
@@ -1199,7 +1341,7 @@ async function handleBulkImportSelected(event) {
         Object.assign(record, {
           fileName: String(file.name || source.title || "Local document").slice(0, 180),
           title: source.title || file.name,
-          excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
+          excerpt: globalThis.NeatMindJourney.buildClassificationExcerpt(source.text),
           source,
           detectedChapters: normalizeImportedChapterCandidates(source),
           status: "ready",
@@ -1230,7 +1372,7 @@ async function handleBulkImportSelected(event) {
       try {
         classifiedAssignments = await classifyImportSourcesWithBackend(readableFiles, journey);
       } catch {
-        classifiedAssignments = globalThis.ExamCramJourney.classifySourcesLocally(readableFiles, journey);
+        classifiedAssignments = globalThis.NeatMindJourney.classifySourcesLocally(readableFiles, journey);
         usedLocalClassification = true;
       }
     }
@@ -1260,7 +1402,7 @@ async function handleBulkImportSelected(event) {
       return { ...assignment };
     });
     refreshImportDuplicateAssignments({ files, assignments: plannedAssignments }, journey);
-    const plan = globalThis.ExamCramJourney.planBulkFiling(plannedAssignments, journey);
+    const plan = globalThis.NeatMindJourney.planBulkFiling(plannedAssignments, journey);
     pending.assignments = plannedAssignments;
     pending.plan = plan;
     pending.usedLocalClassification = usedLocalClassification;
@@ -1318,7 +1460,7 @@ async function classifyImportSourcesWithBackend(files, journey) {
     body: JSON.stringify({
       files: files.map(({ fileId, excerpt }) => ({ fileId, excerpt })),
       existingChapters: journey.chapters.map((chapter) => chapter.title),
-      chapterHints: globalThis.ExamCramJourney.buildChapterClassificationHints(journey)
+      chapterHints: globalThis.NeatMindJourney.buildChapterClassificationHints(journey)
     })
   });
   const payload = await response.json().catch(() => ({}));
@@ -1364,7 +1506,7 @@ function isImportSourceAlreadySaved(file, assignment, journey) {
   if (importKeys.length) {
     return importKeys.every((importKey) => Boolean(findImportChapterByKey(journey, importKey)));
   }
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, assignment?.chapterTitle);
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, assignment?.chapterTitle);
   const sourceFingerprint = String(file?.source?.fingerprint || file?.source?.sourceFingerprint || "");
   return Boolean(sourceFingerprint && chapter?.sources.some((source) => source.fingerprint === sourceFingerprint));
 }
@@ -1782,7 +1924,7 @@ function renderImportReviewRow(entry, pending) {
       chapter.title.toLowerCase() === select.value.toLowerCase()
     ));
     assignment.reason = "Assigned by you during import review.";
-    pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
+    pending.plan = globalThis.NeatMindJourney.planBulkFiling(pending.assignments, pending.journey);
     renderImportReview();
   });
   const move = document.createElement("button");
@@ -1839,7 +1981,7 @@ function rebuildPendingImportPlan(pending) {
     };
   });
   refreshImportDuplicateAssignments(pending, pending.journey);
-  pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
+  pending.plan = globalThis.NeatMindJourney.planBulkFiling(pending.assignments, pending.journey);
 }
 
 function removeImportReviewFile(fileId) {
@@ -1873,7 +2015,7 @@ async function retryImportReviewFile(fileId) {
     const readableFile = {
       ...file,
       title: source.title || file.fileName,
-      excerpt: globalThis.ExamCramJourney.buildClassificationExcerpt(source.text),
+      excerpt: globalThis.NeatMindJourney.buildClassificationExcerpt(source.text),
       source,
       detectedChapters: normalizeImportedChapterCandidates(source),
       status: "ready",
@@ -1885,7 +2027,7 @@ async function retryImportReviewFile(fileId) {
     try {
       assignments = await classifyImportSourcesWithBackend([readableFile], pending.journey);
     } catch {
-      assignments = globalThis.ExamCramJourney.classifySourcesLocally([readableFile], pending.journey);
+      assignments = globalThis.NeatMindJourney.classifySourcesLocally([readableFile], pending.journey);
       pending.usedLocalClassification = true;
     }
     if (pending.cancelled || state.pendingImport !== pending || !pending.files.includes(file)) return;
@@ -1962,7 +2104,7 @@ async function handleConfirmImport() {
   try {
     pending.journey = await getJourney();
     refreshImportDuplicateAssignments(pending, pending.journey);
-    pending.plan = globalThis.ExamCramJourney.planBulkFiling(pending.assignments, pending.journey);
+    pending.plan = globalThis.NeatMindJourney.planBulkFiling(pending.assignments, pending.journey);
     if (pending.plan.blockedCount > 0) {
       renderImportReview();
       showStatus("Your Journey changed during review. Reassign the newly blocked files before confirming.", true);
@@ -2018,7 +2160,7 @@ async function handleConfirmImport() {
         try {
           const added = await saveImportedSourceToChapter(chapterTitle, source, pending.journey);
           pending.journey = added.journey;
-          const chapter = globalThis.ExamCramJourney.findChapter(added.journey, added.result?.chapterId);
+          const chapter = globalThis.NeatMindJourney.findChapter(added.journey, added.result?.chapterId);
           if (added.result?.duplicate) {
             duplicateCount += 1;
             continue;
@@ -2143,7 +2285,7 @@ async function startImportNoteQueue(chapterIds) {
   try {
     const journey = await getJourney();
     const rows = requestedIds.map((chapterId) => {
-      const chapter = globalThis.ExamCramJourney.findChapter(journey, chapterId);
+      const chapter = globalThis.NeatMindJourney.findChapter(journey, chapterId);
       return chapter ? {
         chapterId: chapter.id,
         title: chapter.title,
@@ -2200,7 +2342,7 @@ async function runImportNoteQueueRow(queue, row) {
     row.status = "failed";
     row.message = error?.message || "Visual note generation failed.";
     const journey = await getJourney().catch(() => null);
-    const chapter = journey ? globalThis.ExamCramJourney.findChapter(journey, row.chapterId) : null;
+    const chapter = journey ? globalThis.NeatMindJourney.findChapter(journey, row.chapterId) : null;
     const retainedSuccess = Boolean(chapter?.sessions?.some((session) => session.hasVisualNote));
     await updateImportChapterResourceStatus(
       row.chapterId,
@@ -2330,8 +2472,8 @@ async function detectActiveSource() {
     tab = await getActiveTab();
     if (detectionSequence !== state.sourceDetectionSequence) return false;
     if (!Number.isInteger(tab?.id)) throw new Error("Open an HTML page, PDF document, or video.");
-    const Reader = globalThis.ExamCramDocumentReader;
-    if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions.");
+    const Reader = globalThis.NeatMindDocumentReader;
+    if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions.");
     const descriptor = Reader.classifyTabDocument(tab.url || "");
     documentDescriptor = descriptor;
     if (descriptor.local || descriptor.kind === "pdf") {
@@ -2380,17 +2522,17 @@ async function detectActiveSource() {
   } catch (error) {
     if (detectionSequence !== state.sourceDetectionSequence) return false;
     const activeUrlIsHidden = error?.code === "UNSUPPORTED_DOCUMENT_URL" && !String(tab?.url || "").trim();
-    const toolbarGuidance = "Exam-Cram cannot see this page yet. Click the Exam-Cram toolbar icon while this tab is active, then return to the panel.";
+    const toolbarGuidance = "NeatMind cannot see this page yet. Click the NeatMind toolbar icon while this tab is active, then return to the panel.";
     state.sourceDetectionError = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
     state.sourceVisibilityNeedsToolbar = activeUrlIsHidden;
     reconcileTranscriptBinding(null);
     state.detectedSource = null;
     elements.activeSourceIcon.textContent = "!";
-    elements.activeSourceTitle.textContent = activeUrlIsHidden ? "Open this page from the Exam-Cram toolbar" : "Source unavailable";
+    elements.activeSourceTitle.textContent = activeUrlIsHidden ? "Open this page from the NeatMind toolbar" : "Source unavailable";
     elements.activeSourceMeta.textContent = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
     if (activeUrlIsHidden) {
       elements.accessBanner?.classList.add("hidden");
-      setStudyPageActionCopy("Open from the toolbar", "Click the Exam-Cram toolbar icon on this tab to grant one-time page access.");
+      setStudyPageActionCopy("Open from the toolbar", "Click the NeatMind toolbar icon on this tab to grant one-time page access.");
     }
     const permissionProblem = /cannot access|cannot read|host permission|permission/i.test(error?.message || "");
     const hostname = (() => {
@@ -2524,7 +2666,7 @@ async function readCurrentVideoIdentity(tabId) {
 }
 
 async function extractCurrentVideo({ allowAutomatic = true } = {}) {
-  const pastedSegments = globalThis.ExamCramJourney?.parseTimestampedTranscript(elements.videoTranscriptInput?.value || "") || [];
+  const pastedSegments = globalThis.NeatMindJourney?.parseTimestampedTranscript(elements.videoTranscriptInput?.value || "") || [];
   if (!hasChromeTabs() || !hasChromeScripting()) {
     if (pastedSegments.length >= 3) {
       const rawText = pastedSegments.map((segment) => `[${formatTimestamp(segment.startMs / 1000)}] ${segment.text}`).join("\n");
@@ -2587,12 +2729,12 @@ async function extractCurrentVideo({ allowAutomatic = true } = {}) {
   if (segments.length < 3 && identity && state.videoCaptureState?.status === "ready") {
     const snapshot = makeVideoSourceSnapshot(tab, identity);
     const captureSnapshot = state.videoCaptureState.sourceSnapshot;
-    if (globalThis.ExamCramVideo?.sourceSnapshotsMatch(captureSnapshot, snapshot)) {
+    if (globalThis.NeatMindVideo?.sourceSnapshotsMatch(captureSnapshot, snapshot)) {
       automaticTranscript = state.videoCaptureState.result;
       segments = automaticTranscript?.segments || [];
     }
   }
-  segments = globalThis.ExamCramJourney?.normalizeTranscriptSegments(segments) || [];
+  segments = globalThis.NeatMindJourney?.normalizeTranscriptSegments(segments) || [];
   if (segments.length < 3) {
     const captureStatus = state.videoCaptureState?.status;
     if (["starting", "recording", "paused", "processing"].includes(captureStatus)) {
@@ -2614,7 +2756,7 @@ async function extractCurrentVideo({ allowAutomatic = true } = {}) {
       error.code = state.videoCaptureState.errorCode || "VIDEO_CAPTURE_FAILED";
       throw error;
     }
-    if (identity && globalThis.ExamCramVideo) {
+    if (identity && globalThis.NeatMindVideo) {
       const error = new Error(`${automaticTranscriptError ? `${automaticTranscriptError} ` : ""}No usable captions were found. Auto-transcribe this tab's audio, or paste at least three timestamped lines.`);
       error.code = "VIDEO_CAPTURE_REQUIRED";
       throw error;
@@ -2655,8 +2797,8 @@ async function extractCurrentVideo({ allowAutomatic = true } = {}) {
 }
 
 function makeVideoSourceSnapshot(tab, identity) {
-  if (!globalThis.ExamCramVideo || !identity) return null;
-  return globalThis.ExamCramVideo.normalizeSourceSnapshot({
+  if (!globalThis.NeatMindVideo || !identity) return null;
+  return globalThis.NeatMindVideo.normalizeSourceSnapshot({
     tabId: tab?.id,
     url: tab?.url || identity.url,
     title: identity.title || tab?.title,
@@ -2693,7 +2835,7 @@ async function requestAutomaticYouTubeTranscript(tab, identity) {
   if (!response.ok) {
     throw new Error(payload.error || "Gemini could not analyze this public YouTube URL. Use explicit tab-audio transcription instead.");
   }
-  const normalizedSegments = globalThis.ExamCramJourney?.normalizeTranscriptSegments(payload.segments) || [];
+  const normalizedSegments = globalThis.NeatMindJourney?.normalizeTranscriptSegments(payload.segments) || [];
   if (normalizedSegments.length < 3) {
     throw new Error("Gemini did not return enough timestamped YouTube content. Use explicit tab-audio transcription instead.");
   }
@@ -2826,8 +2968,8 @@ function openVideoCaptureConsent() {
 
 async function handleStartVideoCapture(event) {
   event?.preventDefault();
-  if (!globalThis.ExamCramVideo) {
-    showStatus("Video capture tools did not load. Reload Exam-Cram from chrome://extensions.", true);
+  if (!globalThis.NeatMindVideo) {
+    showStatus("Video capture tools did not load. Reload NeatMind from chrome://extensions.", true);
     return;
   }
   const detectedSource = state.detectedSource;
@@ -2857,8 +2999,8 @@ async function handleStartVideoCapture(event) {
     if (!identity) throw new Error("The current page no longer has a detectable video.");
     if (identity.paused) throw new Error("Play the video first, then start automatic transcription.");
     const sourceSnapshot = makeVideoSourceSnapshot(tab, identity);
-    if (!globalThis.ExamCramVideo.sourceSnapshotsMatch(expectedSourceSnapshot, sourceSnapshot)) {
-      const error = new Error("The page or video changed while Exam-Cram was checking it. Refresh the source and try again.");
+    if (!globalThis.NeatMindVideo.sourceSnapshotsMatch(expectedSourceSnapshot, sourceSnapshot)) {
+      const error = new Error("The page or video changed while NeatMind was checking it. Refresh the source and try again.");
       error.code = "CAPTURE_SOURCE_CHANGED";
       throw error;
     }
@@ -2874,14 +3016,14 @@ async function handleStartVideoCapture(event) {
       recording: !identity.paused
     });
     if (authorization?.protocolVersion !== 3) {
-      const error = new Error("Exam-Cram's loaded video worker is out of date. Open chrome://extensions, click Reload for Exam-Cram, then reopen the video and try again.");
+      const error = new Error("NeatMind's loaded video worker is out of date. Open chrome://extensions, click Reload for NeatMind, then reopen the video and try again.");
       error.code = "VIDEO_WORKER_RELOAD_REQUIRED";
       throw error;
     }
     state.videoCaptureAuthorization = authorization;
     renderVideoCaptureAuthorization();
     elements.reloadExtensionButton?.classList.add("hidden");
-    showStatus("Tab audio is ready. Click the Exam-Cram toolbar icon once on this video tab; recording will start automatically.");
+    showStatus("Tab audio is ready. Click the NeatMind toolbar icon once on this video tab; recording will start automatically.");
   } catch (error) {
     const message = error.message || "Automatic transcription could not start.";
     if (elements.videoCaptureDialogStatus) {
@@ -2901,9 +3043,9 @@ function renderVideoCaptureAuthorization() {
   scheduleVideoCaptureAuthorizationExpiry(authorization);
   if (!authorization || !elements.videoCaptureDialogStatus) return;
   const messages = {
-    "awaiting-toolbar": "Ready. Keep this video tab active, then click the Exam-Cram toolbar icon once. Recording starts automatically.",
+    "awaiting-toolbar": "Ready. Keep this video tab active, then click the NeatMind toolbar icon once. Recording starts automatically.",
     authorizing: "Chrome authorized this tab. Starting the private offscreen recorder...",
-    "wrong-tab": authorization.message || "Return to the armed video tab and click the Exam-Cram toolbar icon there.",
+    "wrong-tab": authorization.message || "Return to the armed video tab and click the NeatMind toolbar icon there.",
     error: authorization.message || "Chrome could not authorize this tab. Keep the video active and try again.",
     expired: authorization.message || "The tab-audio request expired. Press Start tab audio again, then click the toolbar icon within one minute.",
     cleared: authorization.message || "The pending tab-audio request was cancelled."
@@ -2977,11 +3119,11 @@ function handleVideoCaptureDialogClosed() {
 
 function handleReloadExtension() {
   if (!globalThis.chrome?.runtime?.reload) {
-    showStatus("Open chrome://extensions and click Reload for Exam-Cram.", true);
+    showStatus("Open chrome://extensions and click Reload for NeatMind.", true);
     return;
   }
   if (elements.videoCaptureDialogStatus) {
-    elements.videoCaptureDialogStatus.textContent = "Reloading Exam-Cram. Reopen the side panel on the playing video when it finishes.";
+    elements.videoCaptureDialogStatus.textContent = "Reloading NeatMind. Reopen the side panel on the playing video when it finishes.";
   }
   globalThis.chrome.runtime.reload();
 }
@@ -3022,10 +3164,10 @@ async function handleBuildCapturedVideoLesson() {
     const identity = await readCurrentVideoIdentity(tab?.id);
     if (!identity) throw new Error("Return to the original video before building this lesson.");
     const currentSnapshot = makeVideoSourceSnapshot(tab, identity);
-    if (!globalThis.ExamCramVideo.sourceSnapshotsMatch(capture.sourceSnapshot, currentSnapshot)) {
+    if (!globalThis.NeatMindVideo.sourceSnapshotsMatch(capture.sourceSnapshot, currentSnapshot)) {
       throw new Error("This transcript belongs to a different video. Return to its original tab before building the lesson.");
     }
-    const segments = globalThis.ExamCramJourney.normalizeTranscriptSegments(capture.result.segments);
+    const segments = globalThis.NeatMindJourney.normalizeTranscriptSegments(capture.result.segments);
     const rawText = segments
       .map((segment) => `[${formatTimestamp(segment.startMs / 1000)}] ${segment.text}`)
       .join("\n")
@@ -3066,7 +3208,7 @@ async function handleBuildCapturedVideoLesson() {
 }
 
 async function loadVideoCaptureState() {
-  if (!globalThis.chrome?.runtime?.sendMessage || !globalThis.ExamCramVideo) return;
+  if (!globalThis.chrome?.runtime?.sendMessage || !globalThis.NeatMindVideo) return;
   try {
     state.videoCaptureState = await sendVideoCaptureMessage({ type: "VIDEO_CAPTURE_GET_STATE" });
   } catch {
@@ -3076,7 +3218,7 @@ async function loadVideoCaptureState() {
 }
 
 async function loadVideoCaptureAuthorizationState() {
-  if (!globalThis.chrome?.runtime?.sendMessage || !globalThis.ExamCramVideo) return;
+  if (!globalThis.chrome?.runtime?.sendMessage || !globalThis.NeatMindVideo) return;
   try {
     state.videoCaptureAuthorization = await sendVideoCaptureMessage({ type: "VIDEO_CAPTURE_GET_AUTHORIZATION" });
   } catch {
@@ -3102,8 +3244,8 @@ function sendVideoCaptureMessage(message) {
         const errorPhase = message?.type === "VIDEO_CAPTURE_ARM"
           ? "video worker authorization"
           : "video worker message";
-        const mappedError = globalThis.ExamCramVideo?.toCaptureStartError
-          ? globalThis.ExamCramVideo.toCaptureStartError(rawError, errorPhase)
+        const mappedError = globalThis.NeatMindVideo?.toCaptureStartError
+          ? globalThis.NeatMindVideo.toCaptureStartError(rawError, errorPhase)
           : rawError;
         reject(mappedError);
         return;
@@ -3163,7 +3305,7 @@ function renderVideoCaptureState() {
 }
 
 async function handleAddCurrentSource() {
-  if (!globalThis.ExamCramJourney) return;
+  if (!globalThis.NeatMindJourney) return;
   setBusy(true, "Saving this source to your journey...");
   try {
     const chapterBinding = getSelectedChapterBinding(elements.pageChapterInput);
@@ -3182,7 +3324,7 @@ async function handleAddCurrentSource() {
       };
     } else {
       const page = state.importedDocument || await extractCurrentPage();
-      globalThis.ExamCramDocumentReader.assertReadableContent(page.text, page.documentType || "html");
+      globalThis.NeatMindDocumentReader.assertReadableContent(page.text, page.documentType || "html");
       source = {
         type: "webpage",
         title: page.title,
@@ -3200,7 +3342,7 @@ async function handleAddCurrentSource() {
     });
     selectChapterAcrossControls(added.result.chapterId);
     await savePanelState();
-    const chapter = globalThis.ExamCramJourney.findChapter(added.journey, added.result.chapterId);
+    const chapter = globalThis.NeatMindJourney.findChapter(added.journey, added.result.chapterId);
     const chapterTitle = chapter?.title || chapterBinding.chapterTitle;
     showStatus(added.result.duplicate
       ? `This exact source is already saved in ${chapterTitle}.`
@@ -3626,8 +3768,8 @@ async function createStudyNote(input) {
 
 function finalizeStudyNoteGrounding(note, input) {
   let grounded = normalizeSavedVisualNote(note, input);
-  if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
-    grounded = globalThis.ExamCramJourney.attachCollectionProvenance(
+  if (input.sourceType === "collection" && globalThis.NeatMindJourney) {
+    grounded = globalThis.NeatMindJourney.attachCollectionProvenance(
       grounded,
       input.collectionSources,
       input.rawText
@@ -3937,10 +4079,10 @@ async function handleGenerateQuiz(event) {
       localFallbackError = error;
       quiz = generateLocalQuizArtifact(quizRequest);
     }
-    if (input.sourceType === "video" && globalThis.ExamCramJourney) {
-      quiz = globalThis.ExamCramJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
-    } else if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
-      quiz = globalThis.ExamCramJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
+    if (input.sourceType === "video" && globalThis.NeatMindJourney) {
+      quiz = globalThis.NeatMindJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
+    } else if (input.sourceType === "collection" && globalThis.NeatMindJourney) {
+      quiz = globalThis.NeatMindJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
     }
     quiz = normalizeClientQuizArtifact(quiz, quizRequest, { allowConceptInference: quiz?.generator === "local" });
     validateGeneratedQuiz(quiz, quizRequest, "Quiz generation");
@@ -4057,10 +4199,10 @@ async function handleGenerateRecoveryQuiz() {
       usedLocalFallback = true;
       quiz = generateLocalRecoveryQuizArtifact(recoveryRequest);
     }
-    if (input.sourceType === "video" && globalThis.ExamCramJourney) {
-      quiz = globalThis.ExamCramJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
-    } else if (input.sourceType === "collection" && globalThis.ExamCramJourney) {
-      quiz = globalThis.ExamCramJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
+    if (input.sourceType === "video" && globalThis.NeatMindJourney) {
+      quiz = globalThis.NeatMindJourney.attachVideoProvenance(quiz, input.videoSegments, input.sourceId || "current-video");
+    } else if (input.sourceType === "collection" && globalThis.NeatMindJourney) {
+      quiz = globalThis.NeatMindJourney.attachCollectionProvenance(quiz, input.collectionSources, input.rawText);
     }
     quiz = normalizeClientQuizArtifact(quiz, recoveryRequest, { allowConceptInference: false });
     validateGeneratedQuiz(quiz, recoveryRequest, "Recovery quiz");
@@ -4548,7 +4690,7 @@ function getRelatedConceptIds(primaryConceptId, visualModel) {
 function inferClientEvidencePage(question, input) {
   const isPdf = input.documentType === "pdf" || question?.sourceRef?.documentType === "pdf";
   if (!isPdf) return 0;
-  const inferPage = globalThis.ExamCramCheatSheet?.inferPdfPage;
+  const inferPage = globalThis.NeatMindCheatSheet?.inferPdfPage;
   const inferred = input.documentType === "pdf" && typeof inferPage === "function"
     ? inferPage(question?.sourceText || question?.explanation || "", input.rawText)
     : null;
@@ -4855,14 +4997,14 @@ async function createStudySession(input) {
   await verifyGeneratedPageSource(sessionInput);
   if (generationToken !== state.generationToken) return;
 
-  if (sessionInput.sourceType === "video" && globalThis.ExamCramJourney) {
-    session = globalThis.ExamCramJourney.attachVideoProvenance(
+  if (sessionInput.sourceType === "video" && globalThis.NeatMindJourney) {
+    session = globalThis.NeatMindJourney.attachVideoProvenance(
       session,
       sessionInput.videoSegments,
       sessionInput.sourceId || "current-video"
     );
-  } else if (sessionInput.sourceType === "collection" && globalThis.ExamCramJourney) {
-    session = globalThis.ExamCramJourney.attachCollectionProvenance(
+  } else if (sessionInput.sourceType === "collection" && globalThis.NeatMindJourney) {
+    session = globalThis.NeatMindJourney.attachCollectionProvenance(
       session,
       sessionInput.collectionSources,
       sessionInput.rawText
@@ -4942,8 +5084,8 @@ async function createStudySession(input) {
 async function verifyGeneratedPageSource(input) {
   if (input.sourceType === "collection") {
     const journey = await getJourney();
-    const chapter = globalThis.ExamCramJourney?.findChapter(journey, input.chapterId);
-    if (!chapter || globalThis.ExamCramJourney.sourceRevisionHash(chapter) !== input.sourceRevisionHash) {
+    const chapter = globalThis.NeatMindJourney?.findChapter(journey, input.chapterId);
+    if (!chapter || globalThis.NeatMindJourney.sourceRevisionHash(chapter) !== input.sourceRevisionHash) {
       throw new Error("The chapter sources changed while the lesson was being generated. Build it again to use the latest sources.");
     }
     return;
@@ -4967,7 +5109,7 @@ async function verifyGeneratedPageSource(input) {
     }
     if (input.automaticTranscript) {
       const currentSnapshot = makeVideoSourceSnapshot(activeTab, identity);
-      if (!input.sourceSnapshot || !globalThis.ExamCramVideo?.sourceSnapshotsMatch(input.sourceSnapshot, currentSnapshot)) {
+      if (!input.sourceSnapshot || !globalThis.NeatMindVideo?.sourceSnapshotsMatch(input.sourceSnapshot, currentSnapshot)) {
         throw new Error("The automatically transcribed video changed while the lesson was being generated.");
       }
       if (input.transcriptProvenance === "audio-ai") {
@@ -4982,7 +5124,7 @@ async function verifyGeneratedPageSource(input) {
         url: activeTab.url,
         mediaId: identity?.mediaId || ""
       };
-      const currentSegments = globalThis.ExamCramJourney?.parseTimestampedTranscript(
+      const currentSegments = globalThis.NeatMindJourney?.parseTimestampedTranscript(
         elements.videoTranscriptInput?.value || ""
       ) || [];
       if (!transcriptBindingMatches(state.transcriptBinding, bindingSource)
@@ -5007,7 +5149,7 @@ async function verifyGeneratedPageSource(input) {
 }
 
 function fingerprintTranscriptSegments(segments) {
-  const normalized = globalThis.ExamCramJourney?.normalizeTranscriptSegments(segments) || [];
+  const normalized = globalThis.NeatMindJourney?.normalizeTranscriptSegments(segments) || [];
   const rawText = normalized
     .map((segment) => `[${formatTimestamp(segment.startMs / 1000)}] ${segment.text}`)
     .join("\n")
@@ -5742,12 +5884,12 @@ function makeContentFingerprint(value) {
 }
 
 async function getPdfJs() {
-  if (globalThis.ExamCramPdfVendor?.pdfjs) return globalThis.ExamCramPdfVendor.pdfjs;
-  if (globalThis.ExamCramPdfVendorReady) {
-    const vendor = await globalThis.ExamCramPdfVendorReady;
+  if (globalThis.NeatMindPdfVendor?.pdfjs) return globalThis.NeatMindPdfVendor.pdfjs;
+  if (globalThis.NeatMindPdfVendorReady) {
+    const vendor = await globalThis.NeatMindPdfVendorReady;
     if (vendor?.pdfjs) return vendor.pdfjs;
   }
-  throw new Error("The local PDF reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  throw new Error("The local PDF reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
 }
 
 function getPdfWorkerUrl() {
@@ -5779,7 +5921,7 @@ function callChromeBooleanMethod(context, method, args = []) {
 }
 
 async function ensureDocumentUrlAccess(sourceUrl, { request = false } = {}) {
-  const Reader = globalThis.ExamCramDocumentReader;
+  const Reader = globalThis.NeatMindDocumentReader;
   const url = new URL(sourceUrl);
   if (url.protocol === "file:") {
     const declared = globalThis.chrome?.runtime?.getManifest?.()?.optional_host_permissions || [];
@@ -5803,17 +5945,17 @@ async function ensureDocumentUrlAccess(sourceUrl, { request = false } = {}) {
   if (contained) return true;
   const hostname = url.hostname.replace(/^www\./i, "") || "this document host";
   if (!request || !globalThis.chrome?.permissions?.request) {
-    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", `Permission needed for this document. Allow Exam-Cram access to ${hostname} and try again.`);
+    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", `Permission needed for this document. Allow NeatMind access to ${hostname} and try again.`);
   }
   const granted = await callChromeBooleanMethod(globalThis.chrome.permissions, globalThis.chrome.permissions.request, [{ origins: [origin] }]);
   if (!granted) {
-    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_DENIED", `Document access was not granted for ${hostname}. The side panel will stay open, but Exam-Cram cannot read it.`);
+    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_DENIED", `Document access was not granted for ${hostname}. The side panel will stay open, but NeatMind cannot read it.`);
   }
   return true;
 }
 
 async function fetchBoundedActiveDocument(sourceUrl) {
-  const Reader = globalThis.ExamCramDocumentReader;
+  const Reader = globalThis.NeatMindDocumentReader;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 15000);
   try {
@@ -5875,7 +6017,7 @@ async function fetchBoundedActiveDocument(sourceUrl) {
 }
 
 async function extractPdfDocumentFromTab(tab, descriptor, { probe = false } = {}) {
-  const Reader = globalThis.ExamCramDocumentReader;
+  const Reader = globalThis.NeatMindDocumentReader;
   await ensureDocumentUrlAccess(descriptor.url, { request: true });
   const fetched = await fetchBoundedActiveDocument(descriptor.url);
   const kind = Reader.classifyFetchedDocument({
@@ -5887,7 +6029,7 @@ async function extractPdfDocumentFromTab(tab, descriptor, { probe = false } = {}
   if (kind !== "pdf") {
     throw new Reader.DocumentReaderError(
       probe ? "NOT_PDF_DOCUMENT" : "UNSUPPORTED_DOCUMENT",
-      probe ? "The active source is HTML, not PDF." : "Exam-Cram can read HTML pages and PDF documents only."
+      probe ? "The active source is HTML, not PDF." : "NeatMind can read HTML pages and PDF documents only."
     );
   }
   const parsed = await Reader.extractPdfText(fetched.bytes, await getPdfJs(), {
@@ -5919,7 +6061,7 @@ async function extractHtmlDocumentFromTab(tab) {
     target: { tabId: tab.id, allFrames: true },
     files: ["document-frame-reader.js"]
   });
-  return globalThis.ExamCramDocumentReader.mergeFrameSnapshots(frameResults, {
+  return globalThis.NeatMindDocumentReader.mergeFrameSnapshots(frameResults, {
     title: tab.title || "HTML document",
     url: tab.url
   });
@@ -5929,8 +6071,8 @@ async function extractCurrentPage() {
   if (!hasChromeTabs() || !hasChromeScripting()) {
     throw new Error("Current-page reading is available in the browser extension. You can still use Open HTML or PDF file here.");
   }
-  const Reader = globalThis.ExamCramDocumentReader;
-  if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  const Reader = globalThis.NeatMindDocumentReader;
+  if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const tab = await getActiveTab();
     if (!Number.isInteger(tab?.id)) throw new Error("Open an HTML page or PDF document before creating a visual note.");
@@ -5950,7 +6092,7 @@ async function extractCurrentPage() {
       if (attempt === 0) continue;
       const message = String(error?.message || "");
       if (/cannot access|cannot read|host permission|permission/i.test(message)) {
-        throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", "Permission needed for this page. Allow Exam-Cram access to this site and try again.");
+        throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", "Permission needed for this page. Allow NeatMind access to this site and try again.");
       }
       throw new Reader.DocumentReaderError("HTML_READ_FAILED", "Chrome could not read this HTML page. Protected browser pages and extension galleries are not supported.");
     }
@@ -6015,7 +6157,7 @@ function renderNoteVisual(note) {
 }
 
 function normalizeStudyCheatSheet(artifact = {}, sourceContext = {}) {
-  const api = globalThis.ExamCramCheatSheet;
+  const api = globalThis.NeatMindCheatSheet;
   if (!api?.normalizeCheatSheet) return artifact.cheatSheet || null;
   const normalize = sourceContext.forRender && typeof api.normalizeCheatSheetForRender === "function"
     ? api.normalizeCheatSheetForRender
@@ -6055,7 +6197,7 @@ function renderCheatSheet(artifact = {}) {
     elements.cheatSheetTableHost.replaceChildren();
     return;
   }
-  const api = globalThis.ExamCramCheatSheet;
+  const api = globalThis.NeatMindCheatSheet;
   if (!api?.hasUsableCheatSheet?.(sheet)) {
     elements.cheatSheetBlock.classList.add("hidden");
     elements.cheatSheetTableHost.replaceChildren();
@@ -8698,10 +8840,10 @@ async function handleSubmitQuiz() {
   state.currentSession.weakTopics = weakTopics;
   state.currentSession.submittedAt = submittedAt;
   state.currentSession.questionAttempts = buildQuestionAttempts(state.currentSession, submittedAt);
-  if (globalThis.ExamCramJourney?.rankWeakConcepts) {
+  if (globalThis.NeatMindJourney?.rankWeakConcepts) {
     const journey = await getJourney().catch(() => null);
     if (journey) {
-      state.currentSession.weakConceptDiagnosis = globalThis.ExamCramJourney.rankWeakConcepts(journey, {
+      state.currentSession.weakConceptDiagnosis = globalThis.NeatMindJourney.rankWeakConcepts(journey, {
         noteId: state.currentSession.noteId || state.currentSession.id,
         sourceFingerprint: state.currentSession.sourceFingerprint || state.currentSession.sourceBinding?.fingerprint || "",
         currentAttempts: state.currentSession.questionAttempts,
@@ -8724,8 +8866,8 @@ async function handleSubmitQuiz() {
       state.currentSession.questionAttempts
     );
     if (recorded?.chapterId) state.currentSession.journeyChapterId = recorded.chapterId;
-    if (recorded?.journey && globalThis.ExamCramJourney?.rankWeakConcepts) {
-      state.currentSession.weakConceptDiagnosis = globalThis.ExamCramJourney.rankWeakConcepts(recorded.journey, {
+    if (recorded?.journey && globalThis.NeatMindJourney?.rankWeakConcepts) {
+      state.currentSession.weakConceptDiagnosis = globalThis.NeatMindJourney.rankWeakConcepts(recorded.journey, {
         noteId: state.currentSession.noteId || state.currentSession.id,
         sourceFingerprint: state.currentSession.sourceFingerprint || state.currentSession.sourceBinding?.fingerprint || "",
         currentAttempts: state.currentSession.questionAttempts,
@@ -9104,32 +9246,32 @@ async function highlightSourceText(sourceText, { announce = true, expectedSource
           matchedElement?.scrollIntoView({ behavior: "smooth", block: "center" });
 
           if (globalThis.CSS?.highlights && typeof globalThis.Highlight === "function") {
-            const styleId = "exam-cram-evidence-highlight-style";
+            const styleId = "neatmind-evidence-highlight-style";
             let style = document.getElementById(styleId);
             if (!style) {
               style = document.createElement("style");
               style.id = styleId;
-              style.textContent = "::highlight(exam-cram-evidence) { background: #fff3a3; color: #171200; text-decoration: underline 2px #f5c542; }";
+              style.textContent = "::highlight(neatmind-evidence) { background: #fff3a3; color: #171200; text-decoration: underline 2px #f5c542; }";
               document.documentElement.append(style);
             }
-            globalThis.CSS.highlights.delete("exam-cram-evidence");
-            globalThis.CSS.highlights.set("exam-cram-evidence", new globalThis.Highlight(range));
+            globalThis.CSS.highlights.delete("neatmind-evidence");
+            globalThis.CSS.highlights.set("neatmind-evidence", new globalThis.Highlight(range));
             matchedSelection.removeAllRanges();
-            setTimeout(() => globalThis.CSS?.highlights?.delete("exam-cram-evidence"), 12000);
+            setTimeout(() => globalThis.CSS?.highlights?.delete("neatmind-evidence"), 12000);
           }
           return true;
         };
 
         const highlight = (element) => {
           element.scrollIntoView({ behavior: "smooth", block: "center" });
-          element.setAttribute("data-exam-cram-highlight", "true");
+          element.setAttribute("data-neatmind-highlight", "true");
           element.style.transition = "background-color 180ms ease, outline 180ms ease";
           element.style.backgroundColor = "#fff3a3";
           element.style.outline = "3px solid #f5c542";
           setTimeout(() => {
             element.style.backgroundColor = "";
             element.style.outline = "";
-            element.removeAttribute("data-exam-cram-highlight");
+            element.removeAttribute("data-neatmind-highlight");
           }, 7000);
           return true;
         };
@@ -9357,7 +9499,7 @@ async function handleSaveArtifact() {
 
 async function handleOpenExport() {
   const item = getCurrentExportItem();
-  const exportApi = globalThis.ExamCramExport;
+  const exportApi = globalThis.NeatMindExport;
   if (!item || !exportApi?.createExportModel) {
     showStatus("Open a generated visual note before exporting.", true);
     return;
@@ -9540,26 +9682,26 @@ async function renderLibrary() {
 }
 
 async function getJourney() {
-  if (!globalThis.ExamCramJourney) return null;
+  if (!globalThis.NeatMindJourney) return null;
   try {
     const response = await sendJourneyWorkerMessage({ type: "JOURNEY_GET" });
-    if (response?.journey) return globalThis.ExamCramJourney.normalizeJourney(response.journey);
+    if (response?.journey) return globalThis.NeatMindJourney.normalizeJourney(response.journey);
   } catch {
     // Preview and older extension workers use the local storage fallback below.
   }
   const stored = await getStorage(STORAGE_KEYS.journey, null);
-  return globalThis.ExamCramJourney.normalizeJourney(stored || globalThis.ExamCramJourney.createJourney());
+  return globalThis.NeatMindJourney.normalizeJourney(stored || globalThis.NeatMindJourney.createJourney());
 }
 
 async function getStudyGoal() {
-  if (!globalThis.ExamCramJourney) return null;
+  if (!globalThis.NeatMindJourney) return null;
   const stored = await getStorage(STORAGE_KEYS.studyGoal, null);
-  return globalThis.ExamCramJourney.normalizeStudyGoal(stored);
+  return globalThis.NeatMindJourney.normalizeStudyGoal(stored);
 }
 
 async function saveStudyGoal(goal) {
-  if (!globalThis.ExamCramJourney) throw new Error("Study goal tools are unavailable.");
-  const normalized = globalThis.ExamCramJourney.normalizeStudyGoal(goal);
+  if (!globalThis.NeatMindJourney) throw new Error("Study goal tools are unavailable.");
+  const normalized = globalThis.NeatMindJourney.normalizeStudyGoal(goal);
   if (!normalized) throw new Error("The study goal could not be saved.");
   await setStorage(STORAGE_KEYS.studyGoal, normalized);
   return normalized;
@@ -9574,8 +9716,8 @@ async function saveJourney(journey) {
 function sendJourneyWorkerMessage(message) {
   if (!globalThis.chrome?.runtime?.sendMessage) {
     const stored = localStorage.getItem(STORAGE_KEYS.journey);
-    const current = stored ? JSON.parse(stored) : globalThis.ExamCramJourney.createJourney();
-    const outcome = globalThis.ExamCramJourneyWorker.reduceJourneyOperation(current, message, Date.now());
+    const current = stored ? JSON.parse(stored) : globalThis.NeatMindJourney.createJourney();
+    const outcome = globalThis.NeatMindJourneyWorker.reduceJourneyOperation(current, message, Date.now());
     if (outcome.changed) localStorage.setItem(STORAGE_KEYS.journey, JSON.stringify(outcome.journey));
     return Promise.resolve({ ok: true, journey: outcome.journey, result: outcome.result, duplicate: outcome.duplicate });
   }
@@ -9634,7 +9776,7 @@ async function loadJourney() {
         session: saved
       }, { journey });
       journey = recorded.journey;
-      const updatedChapter = globalThis.ExamCramJourney.findChapter(journey, recorded.result?.chapterId);
+      const updatedChapter = globalThis.NeatMindJourney.findChapter(journey, recorded.result?.chapterId);
       const updatedSession = updatedChapter?.sessions?.find((session) => session.id === saved.id);
       if (updatedSession) knownSessions.set(saved.id, updatedSession);
     } catch {
@@ -9643,9 +9785,9 @@ async function loadJourney() {
   }
   await updateJourneyChapterOptions(journey);
   const lastChapter = await getStorage(STORAGE_KEYS.lastChapter, "Current chapter");
-  const preferredChapter = globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id)
-    || globalThis.ExamCramJourney.findChapter(journey, journey.lastStudySource?.chapterId)
-    || globalThis.ExamCramJourney.findChapter(journey, lastChapter)
+  const preferredChapter = globalThis.NeatMindJourney.findChapter(journey, state.selectedChapter.id)
+    || globalThis.NeatMindJourney.findChapter(journey, journey.lastStudySource?.chapterId)
+    || globalThis.NeatMindJourney.findChapter(journey, lastChapter)
     || journey.chapters.at(-1)
     || null;
   selectChapterAcrossControls(preferredChapter?.id || "");
@@ -9738,7 +9880,7 @@ function buildJourneySourceFromStudyInput(input, item) {
 }
 
 async function recordLearningItem(item, chapterIdOrTitle, source = null, questionAttempts = []) {
-  if (!globalThis.ExamCramJourney || !item) return null;
+  if (!globalThis.NeatMindJourney || !item) return null;
   const chapterValue = String(chapterIdOrTitle || item.journeyChapterTitle || "Current chapter").trim() || "Current chapter";
   const recorded = await mutateJourney("JOURNEY_UPSERT_SESSION", {
     chapterIdOrTitle: chapterValue,
@@ -9758,7 +9900,7 @@ async function recordLearningItem(item, chapterIdOrTitle, source = null, questio
     } : null
   });
   const chapterId = recorded.result?.chapterId;
-  const chapter = globalThis.ExamCramJourney.findChapter(recorded.journey, chapterId);
+  const chapter = globalThis.NeatMindJourney.findChapter(recorded.journey, chapterId);
   if (chapter) await setStorage(STORAGE_KEYS.lastChapter, chapter.title);
   return { ...recorded.result, journey: recorded.journey };
 }
@@ -9820,7 +9962,7 @@ function buildStreakFlameIcon(streakDays) {
 }
 
 function buildStreakCalendarIcon(journey, now = Date.now()) {
-  const journeyUtils = globalThis.ExamCramJourney;
+  const journeyUtils = globalThis.NeatMindJourney;
   const activeDays = new Set((journey?.events || []).map((event) => event?.localDay).filter(Boolean));
   const dayMs = 24 * 60 * 60 * 1000;
   const todayKey = journeyUtils ? journeyUtils.localDayKey(new Date(now)) : "";
@@ -9879,7 +10021,7 @@ function buildDashboardStat(label, value, options = {}) {
 }
 
 function renderDashboardStats(journey, studyGoal, plan) {
-  const dueCount = globalThis.ExamCramJourney.getDueConcepts(journey, { now: Date.now(), limit: 50 }).length;
+  const dueCount = globalThis.NeatMindJourney.getDueConcepts(journey, { now: Date.now(), limit: 50 }).length;
   const streakDays = Math.max(0, Number(plan?.habit?.currentStreakDays) || 0);
   const stats = [
     buildDashboardStat("Current streak", String(streakDays), {
@@ -9904,7 +10046,7 @@ function renderDashboardStats(journey, studyGoal, plan) {
   const selectedChapterIds = new Set(studyGoal?.chapterIds || []);
   const selectedChapters = journey.chapters.filter((chapter) => selectedChapterIds.has(chapter.id));
   const chapterStats = selectedChapters.map((chapter) => {
-    const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
+    const status = globalThis.NeatMindJourney.getChapterStatus(chapter);
     const chip = createElement("span", `${chapter.title} · ${formatJourneyStatus(status)}`, "dashboard__chapter-chip");
     chip.dataset.status = status;
     return chip;
@@ -9913,7 +10055,7 @@ function renderDashboardStats(journey, studyGoal, plan) {
 }
 
 async function renderDashboard() {
-  if (!elements.dashboardGoalForm || !globalThis.ExamCramJourney) return;
+  if (!elements.dashboardGoalForm || !globalThis.NeatMindJourney) return;
   const [journey, storedFocus, savedItems, studyGoal] = await Promise.all([
     getJourney(),
     getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
@@ -9948,7 +10090,7 @@ async function renderDashboard() {
   elements.dashboardEmptyState.replaceChildren();
   const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
   const savedNoteIds = (Array.isArray(savedItems) ? savedItems : []).map((item) => item?.id);
-  const plan = globalThis.ExamCramJourney.buildStudyPlan(journey, focusHistory, { now: Date.now(), savedNoteIds, studyGoal });
+  const plan = globalThis.NeatMindJourney.buildStudyPlan(journey, focusHistory, { now: Date.now(), savedNoteIds, studyGoal });
   renderDashboardStats(journey, studyGoal, plan);
   elements.dashboardPlan.replaceChildren(buildTodayPlanSection(plan));
 }
@@ -9961,7 +10103,7 @@ async function handleSaveStudyGoal(event) {
     const timestamp = new Date().toISOString();
     const chapterIds = [...elements.dashboardChapterOptions.querySelectorAll('input[name="chapterIds"]:checked')]
       .map((checkbox) => checkbox.value);
-    const normalized = globalThis.ExamCramJourney.normalizeStudyGoal({
+    const normalized = globalThis.NeatMindJourney.normalizeStudyGoal({
       chapterIds,
       daysPerWeek: elements.dashboardDaysPerWeek.value,
       dailyMinutes: elements.dashboardDailyMinutes.value,
@@ -9981,7 +10123,7 @@ async function handleSaveStudyGoal(event) {
 }
 
 async function renderJourney() {
-  if (!elements.journeyRoute || !globalThis.ExamCramJourney) return;
+  if (!elements.journeyRoute || !globalThis.NeatMindJourney) return;
   const [journey, storedFocus, savedItems, journeyStudyGoal] = await Promise.all([
     getJourney(),
     getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
@@ -9993,12 +10135,12 @@ async function renderJourney() {
   if (journey.summary?.range && elements.journeyRange?.querySelector(`option[value="${journey.summary.range}"]`)) {
     elements.journeyRange.value = journey.summary.range;
   }
-  const metrics = globalThis.ExamCramJourney.getMetrics(journey, focusHistory);
-  const timelineChapters = globalThis.ExamCramJourney.orderChaptersByTimeline(journey.chapters);
+  const metrics = globalThis.NeatMindJourney.getMetrics(journey, focusHistory);
+  const timelineChapters = globalThis.NeatMindJourney.orderChaptersByTimeline(journey.chapters);
   const progressTone = getJourneyPerformanceTone(metrics.progressPercent, "progress");
   const averageTone = getJourneyPerformanceTone(metrics.averageScore, "average");
-  const progressSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.progressPercent, "progress");
-  const averageSandState = globalThis.ExamCramJourney.getHourglassSandState(metrics.averageScore, "average");
+  const progressSandState = globalThis.NeatMindJourney.getHourglassSandState(metrics.progressPercent, "progress");
+  const averageSandState = globalThis.NeatMindJourney.getHourglassSandState(metrics.averageScore, "average");
   const focusMinutesToday = sumTodayFocusMinutes(focusHistory);
   const focusTone = {
     key: "focus",
@@ -10058,8 +10200,8 @@ async function renderJourney() {
     return;
   }
 
-  if (!state.selectedChapter.id || !globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id)) {
-    const current = timelineChapters.find((chapter) => globalThis.ExamCramJourney.getChapterStatus(chapter) !== "completed");
+  if (!state.selectedChapter.id || !globalThis.NeatMindJourney.findChapter(journey, state.selectedChapter.id)) {
+    const current = timelineChapters.find((chapter) => globalThis.NeatMindJourney.getChapterStatus(chapter) !== "completed");
     selectChapterAcrossControls((current || timelineChapters[0]).id);
   }
 
@@ -10071,9 +10213,9 @@ async function renderJourney() {
   );
 
   const nodes = timelineChapters.map((chapter, index) => {
-    const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
+    const status = globalThis.NeatMindJourney.getChapterStatus(chapter);
     const isSelected = chapter.id === state.selectedChapter.id;
-    const activityTime = globalThis.ExamCramJourney.chapterTimelineTime(chapter);
+    const activityTime = globalThis.NeatMindJourney.chapterTimelineTime(chapter);
     const button = document.createElement("button");
     button.type = "button";
     button.className = "journey-node";
@@ -10099,7 +10241,7 @@ async function renderJourney() {
   elements.journeyRoute.replaceChildren(timelineHeading, ...nodes);
   renderJourneyChapterDetail(
     journey,
-    globalThis.ExamCramJourney.findChapter(journey, state.selectedChapter.id),
+    globalThis.NeatMindJourney.findChapter(journey, state.selectedChapter.id),
     savedItems
   );
   if (journey.summary) renderJourneySummary(journey.summary);
@@ -10187,7 +10329,7 @@ async function openTodayPlanChapterArtifact(step, options = {}) {
     getJourney(),
     getStorage(STORAGE_KEYS.sessions, [])
   ]);
-  const chapter = globalThis.ExamCramJourney.findChapter(journey, step.chapterId);
+  const chapter = globalThis.NeatMindJourney.findChapter(journey, step.chapterId);
   const sessionIds = new Set((chapter?.sessions || [])
     .map((session) => String(session?.id || "").trim())
     .filter(Boolean));
@@ -10197,8 +10339,8 @@ async function openTodayPlanChapterArtifact(step, options = {}) {
       const boundChapterId = String(artifact?.journeyChapterId || artifact?.sourceBinding?.chapterId || "").trim();
       return boundChapterId ? boundChapterId === chapter?.id : sessionIds.has(artifactId);
     })
-    .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
-      - globalThis.ExamCramJourney.sessionActivityTime(first));
+    .sort((first, second) => globalThis.NeatMindJourney.sessionActivityTime(second)
+      - globalThis.NeatMindJourney.sessionActivityTime(first));
   const target = newestFirst.find((artifact) => artifact?.questions?.length)
     || newestFirst[0];
   if (step.chapterId) selectChapterAcrossControls(step.chapterId);
@@ -10400,7 +10542,7 @@ function buildJourneyGauge(percent, tone) {
 }
 
 function sumTodayFocusMinutes(history) {
-  const journeyUtils = globalThis.ExamCramJourney;
+  const journeyUtils = globalThis.NeatMindJourney;
   if (!journeyUtils || !Array.isArray(history)) return 0;
   const todayKey = journeyUtils.localDayKey(new Date());
   return Math.round(history.reduce((total, item) => {
@@ -10499,8 +10641,8 @@ function renderJourneyMetric({ kind, label, value, detail, tone, sandState, hasM
     const sweep = `${Math.round(Math.max(0, Math.min(1, focusDial.fraction)) * 360)}deg`;
     const revealSweep = () => {
       dial.style.setProperty("--journey-focus-sweep", sweep);
-      if (globalThis.ExamCramFocus && state.focusState?.active) {
-        updateJourneyFocusInstrument(globalThis.ExamCramFocus.toPublicFocusState(state.focusState, Date.now()));
+      if (globalThis.NeatMindFocus && state.focusState?.active) {
+        updateJourneyFocusInstrument(globalThis.NeatMindFocus.toPublicFocusState(state.focusState, Date.now()));
       }
     };
     if (typeof requestAnimationFrame === "function") requestAnimationFrame(revealSweep);
@@ -10516,12 +10658,12 @@ function renderJourneyChapterDetail(journey, chapter, savedItems = []) {
     elements.journeyChapterDetail.replaceChildren();
     return;
   }
-  const status = globalThis.ExamCramJourney.getChapterStatus(chapter);
-  const visibleArtifacts = globalThis.ExamCramJourney.getChapterArtifactTimeline(chapter, savedItems);
+  const status = globalThis.NeatMindJourney.getChapterStatus(chapter);
+  const visibleArtifacts = globalThis.NeatMindJourney.getChapterArtifactTimeline(chapter, savedItems);
   const latestScored = [...chapter.sessions]
     .filter((session) => Number.isFinite(session.score))
-    .sort((first, second) => globalThis.ExamCramJourney.sessionActivityTime(second)
-      - globalThis.ExamCramJourney.sessionActivityTime(first))[0];
+    .sort((first, second) => globalThis.NeatMindJourney.sessionActivityTime(second)
+      - globalThis.NeatMindJourney.sessionActivityTime(first))[0];
   const heading = document.createElement("div");
   heading.append(
     createElement("strong", chapter.title),
@@ -10604,7 +10746,7 @@ function renderJourneyChapterDetail(journey, chapter, savedItems = []) {
         meta.append(
           createElement(
             "span",
-            formatDate(globalThis.ExamCramJourney.sessionActivityTime(session) || session.generatedAt),
+            formatDate(globalThis.NeatMindJourney.sessionActivityTime(session) || session.generatedAt),
             "journey-artifact-date"
           ),
           createElement("span", `From ${sourceLabel}`, "journey-artifact-source")
@@ -10785,11 +10927,11 @@ async function handleBuildChapterLesson(chapterId, options = {}) {
   startProgress("Preparing a cross-site chapter lesson...", 10);
   try {
     const journey = await getJourney();
-    const chapter = globalThis.ExamCramJourney.findChapter(journey, chapterId);
+    const chapter = globalThis.NeatMindJourney.findChapter(journey, chapterId);
     if (!chapter?.sources.length) throw new Error("Add at least one source to this chapter first.");
     const savedArtifacts = await getStorage(STORAGE_KEYS.sessions, []);
-    const collection = globalThis.ExamCramJourney.buildChapterCollectionPayload(chapter, savedArtifacts);
-    if (!globalThis.ExamCramDocumentReader.assessReadableContent(collection.text, "html").readable) {
+    const collection = globalThis.NeatMindJourney.buildChapterCollectionPayload(chapter, savedArtifacts);
+    if (!globalThis.NeatMindDocumentReader.assessReadableContent(collection.text, "html").readable) {
       throw new Error("The collected sources do not contain enough distinct readable study content.");
     }
     const noteCount = collection.visualNoteCount;
@@ -10833,23 +10975,23 @@ async function handleBuildChapterLesson(chapterId, options = {}) {
 }
 
 async function handleSummarizeJourney() {
-  if (!globalThis.ExamCramJourney) return;
+  if (!globalThis.NeatMindJourney) return;
   elements.summarizeJourneyButton.disabled = true;
   showStatus("Summarizing your saved learning evidence...");
   try {
     const journey = await getJourney();
-    let summary = globalThis.ExamCramJourney.summarize(journey, { range: elements.journeyRange.value });
+    let summary = globalThis.NeatMindJourney.summarize(journey, { range: elements.journeyRange.value });
     const [settings, storedFocus] = await Promise.all([
       getStorage(STORAGE_KEYS.settings, {}),
       getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({}))
     ]);
     const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
     const summaryNow = Date.now();
-    const habitProfile = typeof globalThis.ExamCramJourney.buildHabitProfile === "function"
-      ? globalThis.ExamCramJourney.buildHabitProfile(journey, focusHistory, summaryNow)
+    const habitProfile = typeof globalThis.NeatMindJourney.buildHabitProfile === "function"
+      ? globalThis.NeatMindJourney.buildHabitProfile(journey, focusHistory, summaryNow)
       : null;
-    const dueConcepts = typeof globalThis.ExamCramJourney.getDueConcepts === "function"
-      ? globalThis.ExamCramJourney.getDueConcepts(journey, { now: summaryNow, limit: 5 })
+    const dueConcepts = typeof globalThis.NeatMindJourney.getDueConcepts === "function"
+      ? globalThis.NeatMindJourney.getDueConcepts(journey, { now: summaryNow, limit: 5 })
         .map(({ conceptLabel, effectiveStrength, state }) => ({ conceptLabel, effectiveStrength, state }))
       : null;
     const endpoint = getConfiguredApiEndpoint(settings);
@@ -10869,7 +11011,7 @@ async function handleSummarizeJourney() {
             chapters: rangeChapters.map((chapter) => ({
               id: chapter.id,
               title: chapter.title,
-              status: globalThis.ExamCramJourney.getChapterStatus(chapter),
+              status: globalThis.NeatMindJourney.getChapterStatus(chapter),
               sourceCount: chapter.sources.length,
               sessions: chapter.sessions.map((session) => ({
                 title: session.title,
@@ -10903,7 +11045,7 @@ async function handleSummarizeJourney() {
       if (error.code !== "REVISION_CONFLICT") throw error;
       const latest = await getJourney();
       summaryToSave = {
-        ...globalThis.ExamCramJourney.summarize(latest, { range: elements.journeyRange.value }),
+        ...globalThis.NeatMindJourney.summarize(latest, { range: elements.journeyRange.value }),
         range: elements.journeyRange.value,
         sourceRevision: latest.revision,
         fallbackReason: "Journey activity changed while the AI summary was running, so this summary was refreshed locally."
@@ -10954,7 +11096,7 @@ function getJourneyChaptersInRange(journey, range) {
   return (journey?.chapters || []).map((chapter) => ({
     ...chapter,
     sessions: (chapter.sessions || []).filter((session) => (
-      globalThis.ExamCramJourney.sessionActivityTime(session) >= cutoff
+      globalThis.NeatMindJourney.sessionActivityTime(session) >= cutoff
     ))
   })).filter((chapter) => chapter.sessions.length);
 }
@@ -10980,7 +11122,7 @@ function formatJourneyStatus(value) {
 }
 
 function parseFocusRulesInput(value) {
-  if (!globalThis.ExamCramFocus) throw new Error("Focus utilities are unavailable.");
+  if (!globalThis.NeatMindFocus) throw new Error("Focus utilities are unavailable.");
   const rules = String(value || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -10996,7 +11138,7 @@ function parseFocusRulesInput(value) {
       const path = slashIndex === -1 ? "/*" : candidate.slice(slashIndex) || "/*";
       return { id: `rule-${index + 1}`, domain, path };
     });
-  return globalThis.ExamCramFocus.normalizeFocusRules(rules);
+  return globalThis.NeatMindFocus.normalizeFocusRules(rules);
 }
 
 function sendFocusMessage(message) {
@@ -11024,8 +11166,8 @@ async function requestFocusOrigins(rules) {
   if (!globalThis.chrome?.permissions?.request) return true;
   const manifest = chrome.runtime?.getManifest?.() || {};
   try {
-    globalThis.ExamCramFocus.validateFocusPermissionManifest(manifest);
-    const requiredOrigins = globalThis.ExamCramFocus.getRequiredOrigins(rules);
+    globalThis.NeatMindFocus.validateFocusPermissionManifest(manifest);
+    const requiredOrigins = globalThis.NeatMindFocus.getRequiredOrigins(rules);
     const containsResults = await Promise.all(requiredOrigins.map((origin) => new Promise((resolve, reject) => {
       chrome.permissions.contains({ origins: [origin] }, (contains) => {
         const runtimeError = chrome.runtime?.lastError;
@@ -11033,7 +11175,7 @@ async function requestFocusOrigins(rules) {
         else resolve(contains ? origin : "");
       });
     })));
-    const plan = globalThis.ExamCramFocus.createFocusPermissionPlan(
+    const plan = globalThis.NeatMindFocus.createFocusPermissionPlan(
       rules,
       containsResults.filter(Boolean),
       manifest
@@ -11047,23 +11189,23 @@ async function requestFocusOrigins(rules) {
       });
     });
   } catch (error) {
-    throw globalThis.ExamCramFocus.toFocusPermissionRequestError(error, manifest);
+    throw globalThis.NeatMindFocus.toFocusPermissionRequestError(error, manifest);
   }
 }
 
 async function loadFocusState() {
-  if (!globalThis.ExamCramFocus) return;
+  if (!globalThis.NeatMindFocus) return;
   try {
-    const remoteState = await sendFocusMessage({ type: globalThis.ExamCramFocus.MESSAGE_TYPES.GET_STATE });
-    state.focusState = remoteState || globalThis.ExamCramFocus.normalizeFocusState(
+    const remoteState = await sendFocusMessage({ type: globalThis.NeatMindFocus.MESSAGE_TYPES.GET_STATE });
+    state.focusState = remoteState || globalThis.NeatMindFocus.normalizeFocusState(
       await getStorage(STORAGE_KEYS.focusState, null)
     );
   } catch {
-    state.focusState = globalThis.ExamCramFocus.normalizeFocusState(
+    state.focusState = globalThis.NeatMindFocus.normalizeFocusState(
       await getStorage(STORAGE_KEYS.focusState, null)
     );
   }
-  const reconciled = globalThis.ExamCramFocus.reconcileFocusState(state.focusState, Date.now());
+  const reconciled = globalThis.NeatMindFocus.reconcileFocusState(state.focusState, Date.now());
   state.focusState = reconciled.state;
   if (reconciled.changed && !globalThis.chrome?.runtime?.sendMessage) {
     await setStorage(STORAGE_KEYS.focusState, state.focusState).catch(() => {});
@@ -11100,14 +11242,14 @@ function getSelectedFocusDurationMinutes() {
   const rawValue = elements.focusDuration?.value === "custom"
     ? elements.focusCustomDuration?.value
     : elements.focusDuration?.value;
-  return globalThis.ExamCramFocus.normalizeDurationMinutes(rawValue);
+  return globalThis.NeatMindFocus.normalizeDurationMinutes(rawValue);
 }
 
 function renderFocusState() {
-  if (!elements.focusCountdown || !globalThis.ExamCramFocus) return;
+  if (!elements.focusCountdown || !globalThis.NeatMindFocus) return;
   clearInterval(state.focusCountdownTimer);
   const update = () => {
-    const focus = globalThis.ExamCramFocus.toPublicFocusState(state.focusState || {}, Date.now());
+    const focus = globalThis.NeatMindFocus.toPublicFocusState(state.focusState || {}, Date.now());
     const active = focus.status === "active";
     const onBreak = focus.status === "break";
     const remaining = onBreak ? focus.breakRemainingMs : focus.remainingMs;
@@ -11160,13 +11302,13 @@ function renderFocusHistory(history) {
     createElement("strong", "Recent focus"),
     ...items.map((entry) => createElement(
       "p",
-      `${globalThis.ExamCramFocus.formatElapsedFocusTime(entry.elapsedMs)} · ${entry.outcome || "stopped"} · ${new Date(entry.endedAt).toLocaleDateString()}`
+      `${globalThis.NeatMindFocus.formatElapsedFocusTime(entry.elapsedMs)} · ${entry.outcome || "stopped"} · ${new Date(entry.endedAt).toLocaleDateString()}`
     ))
   );
 }
 
 async function handleStartFocus() {
-  if (!globalThis.ExamCramFocus) return;
+  if (!globalThis.NeatMindFocus) return;
   elements.startFocusButton.disabled = true;
   try {
     const durationMinutes = getSelectedFocusDurationMinutes();
@@ -11174,7 +11316,7 @@ async function handleStartFocus() {
     const granted = await requestFocusOrigins(rules);
     if (!granted) throw new Error("Site access was not granted, so Focus mode was not started.");
     const remoteState = await sendFocusMessage({
-      type: globalThis.ExamCramFocus.MESSAGE_TYPES.START,
+      type: globalThis.NeatMindFocus.MESSAGE_TYPES.START,
       durationMinutes,
       rules
     });
@@ -11182,7 +11324,7 @@ async function handleStartFocus() {
       state.focusState = remoteState;
     } else {
       const previous = await getStorage(STORAGE_KEYS.focusState, null);
-      state.focusState = globalThis.ExamCramFocus.startFocusState(previous, { durationMinutes, rules }, Date.now(), crypto.randomUUID());
+      state.focusState = globalThis.NeatMindFocus.startFocusState(previous, { durationMinutes, rules }, Date.now(), crypto.randomUUID());
       await setStorage(STORAGE_KEYS.focusState, state.focusState);
     }
     renderFocusState();
@@ -11200,8 +11342,8 @@ async function handleStartFocus() {
 
 async function handleStopFocus() {
   try {
-    const remoteState = await sendFocusMessage({ type: globalThis.ExamCramFocus.MESSAGE_TYPES.STOP });
-    state.focusState = remoteState || globalThis.ExamCramFocus.stopFocusState(state.focusState, Date.now(), "stopped");
+    const remoteState = await sendFocusMessage({ type: globalThis.NeatMindFocus.MESSAGE_TYPES.STOP });
+    state.focusState = remoteState || globalThis.NeatMindFocus.stopFocusState(state.focusState, Date.now(), "stopped");
     if (!remoteState) await setStorage(STORAGE_KEYS.focusState, state.focusState);
     renderFocusState();
     showStatus("Focus mode ended. Blocking rules were removed.");
@@ -11214,8 +11356,8 @@ async function handleStopFocus() {
 
 async function handleFocusBreak() {
   try {
-    const remoteState = await sendFocusMessage({ type: globalThis.ExamCramFocus.MESSAGE_TYPES.BREAK });
-    state.focusState = remoteState || globalThis.ExamCramFocus.applyFiveMinuteBreak(state.focusState, Date.now());
+    const remoteState = await sendFocusMessage({ type: globalThis.NeatMindFocus.MESSAGE_TYPES.BREAK });
+    state.focusState = remoteState || globalThis.NeatMindFocus.applyFiveMinuteBreak(state.focusState, Date.now());
     if (!remoteState) await setStorage(STORAGE_KEYS.focusState, state.focusState);
     renderFocusState();
     showStatus("Five-minute break started. Distracting-site rules are temporarily paused.");
@@ -11555,8 +11697,8 @@ function formatDate(value) {
 }
 
 function formatTimestamp(value) {
-  if (globalThis.ExamCramJourney?.formatTimestamp) {
-    return globalThis.ExamCramJourney.formatTimestamp(value);
+  if (globalThis.NeatMindJourney?.formatTimestamp) {
+    return globalThis.NeatMindJourney.formatTimestamp(value);
   }
   const total = Math.max(0, Math.round(Number(value) || 0));
   const minutes = Math.floor(total / 60);

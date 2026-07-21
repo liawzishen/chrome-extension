@@ -1,7 +1,7 @@
-(function initExamCramCheatSheet(root, factory) {
+(function initNeatMindCheatSheet(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  root.ExamCramCheatSheet = api;
+  root.NeatMindCheatSheet = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createCheatSheetApi() {
   "use strict";
 

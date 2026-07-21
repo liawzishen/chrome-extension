@@ -61,7 +61,7 @@ test("the trust UI exposes evidence status and a local unsupported-claim report"
   assert.match(script, /Evidence checked/);
   assert.match(script, /function reportUnsupportedClaim\(context = \{\}, node = \{\}, evidence = \{\}\)/);
   assert.match(script, /Report unsupported claim/);
-  assert.match(script, /claimReports: "examCramUnsupportedClaimReports"/);
+  assert.match(script, /claimReports: "neatMindUnsupportedClaimReports"/);
   assert.match(styles, /\.evidence-status\s*\{/);
   assert.match(styles, /\.vin-report-button\s*\{/);
 });

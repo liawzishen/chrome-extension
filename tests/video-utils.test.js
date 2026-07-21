@@ -285,7 +285,7 @@ test("validates the loaded Chrome 116 tab-audio manifest before capture", () => 
     permissions: ["offscreen"]
   }), (error) => (
     error.code === "CAPTURE_MANIFEST_STALE"
-    && /Reload Exam-Cram from chrome:\/\/extensions/.test(error.message)
+    && /Reload NeatMind from chrome:\/\/extensions/.test(error.message)
     && error.details.missingPermissions.includes("tabCapture")
   ));
 });
@@ -306,7 +306,7 @@ test("turns raw Chrome tab-capture failures into deterministic recovery guidance
 
   const offscreen = Video.toCaptureStartError(new Error("Could not establish connection. Receiving end does not exist."), "offscreen");
   assert.equal(offscreen.code, "OFFSCREEN_CAPTURE_UNAVAILABLE");
-  assert.match(offscreen.message, /Reload Exam-Cram/);
+  assert.match(offscreen.message, /Reload NeatMind/);
 
   const staleWorker = Video.toCaptureStartError(
     new Error("The message port closed before a response was received."),
@@ -514,7 +514,7 @@ test("toolbar action owns the one-use tab stream and starts the armed request im
   assert.match(popupSource, /VIDEO_CAPTURE_AUTHORIZATION_CHANGED[\s\S]*renderVideoCaptureAuthorization/);
   assert.match(popupSource, /VIDEO_CAPTURE_GET_AUTHORIZATION/);
   assert.match(popupSource, /scheduleVideoCaptureAuthorizationExpiry[\s\S]*status: "expired"/);
-  assert.match(popupSource, /ExamCramVideo\.toCaptureStartError\(rawError, errorPhase\)/);
+  assert.match(popupSource, /NeatMindVideo\.toCaptureStartError\(rawError, errorPhase\)/);
   assert.match(popupSource, /reloadExtensionButton[\s\S]*?handleReloadExtension/);
 });
 
@@ -640,7 +640,7 @@ test("live recorder progress advances before chunk transcription and rejects zer
   assert.match(backgroundSource, /failedState\.status = "error"/);
   assert.match(backgroundSource, /EMPTY_TRANSCRIPT_CHUNK/);
   assert.match(backgroundSource, /preflightVideoTranscriptionBackend/);
-  assert.doesNotMatch(backgroundSource, /Enter the Exam-Cram backend access token in Settings before starting/);
+  assert.doesNotMatch(backgroundSource, /Enter the NeatMind backend access token in Settings before starting/);
   assert.match(backgroundSource, /if \(token\) headers\.Authorization = `Bearer \$\{token\}`/);
   assert.match(backgroundSource, /ORIGIN_NOT_ALLOWED/);
   assert.match(offscreenSource, /response\?\.ok !== false[\s\S]*WORKER_EVENT_REJECTED/);

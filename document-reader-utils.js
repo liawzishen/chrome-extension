@@ -1,7 +1,7 @@
-(function initExamCramDocumentReader(root, factory) {
+(function initNeatMindDocumentReader(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  root.ExamCramDocumentReader = api;
+  root.NeatMindDocumentReader = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createDocumentReaderApi() {
   "use strict";
 
@@ -17,7 +17,7 @@
   const DOCUMENT_PARSE_TIMEOUT_MS = 20000;
   const MAX_FRAME_RESULTS = 32;
   const PDF_VIEWER_EXTENSION_ID = "mhjfbmdgcfjbbpaeojofohoefgiehjai";
-  const FILE_ACCESS_GUIDANCE = "Open chrome://extensions > Exam-Cram > Allow access to file URLs, enable it, then reload the page.";
+  const FILE_ACCESS_GUIDANCE = "Open chrome://extensions > NeatMind > Allow access to file URLs, enable it, then reload the page.";
 
   class DocumentReaderError extends Error {
     constructor(code, message, details = {}) {
@@ -60,7 +60,7 @@
     }
     throw new DocumentReaderError(
       "UNSUPPORTED_DOCUMENT_URL",
-      "Exam-Cram can read HTML pages and PDF documents opened from http, https, or an allowed local file."
+      "NeatMind can read HTML pages and PDF documents opened from http, https, or an allowed local file."
     );
   }
 
@@ -130,7 +130,7 @@
     const prefix = bytesToAscii(bytes, 512).replace(/^\uFEFF/, "").trimStart().toLowerCase();
     const htmlMarkup = /^(?:<!doctype\s+html|<html\b|<head\b|<body\b)/.test(prefix);
     if ((htmlType || htmlMarkup || expectedKind === "html") && !looksLikeBinary(bytes)) return "html";
-    throw new DocumentReaderError("UNSUPPORTED_DOCUMENT", "Exam-Cram can read HTML pages and PDF documents only.");
+    throw new DocumentReaderError("UNSUPPORTED_DOCUMENT", "NeatMind can read HTML pages and PDF documents only.");
   }
 
   function normalizeExtractedText(value, maxLength = MAX_EXTRACTED_TEXT) {
@@ -267,7 +267,7 @@
 
   function extractHtmlText(html, fallbackTitle = "HTML document") {
     if (typeof DOMParser !== "function") {
-      throw new DocumentReaderError("HTML_PARSER_UNAVAILABLE", "The HTML document reader is unavailable. Reload Exam-Cram and try again.");
+      throw new DocumentReaderError("HTML_PARSER_UNAVAILABLE", "The HTML document reader is unavailable. Reload NeatMind and try again.");
     }
     const document = new DOMParser().parseFromString(String(html || ""), "text/html");
     const blockedSelector = [
@@ -518,7 +518,7 @@
       throw new DocumentReaderError("PDF_TOO_LARGE", "This PDF is larger than the 24 MB reading limit.");
     }
     if (!pdfjs?.getDocument) {
-      throw new DocumentReaderError("PDF_READER_UNAVAILABLE", "The local PDF reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+      throw new DocumentReaderError("PDF_READER_UNAVAILABLE", "The local PDF reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
     }
     if (options.workerSrc && pdfjs.GlobalWorkerOptions) pdfjs.GlobalWorkerOptions.workerSrc = options.workerSrc;
 
@@ -569,7 +569,7 @@
           if (pageCharacters + line.length >= pageBudget) break;
           inspectedTextItems += 1;
           if (inspectedTextItems > MAX_PDF_TEXT_ITEMS || Date.now() > deadline) {
-            throw new DocumentReaderError("PDF_TEXT_LIMIT", "This PDF contains more text objects than Exam-Cram can process safely.");
+            throw new DocumentReaderError("PDF_TEXT_LIMIT", "This PDF contains more text objects than NeatMind can process safely.");
           }
           const remainingLineBudget = Math.max(0, pageBudget - pageCharacters - line.length - (line ? 1 : 0));
           if (!remainingLineBudget) break;

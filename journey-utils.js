@@ -2709,7 +2709,7 @@
     }
   }
 
-  root.ExamCramJourney = Object.freeze({
+  root.NeatMindJourney = Object.freeze({
     SCHEMA_VERSION,
     MAX_CHAPTERS,
     MAX_SOURCES_PER_CHAPTER,

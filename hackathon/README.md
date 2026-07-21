@@ -1,6 +1,6 @@
-# Exam-Cram Assistant — Hackathon Submission
+# NeatMind — Hackathon Submission
 
-Exam-Cram Assistant is a source-grounded Chrome study companion for students in any subject. It turns student-selected pages, PDFs, notes, and videos into visual lessons, active-recall quizzes, and a persistent learning journey.
+NeatMind is a source-grounded Chrome study companion for students in any subject. It turns student-selected pages, PDFs, notes, and videos into visual lessons, active-recall quizzes, and a persistent learning journey.
 
 ## Problem
 
@@ -8,7 +8,7 @@ Students learn from scattered sources and often end up with unverified summaries
 
 ## Solution
 
-Exam-Cram creates an evidence-to-mastery loop:
+NeatMind creates an evidence-to-mastery loop:
 
 ```text
 Choose or create a chapter
@@ -28,11 +28,23 @@ The product supports everyday learning during a course as well as focused exam r
 - **Persistent chapters:** saved sources, notes, and outcomes remain organized by named study chapter.
 - **Visible next step:** the Journey view helps the learner see what they have studied and what to revisit.
 
-## OpenAI Build Week Submission Evidence
+## Build Beyond submission guidance
 
-**Recommended track:** Education
+This project is prepared for the [Build Beyond Hackathon](https://build-beyond-hackathon.devpost.com/). Its official guidance has no theme restriction and no tracks. The project overview should make clear the idea, how it works, main features, technology stack, and intended audience; the sections above and the main [README](../README.md) provide that material.
 
-**Primary `/feedback` Codex Session ID:** `019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f`
+The official guide requires at least one visual showing the project. It recommends a source-code or live-demo link and asks entrants to add every team member with a brief contribution description. The included [Devpost handoff](DEVPOST_SUBMISSION.md) supplies a description and a recommended demo flow, but the entrant must still verify the live Devpost entry has the required visual and current links before submitting.
+
+The official criteria are Technical Execution (30%), Originality & Creativity (25%), Impact & Usefulness (20%), UX & Design (15%), and Clarity of Submission (10%). The root README maps each criterion to concrete repository evidence and includes the final submission checklist.
+
+<a id="openai-build-week-submission-evidence"></a>
+
+## Historical OpenAI Build Week development record
+
+> The remaining section is retained as historical build provenance. The primary feedback session below is not represented as an official Build Beyond submission requirement.
+
+**Historical recommended track:** Education
+
+**Historical primary `/feedback` Codex Session ID:** `019f65fd-eb83-7cf1-9ec5-1eaf083f4b5f`
 
 This is the `Fix quiz generation grounding` build thread. Among the locally exported project sessions, it contains the most recorded implementation activity: 224 file-change events across 41 unique file paths. Submit this ID—not the documentation-export session—to Devpost as the primary build-thread evidence.
 

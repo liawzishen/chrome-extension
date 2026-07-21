@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Exam-Cram Assistant</title>
+    <title>NeatMind</title>
     <link rel="stylesheet" href="popup.css">
     <link rel="stylesheet" href="popup-design-system.css">
     <link rel="stylesheet" href="vintage-planner.css">
@@ -12,7 +12,7 @@
     <main class="app">
       <header class="topbar">
         <div>
-          <h1>Exam-Cram</h1>
+          <h1>NeatMind</h1>
           <p id="statusText" role="status" aria-live="polite" aria-atomic="true">Create a focused study session.</p>
           <div id="progressWrap" class="progress-wrap hidden" aria-hidden="true">
             <div class="progress-track"><div id="progressBar" class="progress-bar"></div></div>
@@ -39,7 +39,7 @@
         </span>
         <div class="permission-banner__copy">
           <strong>Allow this study source</strong>
-          <span id="accessBannerText">Grant access only to the current website. Exam-Cram reads its content after you choose a study action.</span>
+          <span id="accessBannerText">Grant access only to the current website. NeatMind reads its content after you choose a study action.</span>
         </div>
         <button id="grantCrossSiteAccessButton" class="secondary compact-button" type="button">Allow this site</button>
       </section>
@@ -546,25 +546,27 @@
       <dialog id="videoCaptureDialog">
         <form method="dialog" class="settings video-capture-consent">
           <h2>Auto-transcribe this video?</h2>
-          <p>Exam-Cram will capture only this tab's audio while the current video plays, for up to 15 minutes. It never uses your microphone and does not save raw audio.</p>
+          <p>NeatMind will capture only this tab's audio while the current video plays, for up to 15 minutes. It never uses your microphone and does not save raw audio.</p>
           <p class="hint">Audio chunks are sent to your configured Gemini backend. Timestamps from automatic transcription are labelled AI-estimated.</p>
           <div class="capture-authorization-note" role="note">
             <span aria-hidden="true">1</span>
-            <p><strong>Confirm here.</strong> Exam-Cram checks the video and backend without starting capture.</p>
+            <p><strong>Confirm here.</strong> NeatMind checks the video and backend without starting capture.</p>
             <span aria-hidden="true">2</span>
-            <p><strong>Invoke Exam-Cram once.</strong> Click its toolbar icon or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd>; Chrome authorizes this exact tab and recording starts automatically.</p>
+            <p><strong>Invoke NeatMind once.</strong> Click its toolbar icon or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd>; Chrome authorizes this exact tab and recording starts automatically.</p>
           </div>
           <p id="videoCaptureDialogStatus" class="hint hidden" role="status" aria-live="polite"></p>
           <menu>
             <button id="cancelVideoCaptureButton" value="cancel" class="text-button">Cancel</button>
-            <button id="reloadExtensionButton" class="secondary hidden" type="button">Reload Exam-Cram</button>
+            <button id="reloadExtensionButton" class="secondary hidden" type="button">Reload NeatMind</button>
             <button id="confirmVideoCaptureButton" value="default" class="primary">Start tab audio</button>
           </menu>
         </form>
       </dialog>
     </main>
+    <script src="branding-utils.js"></script>
     <script src="export-utils.js"></script>
     <script src="focus-utils.js"></script>
+    <script src="study-time-utils.js"></script>
     <script src="journey-utils.js"></script>
     <script src="journey-worker-utils.js"></script>
     <script src="video-utils.js"></script>

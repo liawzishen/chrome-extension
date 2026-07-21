@@ -41,8 +41,8 @@ test("worker opens the global panel from a real action event so Chrome grants ac
   assert.ok(openIndex >= 0, "the action event must open the global side panel");
   assert.ok(awaitIndex < 0 || openIndex < awaitIndex, "sidePanel.open must keep the action's user gesture");
   assert.match(actionHandler, /authorizeArmedVideoCaptureFromAction\(tab\)/);
-  assert.match(backgroundSource, /configureGlobalSidePanel\("extension install"\)/);
-  assert.match(backgroundSource, /configureGlobalSidePanel\("browser startup"\)/);
+  assert.match(backgroundSource, /initializeBackgroundState\("installed", "extension update"\)/);
+  assert.match(backgroundSource, /initializeBackgroundState\("browser startup", "browser restart"\)/);
   assert.match(backgroundSource, /configureGlobalSidePanel\("worker start"\)/);
 });
 

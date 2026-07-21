@@ -39,7 +39,7 @@ test("local visual-note presentation suppresses repeated examples but retains la
 
 test("a hidden active-tab URL directs the learner to the toolbar rather than a dead permission state", () => {
   assert.match(script, /const activeUrlIsHidden = error\?\.code === "UNSUPPORTED_DOCUMENT_URL" && !String\(tab\?\.url \|\| ""\)\.trim\(\)/);
-  assert.match(script, /Click the Exam-Cram toolbar icon while this tab is active, then return to the panel\./);
+  assert.match(script, /Click the NeatMind toolbar icon while this tab is active, then return to the panel\./);
   assert.match(script, /state\.sourceVisibilityNeedsToolbar = activeUrlIsHidden/);
   assert.match(script, /elements\.accessBanner\?\.classList\.add\("hidden"\)/);
   assert.match(script, /!refreshed && !state\.sourceVisibilityNeedsToolbar/);
@@ -52,6 +52,6 @@ test("the new-chapter modal remains within a 360-pixel panel and the full Journe
   assert.match(dialogStyles, /min-width:\s*0/);
   assert.match(dialogStyles, /overflow-x:\s*clip/);
   assert.match(styles, /\.new-chapter-dialog input\s*\{[\s\S]*?width:\s*100%/);
-  assert.match(journeyPage, /const visibleArtifacts = globalThis\.ExamCramJourney\.getChapterArtifactTimeline\(chapter, savedArtifacts\)/);
+  assert.match(journeyPage, /const visibleArtifacts = globalThis\.NeatMindJourney\.getChapterArtifactTimeline\(chapter, savedArtifacts\)/);
   assert.match(journeyPage, /Showing the \$\{visibleArtifacts\.length\} newest unique artifacts\. Older saves remain in Library\./);
 });

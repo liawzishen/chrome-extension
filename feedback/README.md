@@ -7,12 +7,27 @@ Markdown exports of every Codex chat currently associated with this project.
 - Excluded: internal reasoning, tool calls, and tool outputs.
 - Order: chats and messages are chronological.
 
-## OpenAI Build Week Submission Evidence
+## Current Build Beyond Hackathon context
 
-The [submission evidence record](HACKATHON_SUBMISSION_EVIDENCE.md) identifies the primary `/feedback` Session ID required for the Devpost submission, maps all supporting sessions, and lists remaining submission actions.
+These exports are development feedback and provenance. They do not define the current Build Beyond requirements. See the root [Build Beyond Hackathon submission guide](../README.md#build-beyond-hackathon-submission-guide) for the official-guideline summary, judging-criteria map, and final-entry checklist.
+
+## Historical OpenAI Build Week Submission Evidence
+
+The [submission evidence record](HACKATHON_SUBMISSION_EVIDENCE.md) identifies the primary `/feedback` Session ID used for the earlier Build Week evidence package, maps its supporting sessions, and lists its historical submission actions.
 
 The index also includes a supporting `design_test` validation conversation. It identified that a design brief targeting `popup.html`, `popup.js`, and `popup.css` was opened in a Vite workspace, then located this extension repository before any incorrect implementation began.
 
+
+## Follow-up quality reviews
+
+These reports were written after the chat-export index. They are review records, not additional visible-chat exports.
+
+| Date | Focus | Record |
+| --- | --- | --- |
+| 2026-07-18 | Performance and code health | [Scheduled code review](2026-07-18-scheduled-code-review.md) |
+| 2026-07-19 | Quiz, note, performance, and mastery backlog | [Scheduled code review](2026-07-19-scheduled-code-review.md) |
+| 2026-07-20 | Submission-readiness verification | [Scheduled code review](2026-07-20-scheduled-code-review.md) |
+| 2026-07-20 | Quiz, note, and performance quality review | [Flow & quality review](2026-07-20-flow-quality-review.md) |
 
 ## Chats
 

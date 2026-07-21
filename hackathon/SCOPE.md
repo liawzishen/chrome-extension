@@ -2,7 +2,7 @@
 
 ## Product
 
-**Exam-Cram Assistant** is a Chrome study companion that helps students turn their own sources into grounded visual lessons, practice material, and lasting learning progress.
+**NeatMind** is a Chrome study companion that helps students turn their own sources into grounded visual lessons, practice material, and lasting learning progress.
 
 ## Audience
 

@@ -1,7 +1,7 @@
 (function attachLearningForestData(root, factory) {
   const api = factory();
   if (typeof module === "object" && module.exports) module.exports = api;
-  root.ExamCramLearningForestData = api;
+  root.NeatMindLearningForestData = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function createLearningForestData() {
   "use strict";
 
