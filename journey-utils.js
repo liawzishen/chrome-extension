@@ -15,6 +15,8 @@
   const DAY_MS = 86400000;
   const MIN_CONCEPT_EASE_FACTOR = 1.3;
   const MAX_CONCEPT_EASE_FACTOR = 2.5;
+  const CONCEPT_EASE_CORRECT_STEP = 0.15;
+  const CONCEPT_EASE_WRONG_STEP = 0.2;
 
   function clone(value) {
     if (value == null) return value;
@@ -353,12 +355,33 @@
     return Math.max(0, Math.min(1, timesWrong / timesTested));
   }
 
+  // Seeds a concept that has never stored an ease factor. Once a concept has been reviewed the
+  // stored value takes over, because ease has to reflect recent reviews rather than a lifetime
+  // ratio that a long-ago run of wrong answers would pin down forever.
   function deriveConceptEaseFactor(timesWrong, timesTested) {
     const wrongAnswerRatio = getWrongAnswerRatio(timesWrong, timesTested);
+    return clampConceptEaseFactor(MAX_CONCEPT_EASE_FACTOR - 1.2 * wrongAnswerRatio);
+  }
+
+  function clampConceptEaseFactor(value) {
     return Number(Math.max(
       MIN_CONCEPT_EASE_FACTOR,
-      Math.min(MAX_CONCEPT_EASE_FACTOR, MAX_CONCEPT_EASE_FACTOR - 1.2 * wrongAnswerRatio)
+      Math.min(MAX_CONCEPT_EASE_FACTOR, value)
     ).toFixed(2));
+  }
+
+  // Returns null for anything outside the legal band rather than clamping it, so a corrupt or
+  // tampered stored value falls back to the lifetime derivation instead of being trusted.
+  function normalizeConceptEaseFactor(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return null;
+    if (parsed < MIN_CONCEPT_EASE_FACTOR || parsed > MAX_CONCEPT_EASE_FACTOR) return null;
+    return Number(parsed.toFixed(2));
+  }
+
+  function adjustConceptEaseFactor(value, delta) {
+    const current = normalizeConceptEaseFactor(value) ?? MAX_CONCEPT_EASE_FACTOR;
+    return clampConceptEaseFactor(current + delta);
   }
 
   function normalizeConceptMemory(value) {
@@ -372,7 +395,8 @@
     const strength = normalizeConceptStrength(value.strength, state);
     const intervalDays = normalizeIntervalDays(value.intervalDays);
     const wrongAnswerRatio = Number(getWrongAnswerRatio(timesWrong, timesTested).toFixed(4));
-    const easeFactor = deriveConceptEaseFactor(timesWrong, timesTested);
+    const easeFactor = normalizeConceptEaseFactor(value.easeFactor)
+      ?? deriveConceptEaseFactor(timesWrong, timesTested);
     const lastAttemptAt = normalizeOptionalIsoDate(value.lastAttemptAt);
     const nextReviewAt = normalizeOptionalIsoDate(value.nextReviewAt)
       || (lastAttemptAt ? new Date(dateTimestamp(lastAttemptAt) + intervalDays * DAY_MS).toISOString() : null);
@@ -417,8 +441,9 @@
         ...latest,
         timesTested: mergedTimesTested,
         timesWrong: mergedTimesWrong,
-        wrongAnswerRatio: Number(getWrongAnswerRatio(mergedTimesWrong, mergedTimesTested).toFixed(4)),
-        easeFactor: deriveConceptEaseFactor(mergedTimesWrong, mergedTimesTested)
+        // easeFactor is intentionally not re-derived: `latest` already carries the ease produced by
+        // the most recent reviews, which is exactly the value that should survive a merge.
+        wrongAnswerRatio: Number(getWrongAnswerRatio(mergedTimesWrong, mergedTimesTested).toFixed(4))
       });
     });
     const concepts = [...conceptMap.values()]
@@ -1455,8 +1480,10 @@
       if ((dateTimestamp(attempt.answeredAt) ?? 0) >= (dateTimestamp(record.lastAttemptAt) ?? -1)) {
         record.lastAttemptAt = attempt.answeredAt;
       }
+      // wrongAnswerRatio stays a lifetime statistic, but ease must not be re-derived here: it is
+      // adjusted one step per review in the batch pass below, and recomputing it from lifetime
+      // totals would erase that history on every single attempt.
       record.wrongAnswerRatio = Number(getWrongAnswerRatio(record.timesWrong, record.timesTested).toFixed(4));
-      record.easeFactor = deriveConceptEaseFactor(record.timesWrong, record.timesTested);
       conceptMap.set(key, record);
       const group = batchByConcept.get(key) || [];
       group.push(attempt);
@@ -1524,14 +1551,18 @@
         ...conceptAttempts.map((attempt) => dateTimestamp(attempt.answeredAt) ?? 0)
       );
       const allCorrect = conceptAttempts.every((attempt) => attempt.result === "correct");
+      // Ease moves one step per review rather than being recomputed from lifetime totals, so a
+      // concept that was hard months ago can earn its intervals back by being answered correctly now.
       if (allCorrect) {
         const nextReviewTimestamp = dateTimestamp(record.nextReviewAt);
         const wasDue = nextReviewTimestamp !== null && answeredAtMs >= nextReviewTimestamp;
         record.strength = Math.min(100, Math.round(record.strength + 20 + (wasDue ? 5 : 0)));
+        record.easeFactor = adjustConceptEaseFactor(record.easeFactor, CONCEPT_EASE_CORRECT_STEP);
         record.intervalDays = Math.min(60, Math.max(1, Math.round(record.intervalDays * record.easeFactor)));
         record.nextReviewAt = new Date(answeredAtMs + record.intervalDays * DAY_MS).toISOString();
       } else {
         record.strength = Math.max(0, Math.round(record.strength - 30));
+        record.easeFactor = adjustConceptEaseFactor(record.easeFactor, -CONCEPT_EASE_WRONG_STEP);
         record.intervalDays = 1;
         record.nextReviewAt = new Date(answeredAtMs + DAY_MS).toISOString();
       }
@@ -1662,10 +1693,12 @@
           : Math.max(0, (nowTimestamp - nextReviewTimestamp) / DAY_MS);
         return { concept, strength, nextReviewTimestamp, overdueDays };
       })
-      .filter(({ concept, strength, nextReviewTimestamp }) => (
-        (nextReviewTimestamp !== null && nowTimestamp >= nextReviewTimestamp)
-        || strength < 60
-        || concept.state === "weak"
+      // Due-ness is the schedule's decision alone. Strength and state only rank the concepts
+      // that are already due (see the sort below); letting them force due-ness would undo the
+      // interval this concept was just given and resurface it in the same session.
+      .filter(({ nextReviewTimestamp }) => (
+        nextReviewTimestamp === null
+        || nowTimestamp >= nextReviewTimestamp
       ))
       .sort((first, second) => Number(second.concept.state === "weak") - Number(first.concept.state === "weak")
         || first.strength - second.strength
@@ -2446,6 +2479,67 @@
     return fingerprint(value);
   }
 
+  // Projects each concept's strength forward to a study goal's target date. effectiveStrength is a
+  // pure function of (concept, when) whose decay curve halves strength every intervalDays past due,
+  // so evaluating it at the exam date answers "what will I have forgotten by then" with no new model.
+  function forecastRetention(value, options = {}) {
+    const journey = normalizeJourney(value);
+    const memory = normalizeLearningMemory(journey.learningMemory);
+    options = options && typeof options === "object" && !Array.isArray(options) ? options : {};
+    const goal = normalizeStudyGoal(options.studyGoal);
+    const targetDate = cleanText(options.targetDate, 10) || goal?.targetDate || "";
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) return null;
+    const targetTimestamp = Date.parse(`${targetDate}T23:59:59.999Z`);
+    if (!Number.isFinite(targetTimestamp)) return null;
+    const nowTimestamp = dateTimestamp(options.now) ?? Date.now();
+    if (targetTimestamp < nowTimestamp) return null;
+    if (!memory.concepts.length) return null;
+    const rawThreshold = Number(options.threshold);
+    const threshold = Math.max(1, Math.min(99, Math.round(Number.isFinite(rawThreshold) ? rawThreshold : 40)));
+    const projected = memory.concepts.map((concept) => ({
+      concept,
+      projectedStrength: effectiveStrength(concept, targetTimestamp),
+      currentStrength: effectiveStrength(concept, nowTimestamp)
+    }));
+    const atRisk = projected
+      .filter((entry) => entry.projectedStrength < threshold)
+      .sort((first, second) => first.projectedStrength - second.projectedStrength
+        || (second.currentStrength - second.projectedStrength) - (first.currentStrength - first.projectedStrength)
+        || first.concept.conceptLabel.localeCompare(second.concept.conceptLabel))
+      .map((entry) => ({
+        ...entry.concept,
+        projectedStrength: entry.projectedStrength,
+        currentStrength: entry.currentStrength
+      }));
+    return {
+      targetDate,
+      threshold,
+      daysRemaining: Math.max(0, Math.ceil((targetTimestamp - nowTimestamp) / DAY_MS)),
+      total: memory.concepts.length,
+      atRiskCount: atRisk.length,
+      atRisk
+    };
+  }
+
+  // The per-concept mastery model is the only place that knows what a student actually retains.
+  // Returns null when nothing has been tested yet, so summarize() can fall back to session
+  // weak-topic text rather than narrating zeroes at a brand-new user.
+  function summarizeConceptMastery(journey, now) {
+    const memory = normalizeLearningMemory(journey.learningMemory);
+    if (!memory.concepts.length) return null;
+    const nowTimestamp = dateTimestamp(now) ?? 0;
+    const overdue = memory.concepts.filter((concept) => {
+      const next = dateTimestamp(concept.nextReviewAt);
+      return next !== null && nowTimestamp >= next;
+    });
+    const weak = memory.concepts.filter((concept) => concept.state === "weak");
+    const struggling = memory.concepts
+      .filter((concept) => concept.timesTested >= 2 && concept.wrongAnswerRatio > 0)
+      .sort((first, second) => second.wrongAnswerRatio - first.wrongAnswerRatio
+        || first.conceptLabel.localeCompare(second.conceptLabel));
+    return { total: memory.concepts.length, overdue, weak, struggling };
+  }
+
   function summarize(value, options = {}) {
     const journey = normalizeJourney(value);
     const now = dateTimestamp(options.now) ?? Date.now();
@@ -2465,6 +2559,31 @@
     const completed = chapters.filter((title) => getChapterStatus(findChapter(journey, title)) === "completed");
     const average = scores.length ? Math.round(scores.reduce((total, score) => total + score, 0) / scores.length) : null;
     const evidence = `Based on ${sessions.length} saved ${sessions.length === 1 ? "session" : "sessions"} across ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}.`;
+    const mastery = summarizeConceptMastery(journey, now);
+    const masteryLine = mastery
+      ? ` ${mastery.weak.length} of ${mastery.total} tracked ${mastery.total === 1 ? "concept is" : "concepts are"} still weak.`
+      : "";
+    const conceptGaps = mastery
+      ? mastery.struggling.slice(0, 4).map((concept) => {
+        const percent = Math.round(concept.wrongAnswerRatio * 100);
+        return `${concept.conceptLabel} — missed ${concept.timesWrong} of ${concept.timesTested} attempts (${percent}%).`;
+      })
+      : [];
+    const forecast = forecastRetention(journey, { studyGoal: options.studyGoal, now });
+    const forecastLine = forecast && forecast.atRiskCount
+      ? `Your goal date is in ${forecast.daysRemaining} ${forecast.daysRemaining === 1 ? "day" : "days"}; at this pace ${forecast.atRiskCount} of ${forecast.total} ${forecast.total === 1 ? "concept" : "concepts"} will be below ${forecast.threshold}% by then. Drill ${forecast.atRisk.slice(0, 3).map((concept) => concept.conceptLabel).join(", ")} first.`
+      : forecast
+        ? `Your goal date is in ${forecast.daysRemaining} ${forecast.daysRemaining === 1 ? "day" : "days"} and every tracked concept is projected to hold above ${forecast.threshold}%.`
+        : "";
+    const conceptNextSteps = mastery
+      ? [
+        ...(forecastLine ? [forecastLine] : []),
+        mastery.overdue.length
+          ? `${mastery.overdue.length} ${mastery.overdue.length === 1 ? "concept is" : "concepts are"} due for review: ${mastery.overdue.slice(0, 3).map((concept) => concept.conceptLabel).join(", ")}.`
+          : "Nothing is due for review right now — you are on schedule.",
+        ...mastery.struggling.slice(0, 2).map((concept) => `Retake a focused quiz on ${concept.conceptLabel}.`)
+      ]
+      : [];
     return {
       generatedAt: new Date(now).toISOString(),
       generator: "local",
@@ -2472,8 +2591,8 @@
       evidence,
       overview: sessions.length
         ? average == null
-          ? `You have started ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}; submit a quiz when you want activity to become mastery evidence.`
-          : `Across ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}, your average submitted quiz score is ${average}%.`
+          ? `You have started ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}; submit a quiz when you want activity to become mastery evidence.${masteryLine}`
+          : `Across ${chapters.length} ${chapters.length === 1 ? "chapter" : "chapters"}, your average submitted quiz score is ${average}%.${masteryLine}`
         : journey.chapters.length
           ? `Current chapter: ${journey.chapters.at(-1).title}. No saved learning session yet.`
           : "No chapters yet. Create a visual note from a page, note, or video to begin your learning route.",
@@ -2481,8 +2600,12 @@
         ? completed.map((title) => `${title} reached the completed threshold.`).slice(0, 4)
         : chapters.slice(0, 4).map((title) => `You added learning evidence to ${title}.`),
       recurringThemes: chapters.slice(0, 5),
-      knowledgeGaps: weakAreas.length ? weakAreas : ["No repeated weak topic has been recorded yet."],
-      nextSteps: weakAreas.length
+      knowledgeGaps: conceptGaps.length
+        ? conceptGaps
+        : weakAreas.length ? weakAreas : ["No repeated weak topic has been recorded yet."],
+      nextSteps: conceptNextSteps.length
+        ? conceptNextSteps
+        : weakAreas.length
         ? weakAreas.slice(0, 3).map((topic) => `Review ${topic}, then retake a focused quiz.`)
         : chapters.length
           ? [`Continue ${chapters[chapters.length - 1]}.`, "Submit a quiz to turn activity into mastery evidence."]
@@ -2746,6 +2869,7 @@
     rankWeakConcepts,
     effectiveStrength,
     getDueConcepts,
+    forecastRetention,
     clearLearningMemory,
     getChapterStatus,
     getMetrics,

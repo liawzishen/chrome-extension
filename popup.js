@@ -13,6 +13,20 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
+const HOSTED_SESSION_STORAGE_KEY = "examCramHostedSession";
+const HOSTED_ACCOUNT_CONFIG = Object.freeze({
+  enabled: false,
+  apiOrigin: "",
+  allowedApiOrigins: Object.freeze([])
+});
+const HostedAccount = globalThis.ExamCramHostedAccount;
+const hostedAccountConfig = HostedAccount?.resolveConfig(HOSTED_ACCOUNT_CONFIG) || Object.freeze({
+  enabled: false,
+  active: false,
+  reason: "helper_unavailable",
+  apiOrigin: "",
+  allowedApiOrigins: Object.freeze([])
+});
 const DEFAULT_STATUS_MESSAGE = "Ready for your next study action.";
 const CURATED_DEMO_CHAPTER_TITLE = "Demo - Linear Equations";
 const CURATED_DEMO_NOTE_ID = "demo-linear-equations-note";
@@ -55,7 +69,11 @@ const state = {
   visualModelCleanup: null,
   chapterDialogReturnFocus: null,
   tocSelectionContext: null,
-  tocSheetReturnFocus: null
+  tocSheetReturnFocus: null,
+  hostedAccountSnapshot: null,
+  hostedAccessToken: "",
+  hostedAccountRefresh: null,
+  hostedDialogError: null
 };
 
 const elements = {
@@ -206,8 +224,27 @@ const elements = {
   focusBreakButton: document.getElementById("focusBreakButton"),
   stopFocusButton: document.getElementById("stopFocusButton"),
   focusHistory: document.getElementById("focusHistory"),
+  createHostedAllowanceNotice: document.getElementById("createHostedAllowanceNotice"),
+  notesHostedAllowanceNotice: document.getElementById("notesHostedAllowanceNotice"),
+  journeyHostedAllowanceNotice: document.getElementById("journeyHostedAllowanceNotice"),
+  quizHostedAllowanceNotice: document.getElementById("quizHostedAllowanceNotice"),
+  videoHostedAllowanceNotice: document.getElementById("videoHostedAllowanceNotice"),
   settingsButton: document.getElementById("settingsButton"),
   settingsDialog: document.getElementById("settingsDialog"),
+  hostedAccountSection: document.getElementById("hostedAccountSection"),
+  hostedPlanBadge: document.getElementById("hostedPlanBadge"),
+  hostedAccountStatus: document.getElementById("hostedAccountStatus"),
+  hostedAllowanceList: document.getElementById("hostedAllowanceList"),
+  hostedModeInput: document.getElementById("hostedModeInput"),
+  hostedAccountWebButton: document.getElementById("hostedAccountWebButton"),
+  hostedRefreshAccountButton: document.getElementById("hostedRefreshAccountButton"),
+  hostedManageBillingButton: document.getElementById("hostedManageBillingButton"),
+  hostedAllowanceDialog: document.getElementById("hostedAllowanceDialog"),
+  hostedAllowanceDialogTitle: document.getElementById("hostedAllowanceDialogTitle"),
+  hostedAllowanceDialogMessage: document.getElementById("hostedAllowanceDialogMessage"),
+  hostedAllowanceDialogReset: document.getElementById("hostedAllowanceDialogReset"),
+  hostedUpgradeButton: document.getElementById("hostedUpgradeButton"),
+  hostedUseOwnBackendButton: document.getElementById("hostedUseOwnBackendButton"),
   apiEndpointInput: document.getElementById("apiEndpointInput"),
   backendTokenInput: document.getElementById("backendTokenInput"),
   clearLearningMemoryButton: document.getElementById("clearLearningMemoryButton"),
@@ -303,9 +340,15 @@ function init() {
   elements.saveSettingsButton.addEventListener("click", saveSettings);
   elements.clearLearningMemoryButton?.addEventListener("click", handleClearLearningMemory);
   elements.apiEndpointInput?.addEventListener("change", handleBackendEndpointChange);
+  elements.hostedAccountWebButton?.addEventListener("click", () => void openHostedWebPath("/account"));
+  elements.hostedRefreshAccountButton?.addEventListener("click", () => void refreshHostedAccount({ force: true }));
+  elements.hostedManageBillingButton?.addEventListener("click", () => void openHostedWebPath("/account/billing"));
+  elements.hostedUpgradeButton?.addEventListener("click", () => void openHostedWebPath("/pricing"));
+  elements.hostedUseOwnBackendButton?.addEventListener("click", handleUseOwnBackendFromHostedDialog);
 
   void initializePersistentPanel();
   loadSettings();
+  initializeHostedAccountUi();
   syncCustomFocusDurationControl();
   renderLibrary();
   void loadFocusState();
@@ -1314,7 +1357,11 @@ async function classifyImportSourcesWithBackend(files, journey) {
   const endpoint = deriveBackendEndpoint(configuredEndpoint, "classify-sources");
   const response = await fetch(endpoint, {
     method: "POST",
-    headers: getBackendHeaders(settings, endpoint),
+    headers: await getMeteredBackendHeaders(
+      settings,
+      endpoint,
+      HostedAccount?.ACTIONS.CLASSIFICATION_BATCH
+    ),
     body: JSON.stringify({
       files: files.map(({ fileId, excerpt }) => ({ fileId, excerpt })),
       existingChapters: journey.chapters.map((chapter) => chapter.title),
@@ -1323,7 +1370,12 @@ async function classifyImportSourcesWithBackend(files, journey) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "The source sorter could not classify these files.");
+    throw backendRequestError(
+      response,
+      payload,
+      "The source sorter could not classify these files.",
+      { settings, action: HostedAccount?.ACTIONS.CLASSIFICATION_BATCH }
+    );
   }
   return normalizeImportClassificationResponse(payload, files);
 }
@@ -2679,7 +2731,12 @@ async function requestAutomaticYouTubeTranscript(tab, identity) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: getBackendHeaders(settings, endpoint),
+      headers: await getMeteredBackendHeaders(
+        settings,
+        endpoint,
+        HostedAccount?.ACTIONS.VIDEO_PROCESSING,
+        Math.max(1, Math.round(Number(identity.durationMs) || 1))
+      ),
       body: JSON.stringify({
         sourceUrl: tab.url,
         title: identity.title || tab.title,
@@ -2691,7 +2748,12 @@ async function requestAutomaticYouTubeTranscript(tab, identity) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "Gemini could not analyze this public YouTube URL. Use explicit tab-audio transcription instead.");
+    throw backendRequestError(
+      response,
+      payload,
+      "Gemini could not analyze this public YouTube URL. Use explicit tab-audio transcription instead.",
+      { settings, action: HostedAccount?.ACTIONS.VIDEO_PROCESSING }
+    );
   }
   const normalizedSegments = globalThis.ExamCramJourney?.normalizeTranscriptSegments(payload.segments) || [];
   if (normalizedSegments.length < 3) {
@@ -3812,7 +3874,13 @@ async function generateNotesWithBackend(endpoint, input, settings = {}) {
   try {
     response = await fetch(endpoint, {
     method: "POST",
-    headers: getBackendHeaders(settings, endpoint),
+    headers: await getMeteredBackendHeaders(
+      settings,
+      endpoint,
+      input.sourceType === "collection"
+        ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
+        : HostedAccount?.ACTIONS.STUDY_BUILD
+    ),
     body: JSON.stringify(input)
     });
   } finally {
@@ -3823,7 +3891,17 @@ async function generateNotesWithBackend(endpoint, input, settings = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "AI notes backend failed. Check your endpoint or clear settings for local mode.");
+    throw backendRequestError(
+      response,
+      payload,
+      "AI notes backend failed. Check your endpoint or clear settings for local mode.",
+      {
+        settings,
+        action: input.sourceType === "collection"
+          ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
+          : HostedAccount?.ACTIONS.STUDY_BUILD
+      }
+    );
   }
   if (!payload.summary || !payload.terms || !payload.visualLesson?.visualModel
     || !Array.isArray(payload.visualLesson.visualModel.nodes)
@@ -4609,14 +4687,27 @@ async function generateQuizWithBackend(endpoint, input, settings = {}) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: getBackendHeaders(settings, endpoint),
+      headers: typeof getMeteredBackendHeaders === "function"
+        ? await getMeteredBackendHeaders(
+            settings,
+            endpoint,
+            typeof HostedAccount !== "undefined" ? HostedAccount?.ACTIONS.QUIZ_BUILD : "quiz_build"
+          )
+        : getBackendHeaders(settings, endpoint),
       body: JSON.stringify(input)
     });
   } finally {
     stopProgress();
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "The quiz service could not generate questions.");
+  if (!response.ok) {
+    throw backendRequestError(
+      response,
+      payload,
+      "The quiz service could not generate questions.",
+      { settings, action: HostedAccount?.ACTIONS.QUIZ_BUILD }
+    );
+  }
   return assertQuizSemanticVerification(
     validateGeneratedQuiz(payload, input, "The quiz service"),
     "The quiz service"
@@ -5020,7 +5111,11 @@ async function generateWithBackend(endpoint, input, settings = {}) {
   try {
     response = await fetch(endpoint, {
     method: "POST",
-    headers: getBackendHeaders(settings, endpoint),
+    headers: await getMeteredBackendHeaders(
+      settings,
+      endpoint,
+      HostedAccount?.ACTIONS.STUDY_BUILD
+    ),
     body: JSON.stringify(input)
     });
   } finally {
@@ -5031,7 +5126,12 @@ async function generateWithBackend(endpoint, input, settings = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "AI backend failed. Check your endpoint or use local mode.");
+    throw backendRequestError(
+      response,
+      payload,
+      "AI backend failed. Check your endpoint or use local mode.",
+      { settings, action: HostedAccount?.ACTIONS.STUDY_BUILD }
+    );
   }
   if (!payload.summary || !payload.questions) {
     throw new Error("AI backend returned an invalid study session.");
@@ -5741,19 +5841,54 @@ function makeContentFingerprint(value) {
   return `${text.length}:${(hash >>> 0).toString(36)}`;
 }
 
+const PDF_VENDOR_SCRIPT = "document-reader-vendor.bundle.js";
+const PDF_VENDOR_UNAVAILABLE_MESSAGE = "The local PDF reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.";
+let pdfVendorLoad = null;
+
+function getExtensionAssetUrl(fileName) {
+  return globalThis.chrome?.runtime?.getURL
+    ? globalThis.chrome.runtime.getURL(fileName)
+    : new URL(fileName, location.href).href;
+}
+
+// The PDF engine is ~369 KB and most sessions never import a document, so it is injected at
+// first use instead of on every panel open. The promise is memoized so a multi-file import
+// triggers one script load, not one per file.
+function loadPdfVendorScript() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = getExtensionAssetUrl(PDF_VENDOR_SCRIPT);
+    script.async = false;
+    script.dataset.examCramPdfVendor = "1";
+    script.addEventListener("load", () => resolve(), { once: true });
+    script.addEventListener("error", () => {
+      script.remove();
+      reject(new Error(PDF_VENDOR_UNAVAILABLE_MESSAGE));
+    }, { once: true });
+    document.head.append(script);
+  });
+}
+
 async function getPdfJs() {
   if (globalThis.ExamCramPdfVendor?.pdfjs) return globalThis.ExamCramPdfVendor.pdfjs;
-  if (globalThis.ExamCramPdfVendorReady) {
-    const vendor = await globalThis.ExamCramPdfVendorReady;
-    if (vendor?.pdfjs) return vendor.pdfjs;
+  if (!pdfVendorLoad) {
+    pdfVendorLoad = (async () => {
+      if (!globalThis.ExamCramPdfVendorReady) await loadPdfVendorScript();
+      const vendor = await globalThis.ExamCramPdfVendorReady;
+      if (!vendor?.pdfjs) throw new Error(PDF_VENDOR_UNAVAILABLE_MESSAGE);
+      return vendor.pdfjs;
+    })();
+    pdfVendorLoad.catch(() => { pdfVendorLoad = null; });
   }
-  throw new Error("The local PDF reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  try {
+    return await pdfVendorLoad;
+  } catch {
+    throw new Error(PDF_VENDOR_UNAVAILABLE_MESSAGE);
+  }
 }
 
 function getPdfWorkerUrl() {
-  return globalThis.chrome?.runtime?.getURL
-    ? globalThis.chrome.runtime.getURL("pdf-worker.bundle.mjs")
-    : new URL("pdf-worker.bundle.mjs", location.href).href;
+  return getExtensionAssetUrl("pdf-worker.bundle.mjs");
 }
 
 function callChromeBooleanMethod(context, method, args = []) {
@@ -6717,9 +6852,7 @@ function buildMindMapHierarchy(model) {
   return branches;
 }
 
-function getMindMapConnectionPoints(sourceElement, targetElement, canvasRect) {
-  const source = sourceElement.getBoundingClientRect();
-  const target = targetElement.getBoundingClientRect();
+function getMindMapConnectionPoints(source, target, canvasRect) {
   const sourceCenter = {
     x: source.left - canvasRect.left + source.width / 2,
     y: source.top - canvasRect.top + source.height / 2
@@ -6745,9 +6878,9 @@ function getMindMapConnectionPoints(sourceElement, targetElement, canvasRect) {
   };
 }
 
-function renderMindMapConnectorPath(svg, definition, canvasRect, index = 0) {
-  if (!definition.source?.isConnected || !definition.target?.isConnected) return;
-  const points = getMindMapConnectionPoints(definition.source, definition.target, canvasRect);
+function renderMindMapConnectorPath(container, definition, canvasRect, index = 0) {
+  if (!definition.sourceRect || !definition.targetRect) return;
+  const points = getMindMapConnectionPoints(definition.sourceRect, definition.targetRect, canvasRect);
   const path = createVisualSvgElement("path");
   path.classList.add("vin-map-path", `is-${definition.level || "secondary"}`);
   if (definition.active) path.classList.add("is-active");
@@ -6764,7 +6897,7 @@ function renderMindMapConnectorPath(svg, definition, canvasRect, index = 0) {
   }
   const title = createVisualSvgElement("title", definition.label || "Concept relationship");
   path.append(title);
-  svg.append(path);
+  container.append(path);
 }
 
 function renderInteractiveVisualModel(model, context = {}) {
@@ -6948,38 +7081,62 @@ function renderInteractiveVisualModel(model, context = {}) {
   const drawConnectors = () => {
     connectorFrame = 0;
     if (!mapCanvas.isConnected) return;
+    // Read phase. Every rect is measured before the first write below, because a layout read
+    // that follows a write forces a synchronous reflow, and appending each path to the live
+    // layer used to force one per connector.
     const width = Math.max(1, mapCanvas.clientWidth);
     const height = Math.max(1, mapCanvas.clientHeight);
     const canvasRect = mapCanvas.getBoundingClientRect();
+    const crossEdges = selectedNodeId
+      ? model.edges.filter((edge) => edge.from === selectedNodeId || edge.to === selectedNodeId)
+      : [];
+    const nodeRects = new Map();
+    const measureNode = (element) => {
+      if (!element || nodeRects.has(element)) return;
+      nodeRects.set(element, element.isConnected ? element.getBoundingClientRect() : null);
+    };
+    structuralConnectors.forEach((definition) => {
+      measureNode(definition.source);
+      measureNode(definition.target);
+    });
+    crossEdges.forEach((edge) => {
+      measureNode(nodeElements.get(edge.from)?.button);
+      measureNode(nodeElements.get(edge.to)?.button);
+    });
+    // Write phase. Paths are built into a detached fragment and attached once.
     connectorLayer.setAttribute("viewBox", `0 0 ${width} ${height}`);
     connectorLayer.setAttribute("width", String(width));
     connectorLayer.setAttribute("height", String(height));
     connectorLayer.querySelectorAll(".vin-map-path").forEach((path) => path.remove());
+    const connectorLayerFragment = document.createDocumentFragment();
     structuralConnectors.forEach((definition, index) => {
       const sourceId = definition.source?.dataset?.nodeId || "";
       const targetId = definition.target?.dataset?.nodeId || "";
       const connected = !selectedNodeId || sourceId === selectedNodeId || targetId === selectedNodeId;
-      renderMindMapConnectorPath(connectorLayer, {
+      renderMindMapConnectorPath(connectorLayerFragment, {
         ...definition,
+        sourceRect: nodeRects.get(definition.source) || null,
+        targetRect: nodeRects.get(definition.target) || null,
         active: connected && Boolean(selectedNodeId),
         dimmed: branchFocusActive && !connected
       }, canvasRect, index);
     });
-    if (selectedNodeId) {
-      model.edges.filter((edge) => edge.from === selectedNodeId || edge.to === selectedNodeId).forEach((edge, index) => {
-        const source = nodeElements.get(edge.from)?.button;
-        const target = nodeElements.get(edge.to)?.button;
-        if (!source || !target || structuralConnectors.some((item) => item.edgeId === edge.id)) return;
-        renderMindMapConnectorPath(connectorLayer, {
-          edgeId: edge.id,
-          source,
-          target,
-          label: edge.label,
-          level: "cross",
-          active: true
-        }, canvasRect, index);
-      });
-    }
+    crossEdges.forEach((edge, index) => {
+      const source = nodeElements.get(edge.from)?.button;
+      const target = nodeElements.get(edge.to)?.button;
+      if (!source || !target || structuralConnectors.some((item) => item.edgeId === edge.id)) return;
+      renderMindMapConnectorPath(connectorLayerFragment, {
+        edgeId: edge.id,
+        source,
+        target,
+        sourceRect: nodeRects.get(source) || null,
+        targetRect: nodeRects.get(target) || null,
+        label: edge.label,
+        level: "cross",
+        active: true
+      }, canvasRect, index);
+    });
+    connectorLayer.append(connectorLayerFragment);
   };
   const scheduleConnectorDraw = () => {
     if (connectorFrame) cancelAnimationFrame(connectorFrame);
@@ -7826,7 +7983,11 @@ async function requestVisualFollowup({ question, model, context, selectedNode, s
     const endpoint = deriveVisualFollowupEndpoint(configuredEndpoint);
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: getBackendHeaders(settings, endpoint),
+      headers: await getMeteredBackendHeaders(
+        settings,
+        endpoint,
+        HostedAccount?.ACTIONS.VISUAL_FOLLOWUP
+      ),
       body: JSON.stringify({
         question,
         title: context.title || model.title,
@@ -7839,7 +8000,14 @@ async function requestVisualFollowup({ question, model, context, selectedNode, s
       })
     });
     const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || "The visual tutor follow-up service is unavailable.");
+    if (!response.ok) {
+      throw backendRequestError(
+        response,
+        payload,
+        "The visual tutor follow-up service is unavailable.",
+        { settings, action: HostedAccount?.ACTIONS.VISUAL_FOLLOWUP }
+      );
+    }
     const answer = visualText(
       payload.answer?.text || payload.answer || payload.response || payload.text || payload.followup?.answer,
       "",
@@ -10838,7 +11006,13 @@ async function handleSummarizeJourney() {
   showStatus("Summarizing your saved learning evidence...");
   try {
     const journey = await getJourney();
-    let summary = globalThis.ExamCramJourney.summarize(journey, { range: elements.journeyRange.value });
+    // The study goal carries the exam date, so the summary can project which concepts will have
+    // decayed below the retention threshold by then instead of only reporting the present.
+    const summaryStudyGoal = await getStudyGoal().catch(() => null);
+    let summary = globalThis.ExamCramJourney.summarize(journey, {
+      range: elements.journeyRange.value,
+      studyGoal: summaryStudyGoal
+    });
     const [settings, storedFocus] = await Promise.all([
       getStorage(STORAGE_KEYS.settings, {}),
       getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({}))
@@ -10859,7 +11033,11 @@ async function handleSummarizeJourney() {
       try {
         const response = await fetch(summaryEndpoint, {
           method: "POST",
-          headers: getBackendHeaders(settings, summaryEndpoint),
+          headers: await getMeteredBackendHeaders(
+            settings,
+            summaryEndpoint,
+            HostedAccount?.ACTIONS.JOURNEY_SUMMARY
+          ),
           body: JSON.stringify({
             journeyTitle: journey.title,
             range: elements.journeyRange.value,
@@ -10884,7 +11062,14 @@ async function handleSummarizeJourney() {
           })
         });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(payload.error || "AI journey summary failed.");
+        if (!response.ok) {
+          throw backendRequestError(
+            response,
+            payload,
+            "AI journey summary failed.",
+            { settings, action: HostedAccount?.ACTIONS.JOURNEY_SUMMARY }
+          );
+        }
         if (payload.overview && Array.isArray(payload.nextSteps)) summary = payload;
       } catch (error) {
         summary = { ...summary, fallbackReason: error.message || "AI summary unavailable." };
@@ -10903,7 +11088,10 @@ async function handleSummarizeJourney() {
       if (error.code !== "REVISION_CONFLICT") throw error;
       const latest = await getJourney();
       summaryToSave = {
-        ...globalThis.ExamCramJourney.summarize(latest, { range: elements.journeyRange.value }),
+        ...globalThis.ExamCramJourney.summarize(latest, {
+          range: elements.journeyRange.value,
+          studyGoal: summaryStudyGoal
+        }),
         range: elements.journeyRange.value,
         sourceRevision: latest.revision,
         fallbackReason: "Journey activity changed while the AI summary was running, so this summary was refreshed locally."
@@ -11301,19 +11489,30 @@ async function openSettings() {
   const settings = await getStorage(STORAGE_KEYS.settings, {});
   applySettingsToForm(settings);
   elements.settingsDialog.showModal();
+  if (hostedAccountConfig.active) {
+    void refreshHostedAccount({ force: false }).catch((error) => {
+      renderHostedAccountUi(settings, error);
+    });
+  }
 }
 
 async function loadSettings() {
   const settings = await getStorage(STORAGE_KEYS.settings, {});
   applySettingsToForm(settings);
+  renderHostedAccountUi(settings);
 }
 
 function applySettingsToForm(settings = {}) {
-  const endpoint = getConfiguredApiEndpoint(settings);
+  const endpoint = getConfiguredCustomApiEndpoint(settings);
   const token = String(settings.backendAccessToken || "");
   elements.apiEndpointInput.value = endpoint;
   elements.apiEndpointInput.dataset.backendTokenOrigin = String(settings.backendTokenOrigin || (token ? getEndpointOrigin(endpoint) : ""));
   if (elements.backendTokenInput) elements.backendTokenInput.value = token;
+  if (elements.hostedModeInput) {
+    elements.hostedModeInput.checked = hostedAccountConfig.active
+      && HostedAccount?.isHostedRequested(settings);
+  }
+  renderHostedAccountUi(settings);
 }
 
 function handleBackendEndpointChange() {
@@ -11338,7 +11537,13 @@ async function saveSettings(event) {
   try {
     const previousSettings = await getStorage(STORAGE_KEYS.settings, {});
     const apiEndpoint = normalizeSafeBackendEndpoint(apiEndpointInput);
-    const permitted = await requestEndpointPermission(apiEndpoint);
+    const hostedFeatureActive = typeof hostedAccountConfig !== "undefined"
+      && hostedAccountConfig.active === true;
+    const useHostedBackend = hostedFeatureActive && Boolean(elements.hostedModeInput?.checked);
+    const permissionEndpoint = useHostedBackend
+      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/api/study-session")
+      : apiEndpoint;
+    const permitted = await requestEndpointPermission(permissionEndpoint);
     if (!permitted) {
       showStatus("Permission was not granted for that backend endpoint.", true);
       return;
@@ -11349,17 +11554,38 @@ async function saveSettings(event) {
       || (previousToken ? getEndpointOrigin(getConfiguredApiEndpoint(previousSettings)) : ""));
     if (backendAccessToken && previousToken && backendAccessToken === previousToken && previousOrigin && previousOrigin !== nextOrigin) {
       backendAccessToken = "";
-      await setStorage(STORAGE_KEYS.settings, { apiEndpoint, backendAccessToken: "", backendTokenOrigin: "" });
+      const clearedSettings = hostedFeatureActive
+        ? {
+            ...previousSettings,
+            apiEndpoint,
+            backendAccessToken: "",
+            backendTokenOrigin: "",
+            backendMode: useHostedBackend ? "hosted" : "custom"
+          }
+        : { apiEndpoint, backendAccessToken: "", backendTokenOrigin: "" };
+      await setStorage(STORAGE_KEYS.settings, clearedSettings);
       if (elements.backendTokenInput) elements.backendTokenInput.value = "";
       if (elements.apiEndpointInput) elements.apiEndpointInput.dataset.backendTokenOrigin = nextOrigin;
       showStatus("Backend origin changed. The old token was removed; enter this backend's token again if it requires one.", true);
       return;
     }
     const backendTokenOrigin = backendAccessToken ? nextOrigin : "";
-    await setStorage(STORAGE_KEYS.settings, { apiEndpoint, backendAccessToken, backendTokenOrigin });
+    const nextSettings = hostedFeatureActive
+      ? {
+          ...previousSettings,
+          apiEndpoint,
+          backendAccessToken,
+          backendTokenOrigin,
+          backendMode: useHostedBackend ? "hosted" : "custom"
+        }
+      : { apiEndpoint, backendAccessToken, backendTokenOrigin };
+    await setStorage(STORAGE_KEYS.settings, nextSettings);
     if (elements.apiEndpointInput) elements.apiEndpointInput.dataset.backendTokenOrigin = backendTokenOrigin;
     elements.settingsDialog.close();
-    showStatus(apiEndpoint ? "Backend settings saved." : "Local-only mode enabled.");
+    if (typeof renderHostedAccountUi === "function") renderHostedAccountUi(nextSettings);
+    showStatus(useHostedBackend
+      ? "Hosted AI mode saved. Account and allowance checks run before hosted actions."
+      : apiEndpoint ? "Backend settings saved." : "Local-only mode enabled.");
   } catch (error) {
     showStatus(error.message || "Could not save backend settings.", true);
   }
@@ -11391,6 +11617,20 @@ function requestEndpointPermission(endpoint) {
 }
 
 function getConfiguredApiEndpoint(settings) {
+  if (
+    typeof hostedAccountConfig !== "undefined"
+    && typeof HostedAccount !== "undefined"
+    && hostedAccountConfig.enabled
+    && HostedAccount?.isHostedRequested(settings)
+  ) {
+    return hostedAccountConfig.active
+      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/api/study-session")
+      : "";
+  }
+  return getConfiguredCustomApiEndpoint(settings);
+}
+
+function getConfiguredCustomApiEndpoint(settings) {
   const value = Object.prototype.hasOwnProperty.call(settings || {}, "apiEndpoint")
     ? String(settings.apiEndpoint || "").trim()
     : DEFAULT_API_ENDPOINT;
@@ -11455,12 +11695,325 @@ async function openSafeExternalUrl(value, options = {}) {
 
 function getBackendHeaders(settings = {}, endpoint = "", extraHeaders = {}) {
   const headers = { "Content-Type": "application/json", ...extraHeaders };
+  if (
+    typeof hostedAccountConfig !== "undefined"
+    && typeof HostedAccount !== "undefined"
+    && hostedAccountConfig.active
+    && HostedAccount?.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)
+  ) {
+    return headers;
+  }
   const token = String(settings?.backendAccessToken || "").trim();
   const requestOrigin = getEndpointOrigin(endpoint);
-  const configuredOrigin = getEndpointOrigin(getConfiguredApiEndpoint(settings));
+  const configuredOrigin = getEndpointOrigin(getConfiguredCustomApiEndpoint(settings));
   const tokenOrigin = String(settings?.backendTokenOrigin || configuredOrigin);
   if (token && requestOrigin && requestOrigin === tokenOrigin) headers.Authorization = `Bearer ${token}`;
   return headers;
+}
+
+function initializeHostedAccountUi() {
+  const visible = Boolean(HostedAccount && hostedAccountConfig.active);
+  elements.hostedAccountSection?.classList.toggle("hidden", !visible);
+  if (!visible) {
+    renderHostedAllowanceNotices(null, false);
+    return;
+  }
+  void getStorage(STORAGE_KEYS.settings, {})
+    .then((settings) => renderHostedAccountUi(settings))
+    .catch(() => renderHostedAccountUi({}));
+}
+
+function renderHostedAccountUi(settings = {}, error = null) {
+  const featureAvailable = Boolean(HostedAccount && hostedAccountConfig.active);
+  elements.hostedAccountSection?.classList.toggle("hidden", !featureAvailable);
+  if (!featureAvailable) {
+    renderHostedAllowanceNotices(null, false);
+    return;
+  }
+
+  const hostedSelected = HostedAccount.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)
+    || Boolean(elements.hostedModeInput?.checked);
+  if (elements.hostedModeInput) elements.hostedModeInput.checked = hostedSelected;
+  const snapshot = state.hostedAccountSnapshot;
+  if (elements.hostedPlanBadge) {
+    elements.hostedPlanBadge.textContent = snapshot ? HostedAccount.planLabel(snapshot) : "Signed out";
+  }
+  if (elements.hostedAccountStatus) {
+    elements.hostedAccountStatus.textContent = error
+      ? safeHostedAccountMessage(error)
+      : snapshot?.authenticated
+        ? accountStatusMessage(snapshot)
+        : "Sign in on the Exam-Cram website, then refresh usage before selecting hosted AI.";
+  }
+  if (elements.hostedAllowanceList) {
+    const rows = snapshot?.allowances?.map((allowance) => {
+      const row = document.createElement("div");
+      row.className = "hosted-allowance-row";
+      const reset = HostedAccount.resetLabel(allowance);
+      row.append(
+        createElement("strong", HostedAccount.allowanceLabel(allowance)),
+        createElement("span", reset || "Current allowance period")
+      );
+      return row;
+    }) || [];
+    elements.hostedAllowanceList.replaceChildren(...rows);
+  }
+  elements.hostedManageBillingButton?.classList.toggle("hidden", !snapshot?.authenticated);
+  renderHostedAllowanceNotices(snapshot, hostedSelected);
+}
+
+function accountStatusMessage(snapshot) {
+  const email = String(snapshot?.account?.email || "").trim();
+  const status = String(snapshot?.entitlement?.status || "active").replaceAll("_", " ");
+  const cancellation = snapshot?.entitlement?.cancelAtPeriodEnd && snapshot.entitlement.effectiveEnd
+    ? ` Access changes after ${new Date(snapshot.entitlement.effectiveEnd).toLocaleDateString()}.`
+    : "";
+  return `${email ? `${email} · ` : ""}${HostedAccount.planLabel(snapshot)} · ${status}.${cancellation}`;
+}
+
+function renderHostedAllowanceNotices(snapshot, hostedSelected) {
+  const noticeMap = [
+    [elements.createHostedAllowanceNotice, HostedAccount?.ACTIONS.STUDY_BUILD],
+    [elements.notesHostedAllowanceNotice, HostedAccount?.ACTIONS.STUDY_BUILD],
+    [elements.quizHostedAllowanceNotice, HostedAccount?.ACTIONS.QUIZ_BUILD],
+    [elements.journeyHostedAllowanceNotice, HostedAccount?.ACTIONS.JOURNEY_SUMMARY],
+    [elements.videoHostedAllowanceNotice, HostedAccount?.ACTIONS.VIDEO_PROCESSING]
+  ];
+  noticeMap.forEach(([element, action]) => {
+    if (!element) return;
+    const allowance = hostedSelected
+      ? snapshot?.allowances?.find((item) => item.action === action)
+      : null;
+    element.classList.toggle("hidden", !allowance);
+    element.textContent = allowance
+      ? `${HostedAccount.allowanceLabel(allowance)}${HostedAccount.resetLabel(allowance) ? ` · ${HostedAccount.resetLabel(allowance)}` : ""}`
+      : "";
+  });
+}
+
+async function refreshHostedAccount({ force = false } = {}) {
+  if (!HostedAccount || !hostedAccountConfig.active) {
+    throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+  }
+  if (!force && state.hostedAccountSnapshot) {
+    const refreshedAt = Date.parse(state.hostedAccountSnapshot.refreshedAt || "");
+    if (Number.isFinite(refreshedAt) && Date.now() - refreshedAt < 60_000) {
+      return state.hostedAccountSnapshot;
+    }
+  }
+  if (state.hostedAccountRefresh) return state.hostedAccountRefresh;
+
+  state.hostedAccountRefresh = (async () => {
+    const session = await readHostedSession();
+    const accessToken = normalizeHostedAccessToken(session?.accessToken, session?.expiresAt);
+    if (!accessToken) {
+      state.hostedAccessToken = "";
+      state.hostedAccountSnapshot = null;
+      throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED" });
+    }
+    const headers = {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`
+    };
+    const endpoints = ["/v1/me", "/v1/entitlements", "/v1/usage"]
+      .map((path) => HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, path));
+    if (endpoints.some((endpoint) => !endpoint)) {
+      throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+    }
+    const responses = await Promise.all(endpoints.map((endpoint) => fetch(endpoint, {
+      method: "GET",
+      headers,
+      cache: "no-store"
+    })));
+    const payloads = await Promise.all(responses.map((response) => response.json().catch(() => ({}))));
+    responses.forEach((response, index) => {
+      if (!response.ok) {
+        throw backendRequestError(
+          response,
+          payloads[index],
+          "The hosted account service could not refresh your allowance."
+        );
+      }
+    });
+    const [profilePayload, entitlementPayload, usagePayload] = payloads;
+    state.hostedAccessToken = accessToken;
+    state.hostedAccountSnapshot = HostedAccount.normalizeSnapshot({
+      account: profilePayload.account,
+      entitlement: entitlementPayload.entitlement || usagePayload.entitlement,
+      policyVersion: usagePayload.policyVersion,
+      allowances: usagePayload.allowances,
+      refreshedAt: new Date().toISOString()
+    });
+    const settings = await getStorage(STORAGE_KEYS.settings, {});
+    renderHostedAccountUi(settings);
+    return state.hostedAccountSnapshot;
+  })();
+
+  try {
+    return await state.hostedAccountRefresh;
+  } finally {
+    state.hostedAccountRefresh = null;
+  }
+}
+
+async function readHostedSession() {
+  if (!globalThis.chrome?.storage?.session?.get) return null;
+  return new Promise((resolve, reject) => {
+    chrome.storage.session.get(HOSTED_SESSION_STORAGE_KEY, (result) => {
+      const runtimeError = chrome.runtime?.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "The hosted sign-in session could not be read."));
+        return;
+      }
+      resolve(result?.[HOSTED_SESSION_STORAGE_KEY] || null);
+    });
+  });
+}
+
+function normalizeHostedAccessToken(value, expiresAt) {
+  const token = String(value || "").trim();
+  if (token.length < 16 || token.length > 4096) return "";
+  const expiry = Date.parse(expiresAt || "");
+  if (Number.isFinite(expiry) && expiry <= Date.now() + 30_000) return "";
+  return token;
+}
+
+async function getMeteredBackendHeaders(settings, endpoint, action, units = 1) {
+  if (!HostedAccount?.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)) {
+    return getBackendHeaders(settings, endpoint);
+  }
+  let snapshot;
+  try {
+    snapshot = await refreshHostedAccount({ force: false });
+  } catch (error) {
+    const hostedError = error?.isHostedAccess
+      ? error
+      : createHostedAccessError({ code: "HOSTED_ENTITLEMENT_UNAVAILABLE", action, cause: error });
+    queueHostedAccessDialog(hostedError);
+    throw hostedError;
+  }
+  const decision = HostedAccount.decideAction({
+    settings,
+    config: HOSTED_ACCOUNT_CONFIG,
+    snapshot,
+    action,
+    units
+  });
+  if (!decision.allowed) {
+    const error = createHostedAccessError(decision);
+    queueHostedAccessDialog(error);
+    throw error;
+  }
+  if (!state.hostedAccessToken) {
+    const error = createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED", action });
+    queueHostedAccessDialog(error);
+    throw error;
+  }
+  return {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${state.hostedAccessToken}`
+  };
+}
+
+function createHostedAccessError(decision = {}) {
+  const code = String(decision.code || "HOSTED_ENTITLEMENT_UNAVAILABLE");
+  const labels = HostedAccount?.ACTION_LABELS || {};
+  const actionLabel = labels[decision.action] || "hosted AI";
+  const messages = {
+    HOSTED_FEATURE_UNAVAILABLE: "Hosted accounts are not enabled in this build.",
+    HOSTED_AUTH_REQUIRED: "Sign in before using hosted AI.",
+    HOSTED_ENTITLEMENT_UNAVAILABLE: "Your hosted allowance could not be verified. No hosted request was sent.",
+    ALLOWANCE_EXHAUSTED: `No ${actionLabel} remain in this allowance period.`
+  };
+  const error = new Error(messages[code] || "The hosted action is unavailable.");
+  error.code = code;
+  error.action = decision.action || "";
+  error.allowance = decision.allowance || null;
+  error.isHostedAccess = true;
+  if (decision.cause) error.cause = decision.cause;
+  return error;
+}
+
+function backendRequestError(response, payload, fallback, options = {}) {
+  const detail = payload?.error && typeof payload.error === "object" ? payload.error : {};
+  const code = String(detail.code || payload?.code || "").slice(0, 80);
+  const message = String(detail.message || (typeof payload?.error === "string" ? payload.error : "") || fallback);
+  const error = new Error(message);
+  error.code = code;
+  error.status = response?.status;
+  error.action = options.action || detail.details?.action || "";
+  if (["ALLOWANCE_EXHAUSTED", "AUTHENTICATION_REQUIRED", "ACCOUNT_UNAVAILABLE"].includes(code)) {
+    error.isHostedAccess = true;
+    error.allowance = detail.details?.action
+      ? {
+          action: detail.details.action,
+          unit: detail.details.action === HostedAccount?.ACTIONS.VIDEO_PROCESSING ? "millisecond" : "action",
+          limit: null,
+          remaining: detail.details.remaining ?? 0,
+          period: { end: detail.details.periodEndsAt || null }
+        }
+      : null;
+    if (HostedAccount?.isHostedMode(options.settings, HOSTED_ACCOUNT_CONFIG)) {
+      queueHostedAccessDialog(error);
+    }
+  }
+  return error;
+}
+
+function safeHostedAccountMessage(error) {
+  if (error?.isHostedAccess) return error.message;
+  return "The hosted account service could not be reached. Your local and bring-your-own-backend options are unchanged.";
+}
+
+function queueHostedAccessDialog(error) {
+  if (!hostedAccountConfig.active || !elements.hostedAllowanceDialog) return;
+  state.hostedDialogError = error;
+  setTimeout(() => showHostedAccessDialog(error), 0);
+}
+
+function showHostedAccessDialog(error) {
+  if (!hostedAccountConfig.active || !elements.hostedAllowanceDialog) return;
+  const actionLabel = HostedAccount.ACTION_LABELS[error?.action] || "hosted AI action";
+  if (elements.hostedAllowanceDialogTitle) {
+    elements.hostedAllowanceDialogTitle.textContent = error?.code === "ALLOWANCE_EXHAUSTED"
+      ? `${actionLabel} allowance used`
+      : "Hosted AI needs attention";
+  }
+  if (elements.hostedAllowanceDialogMessage) {
+    elements.hostedAllowanceDialogMessage.textContent = safeHostedAccountMessage(error);
+  }
+  const reset = error?.allowance ? HostedAccount.resetLabel(error.allowance) : "";
+  if (elements.hostedAllowanceDialogReset) {
+    elements.hostedAllowanceDialogReset.textContent = reset;
+    elements.hostedAllowanceDialogReset.classList.toggle("hidden", !reset);
+  }
+  if (elements.quizSettingsDialog?.open) elements.quizSettingsDialog.close();
+  if (elements.videoCaptureDialog?.open) elements.videoCaptureDialog.close();
+  if (!elements.hostedAllowanceDialog.open) elements.hostedAllowanceDialog.showModal();
+}
+
+async function handleUseOwnBackendFromHostedDialog() {
+  if (elements.hostedAllowanceDialog?.open) elements.hostedAllowanceDialog.close();
+  await openSettings();
+  if (elements.hostedModeInput) elements.hostedModeInput.checked = false;
+  const settings = await getStorage(STORAGE_KEYS.settings, {});
+  renderHostedAccountUi({ ...settings, backendMode: "custom" });
+  elements.apiEndpointInput?.focus();
+}
+
+async function openHostedWebPath(pathname) {
+  const allowedPaths = new Set(["/account", "/account/billing", "/pricing"]);
+  if (!hostedAccountConfig.active || !allowedPaths.has(pathname)) {
+    showStatus("Hosted account pages are not enabled in this build.", true);
+    return "";
+  }
+  const url = new URL(pathname, `${hostedAccountConfig.apiOrigin}/`);
+  if (url.origin !== hostedAccountConfig.apiOrigin) {
+    showStatus("The hosted account URL was rejected.", true);
+    return "";
+  }
+  await openSafeExternalUrl(url.href);
+  return url.href;
 }
 
 

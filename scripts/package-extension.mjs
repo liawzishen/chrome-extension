@@ -23,7 +23,7 @@ for (const relativePath of EXTENSION_FILES) {
   if (!metadata?.isFile()) throw new Error(`Required extension file is missing: ${relativePath}`);
   const content = await readFile(source, "utf8");
   const containsKnownSecret = localSecretValues.some((secret) => content.includes(secret));
-  const containsCredentialPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{35}\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b/.test(content);
+  const containsCredentialPattern = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\bAIza[0-9A-Za-z_-]{35}\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b|\b(?:pk|sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b|\bwhsec_[A-Za-z0-9]{16,}\b|\bgh[pousr]_[A-Za-z0-9]{20,}\b/.test(content);
   const containsLocalHomePath = /[A-Za-z]:\\Users\\[^\\\s"']+|\/Users\/[^/\s"']+/.test(content);
   if (containsKnownSecret || containsCredentialPattern || containsLocalHomePath) {
     throw new Error(`Refusing to package sensitive content from ${relativePath}.`);

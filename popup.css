@@ -829,6 +829,83 @@ dialog::backdrop {
   margin-bottom: 12px;
 }
 
+.hosted-account-section {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent) 8%);
+}
+
+.hosted-account-heading,
+.hosted-account-actions,
+.hosted-mode-toggle,
+.hosted-allowance-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hosted-account-heading {
+  justify-content: space-between;
+}
+
+.hosted-account-heading h3 {
+  margin: 2px 0 0;
+}
+
+.hosted-account-section > .hint {
+  margin: 0;
+}
+
+.hosted-allowance-list {
+  display: grid;
+  gap: 5px;
+}
+
+.hosted-allowance-row {
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.hosted-allowance-row span:last-child {
+  color: var(--muted);
+  text-align: right;
+}
+
+.hosted-mode-toggle {
+  min-height: 40px;
+  font-weight: 700;
+}
+
+.hosted-mode-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+
+.hosted-account-actions {
+  flex-wrap: wrap;
+}
+
+.hosted-allowance-notice {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.hosted-allowance-dialog > .primary,
+.hosted-allowance-dialog > .secondary {
+  width: 100%;
+  margin-top: 8px;
+}
+
 menu {
   display: flex;
   justify-content: flex-end;

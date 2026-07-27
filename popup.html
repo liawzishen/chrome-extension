@@ -165,6 +165,7 @@
             </div>
           </div>
           <p class="hint note-first-hint">Start with the ideas and relationships. A quiz is generated only after you request one from the finished note.</p>
+          <p id="createHostedAllowanceNotice" class="hosted-allowance-notice hidden" role="status"></p>
           <div class="chapter-field">
             <div class="chapter-field__label-row">
               <span id="pageChapterLabel">Journey chapter</span>
@@ -291,6 +292,7 @@
             <button id="studyNotesButton" class="primary" type="button">Generate interactive note</button>
             <button id="demoNoteButton" class="secondary compact-button" type="button">Try 60-sec math demo</button>
           </div>
+          <p id="notesHostedAllowanceNotice" class="hosted-allowance-notice hidden" role="status"></p>
           <p class="demo-path-hint">Zero setup: curated source - evidence-linked visual note - one answer - Journey update.</p>
         </div>
       </section>
@@ -320,6 +322,7 @@
             </select>
             <button id="summarizeJourneyButton" class="primary" type="button">Summarize journey</button>
           </div>
+          <p id="journeyHostedAllowanceNotice" class="hosted-allowance-notice hidden" role="status"></p>
           <div id="journeySummary" class="journey-summary hidden" aria-live="polite"></div>
         </div>
       </section>
@@ -504,6 +507,7 @@
             <option value="weakness">Weak-spot diagnostic</option>
             <option value="definition">Core definitions</option>
           </select>
+          <p id="quizHostedAllowanceNotice" class="hosted-allowance-notice hidden" role="status"></p>
           <menu>
             <button value="cancel" class="text-button">Cancel</button>
             <button id="confirmGenerateQuizButton" value="default" class="primary">Generate quiz</button>
@@ -529,6 +533,26 @@
       <dialog id="settingsDialog">
         <form method="dialog" class="settings">
           <h2>Settings</h2>
+          <section id="hostedAccountSection" class="hosted-account-section hidden" aria-labelledby="hostedAccountHeading">
+            <div class="hosted-account-heading">
+              <div>
+                <span class="eyebrow">Managed service</span>
+                <h3 id="hostedAccountHeading">Account &amp; usage</h3>
+              </div>
+              <span id="hostedPlanBadge" class="feature-badge">Free</span>
+            </div>
+            <p id="hostedAccountStatus" class="hint" role="status" aria-live="polite">Sign in on the Exam-Cram website to use hosted AI.</p>
+            <div id="hostedAllowanceList" class="hosted-allowance-list" aria-label="Hosted AI allowances"></div>
+            <label class="hosted-mode-toggle" for="hostedModeInput">
+              <input id="hostedModeInput" type="checkbox">
+              <span>Use hosted Exam-Cram AI</span>
+            </label>
+            <div class="hosted-account-actions">
+              <button id="hostedAccountWebButton" class="secondary compact-button" type="button">Open account</button>
+              <button id="hostedRefreshAccountButton" class="text-button" type="button">Refresh usage</button>
+              <button id="hostedManageBillingButton" class="text-button hidden" type="button">Manage billing</button>
+            </div>
+          </section>
           <label for="apiEndpointInput">AI backend endpoint</label>
           <input id="apiEndpointInput" type="url" placeholder="https://your-api.com/study-session">
           <label for="backendTokenInput">Backend access token <span class="muted">(custom or remote backend only)</span></label>
@@ -539,6 +563,20 @@
           <menu>
             <button value="cancel" class="text-button">Cancel</button>
             <button id="saveSettingsButton" value="default" class="primary">Save</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="hostedAllowanceDialog" aria-labelledby="hostedAllowanceDialogTitle">
+        <form method="dialog" class="settings hosted-allowance-dialog">
+          <span class="eyebrow">Hosted allowance</span>
+          <h2 id="hostedAllowanceDialogTitle">Continue this study action</h2>
+          <p id="hostedAllowanceDialogMessage">Hosted AI is unavailable for this action.</p>
+          <p id="hostedAllowanceDialogReset" class="hint hidden"></p>
+          <button id="hostedUpgradeButton" class="primary" type="button">View Student Pro</button>
+          <button id="hostedUseOwnBackendButton" class="secondary" type="button">Use my own backend</button>
+          <menu>
+            <button value="cancel" class="text-button">Not now</button>
           </menu>
         </form>
       </dialog>
@@ -554,6 +592,7 @@
             <span aria-hidden="true">2</span>
             <p><strong>Invoke Exam-Cram once.</strong> Click its toolbar icon or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Y</kbd>; Chrome authorizes this exact tab and recording starts automatically.</p>
           </div>
+          <p id="videoHostedAllowanceNotice" class="hosted-allowance-notice hidden" role="status"></p>
           <p id="videoCaptureDialogStatus" class="hint hidden" role="status" aria-live="polite"></p>
           <menu>
             <button id="cancelVideoCaptureButton" value="cancel" class="text-button">Cancel</button>
@@ -570,7 +609,8 @@
     <script src="video-utils.js"></script>
     <script src="document-reader-utils.js"></script>
     <script src="cheat-sheet-utils.js"></script>
-    <script src="document-reader-vendor.bundle.js"></script>
+    <script src="hosted-account-utils.js"></script>
+    <!-- document-reader-vendor.bundle.js is injected on demand by getPdfJs() in popup.js so the PDF engine is not parsed on every panel open. -->
     <script src="popup.js"></script>
   </body>
 </html>

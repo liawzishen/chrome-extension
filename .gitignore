@@ -2,7 +2,10 @@
 .env
 .env.*
 !.env.example
+!.env.hosted.example
+*-backend-token
 .exam-cram-backend-token
+.exam-cram-cost-telemetry.jsonl
 *.pem
 *.key
 *.p12

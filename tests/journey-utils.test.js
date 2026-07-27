@@ -1041,7 +1041,10 @@ test("difficult concepts resurface earlier than mastered concepts after the same
   assert.equal(mastered.intervalDays, 10);
   assert.equal(mastered.nextReviewAt, "2026-07-25T10:00:00.000Z");
   assert.equal(difficult.wrongAnswerRatio, 0.6667);
-  assert.equal(difficult.easeFactor, 1.7);
+  // Ease is incremental: seeded at 1.6 from 6/8 lifetime misses, this correct review earns one
+  // step back to 1.75, while the mastered concept is already capped at 2.5. The intervals and the
+  // ordering asserted below are unchanged, which is the property this test exists to protect.
+  assert.equal(difficult.easeFactor, 1.75);
   assert.equal(difficult.intervalDays, 7);
   assert.equal(difficult.nextReviewAt, "2026-07-22T10:00:00.000Z");
   assert.ok(Date.parse(difficult.nextReviewAt) < Date.parse(mastered.nextReviewAt));
@@ -1109,7 +1112,9 @@ test("reduces strength and resets the interval when a batch contains a wrong ans
   assert.equal(concept.strength, 50);
   assert.equal(concept.intervalDays, 1);
   assert.equal(concept.wrongAnswerRatio, 0.25);
-  assert.equal(concept.easeFactor, 2.2);
+  // A batch containing a wrong answer now costs one ease step (2.5 -> 2.3) on top of resetting
+  // the interval, so repeated misses shorten future intervals instead of only this one.
+  assert.equal(concept.easeFactor, 2.3);
   assert.equal(concept.nextReviewAt, "2026-07-16T10:00:00.000Z");
 });
 
@@ -1138,10 +1143,21 @@ test("orders weak due concepts first and applies limit and note filters", () => 
         lastAttemptAt: "2026-07-15T10:00:00.000Z",
         strength: 20,
         intervalDays: 10,
-        nextReviewAt: "2026-07-25T10:00:00.000Z"
+        nextReviewAt: "2026-07-14T10:00:00.000Z"
       }, {
         noteId: "note-a",
-        conceptId: "weak-high",
+        conceptId: "weak-due",
+        conceptLabel: "Z weak due concept",
+        timesTested: 2,
+        timesWrong: 1,
+        state: "weak",
+        lastAttemptAt: "2026-07-15T10:00:00.000Z",
+        strength: 90,
+        intervalDays: 10,
+        nextReviewAt: "2026-07-15T10:00:00.000Z"
+      }, {
+        noteId: "note-a",
+        conceptId: "weak-scheduled-ahead",
         conceptLabel: "Z weak concept",
         timesTested: 2,
         timesWrong: 1,
@@ -1166,14 +1182,227 @@ test("orders weak due concepts first and applies limit and note filters", () => 
   });
   const now = "2026-07-16T10:00:00.000Z";
 
+  // "weak-scheduled-ahead" is weak with a low effective strength but its review is nine days out,
+  // so the schedule must keep it back: weak state ranks due concepts, it does not make them due.
   assert.deepEqual(
     Journey.getDueConcepts(journey, { now, noteId: "note-a" }).map((concept) => concept.conceptId),
-    ["weak-high", "stable-low"]
+    ["weak-due", "stable-low"]
   );
   assert.deepEqual(
     Journey.getDueConcepts(journey, { now, limit: 1 }).map((concept) => concept.conceptId),
     ["other-note"]
   );
+});
+
+test("a concept answered wrong is deferred to tomorrow instead of resurfacing immediately", () => {
+  const answeredAt = "2026-07-16T10:00:00.000Z";
+  const journey = Journey.recordQuestionAttempts(
+    Journey.createJourney("Recall", "2026-07-10T00:00:00.000Z"),
+    [questionAttempt(301, { result: "wrong", studentAnswer: "Wrong", answeredAt })],
+    { score: 0, submittedAt: answeredAt }
+  ).journey;
+
+  const dueIds = (now) => Journey.getDueConcepts(journey, { now }).map((concept) => concept.conceptId);
+  assert.deepEqual(dueIds(new Date(Date.parse(answeredAt) + 60_000).toISOString()), []);
+  assert.deepEqual(dueIds(new Date(Date.parse(answeredAt) + 86_400_000).toISOString()), ["concept-alpha"]);
+});
+
+test("a concept that has never been scheduled is due", () => {
+  const journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Fresh", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-a",
+        conceptId: "unscheduled",
+        conceptLabel: "Unscheduled concept",
+        timesTested: 0,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: null,
+        strength: 50,
+        intervalDays: 1,
+        nextReviewAt: null
+      }]
+    }
+  });
+
+  assert.deepEqual(
+    Journey.getDueConcepts(journey, { now: "2026-07-16T10:00:00.000Z" }).map((concept) => concept.conceptId),
+    ["unscheduled"]
+  );
+});
+
+test("ease recovers with recent correct reviews instead of being pinned by lifetime misses", () => {
+  // Lifetime ratio stays 3/3 wrong for the whole run, so the old derived ease would sit at its
+  // 1.3 floor forever. Incremental ease must climb back as the learner starts getting it right.
+  let journey = Journey.normalizeJourney({
+    ...Journey.createJourney("Ease recovery", "2026-07-10T00:00:00.000Z"),
+    learningMemory: {
+      concepts: [{
+        noteId: "note-memory",
+        conceptId: "concept-alpha",
+        conceptLabel: "Concept Alpha",
+        timesTested: 3,
+        timesWrong: 3,
+        state: "weak",
+        lastAttemptAt: "2026-07-14T10:00:00.000Z",
+        strength: 20,
+        intervalDays: 1,
+        nextReviewAt: "2026-07-15T10:00:00.000Z"
+      }]
+    }
+  });
+  assert.equal(journey.learningMemory.concepts[0].easeFactor, 1.3);
+
+  const easeAfter = [];
+  for (let index = 0; index < 4; index += 1) {
+    const answeredAt = new Date(Date.parse("2026-07-16T10:00:00.000Z") + index * 86_400_000).toISOString();
+    journey = Journey.recordQuestionAttempts(
+      journey,
+      [questionAttempt(400 + index, { answeredAt })],
+      { score: 100, submittedAt: answeredAt }
+    ).journey;
+    easeAfter.push(journey.learningMemory.concepts[0].easeFactor);
+  }
+
+  assert.deepEqual(easeAfter, [1.45, 1.6, 1.75, 1.9]);
+  assert.ok(journey.learningMemory.concepts[0].intervalDays > 1);
+});
+
+function masteryJourney(concepts, sessionOverrides = {}) {
+  return Journey.normalizeJourney({
+    ...Journey.createJourney("Biology", "2026-07-10T00:00:00.000Z"),
+    chapters: [{
+      id: "chapter-mastery",
+      title: "Enzymes",
+      createdAt: "2026-07-10T00:00:00.000Z",
+      updatedAt: "2026-07-24T10:00:00.000Z",
+      sources: [],
+      sessions: [{
+        id: "session-mastery",
+        itemKind: "quiz",
+        title: "Enzyme quiz",
+        generatedAt: "2026-07-24T10:00:00.000Z",
+        score: 58,
+        weakTopics: [],
+        ...sessionOverrides
+      }]
+    }],
+    learningMemory: {
+      concepts: concepts.map((concept) => ({
+        noteId: "note-mastery",
+        sourceFingerprint: "source-mastery",
+        timesTested: 0,
+        timesWrong: 0,
+        state: "stable",
+        lastAttemptAt: "2026-07-20T10:00:00.000Z",
+        strength: 70,
+        intervalDays: 3,
+        nextReviewAt: "2026-08-01T10:00:00.000Z",
+        ...concept
+      }))
+    }
+  });
+}
+
+test("summary names struggling concepts from the mastery model instead of free-text topics", () => {
+  const journey = masteryJourney([
+    { conceptId: "hydrolysis", conceptLabel: "Hydrolysis", timesTested: 6, timesWrong: 4, state: "weak", strength: 20, nextReviewAt: "2026-07-24T10:00:00.000Z" },
+    { conceptId: "specificity", conceptLabel: "Enzyme specificity", timesTested: 5, timesWrong: 3, state: "weak", strength: 30, nextReviewAt: "2026-07-24T10:00:00.000Z" }
+  ]);
+  const summary = Journey.summarize(journey, { range: "all", now: "2026-07-25T10:00:00.000Z" });
+
+  assert.match(summary.knowledgeGaps[0], /Hydrolysis — missed 4 of 6 attempts \(67%\)\./);
+  assert.match(summary.overview, /2 of 2 tracked concepts are still weak\./);
+  assert.match(summary.nextSteps[0], /2 concepts are due for review: Hydrolysis, Enzyme specificity\./);
+});
+
+test("summary reports being on schedule when no concept is due", () => {
+  const journey = masteryJourney([
+    { conceptId: "kinetics", conceptLabel: "Kinetics", timesTested: 4, timesWrong: 1, nextReviewAt: "2026-08-01T10:00:00.000Z" }
+  ]);
+  const summary = Journey.summarize(journey, { range: "all", now: "2026-07-25T10:00:00.000Z" });
+
+  assert.match(summary.nextSteps[0], /Nothing is due for review right now/);
+});
+
+test("summary falls back to session weak topics when the mastery model is empty", () => {
+  const journey = masteryJourney([], { weakTopics: ["Friction", "Vectors"] });
+  const summary = Journey.summarize(journey, { range: "all", now: "2026-07-25T10:00:00.000Z" });
+
+  assert.ok(summary.knowledgeGaps.includes("Friction"));
+  assert.match(summary.nextSteps[0], /Review Friction, then retake a focused quiz\./);
+  assert.doesNotMatch(summary.overview, /tracked concept/);
+});
+
+test("summary never narrates zero counts to a learner with no history", () => {
+  const summary = Journey.summarize(Journey.createJourney("Fresh", "2026-07-25T00:00:00.000Z"), {
+    range: "all",
+    now: "2026-07-25T10:00:00.000Z"
+  });
+
+  assert.doesNotMatch(summary.overview, /\b0 (?:of|concepts)/);
+  assert.doesNotMatch(summary.nextSteps.join(" "), /\b0 concepts?\b/);
+  assert.doesNotMatch(summary.knowledgeGaps.join(" "), /\b0 /);
+});
+
+const EXAM_GOAL = {
+  chapterIds: [],
+  daysPerWeek: 5,
+  dailyMinutes: 30,
+  targetDate: "2026-07-31",
+  label: "Final",
+  createdAt: "2026-07-25T10:00:00.000Z",
+  updatedAt: "2026-07-25T10:00:00.000Z"
+};
+
+const FORECAST_NOW = "2026-07-25T10:00:00.000Z";
+
+function forecastJourney() {
+  return masteryJourney([
+    { conceptId: "hydrolysis", conceptLabel: "Hydrolysis", state: "weak", strength: 40, intervalDays: 1, easeFactor: 2.5, timesTested: 4, timesWrong: 3, lastAttemptAt: "2026-07-24T10:00:00.000Z", nextReviewAt: "2026-07-26T10:00:00.000Z" },
+    { conceptId: "kinetics", conceptLabel: "Kinetics", strength: 95, intervalDays: 20, easeFactor: 2.5, timesTested: 4, timesWrong: 0, lastAttemptAt: "2026-07-24T10:00:00.000Z", nextReviewAt: "2026-08-13T10:00:00.000Z" }
+  ]);
+}
+
+test("retention forecast projects concept decay forward to the goal date", () => {
+  const forecast = Journey.forecastRetention(forecastJourney(), { studyGoal: EXAM_GOAL, now: FORECAST_NOW });
+
+  assert.equal(forecast.daysRemaining, 7);
+  assert.equal(forecast.total, 2);
+  assert.equal(forecast.atRiskCount, 1);
+  assert.equal(forecast.atRisk[0].conceptLabel, "Hydrolysis");
+  // A one-day interval decays to nothing across a week; a twenty-day interval is not even due yet.
+  assert.equal(forecast.atRisk[0].projectedStrength, 0);
+  assert.equal(forecast.atRisk[0].currentStrength, 40);
+});
+
+test("retention forecast is unavailable without a usable future goal date", () => {
+  const journey = forecastJourney();
+
+  assert.equal(Journey.forecastRetention(journey, { now: FORECAST_NOW }), null);
+  assert.equal(Journey.forecastRetention(journey, { studyGoal: { ...EXAM_GOAL, targetDate: null }, now: FORECAST_NOW }), null);
+  assert.equal(Journey.forecastRetention(journey, { studyGoal: { ...EXAM_GOAL, targetDate: "2026-07-01" }, now: FORECAST_NOW }), null);
+  assert.equal(Journey.forecastRetention(masteryJourney([]), { studyGoal: EXAM_GOAL, now: FORECAST_NOW }), null);
+});
+
+test("summary leads with the exam-day forecast only when a goal date is supplied", () => {
+  const journey = forecastJourney();
+  const withGoal = Journey.summarize(journey, { range: "all", now: FORECAST_NOW, studyGoal: EXAM_GOAL });
+  const withoutGoal = Journey.summarize(journey, { range: "all", now: FORECAST_NOW });
+
+  assert.match(withGoal.nextSteps[0], /goal date is in 7 days; at this pace 1 of 2 concepts will be below 40% by then/);
+  assert.match(withGoal.nextSteps[0], /Drill Hydrolysis first\./);
+  assert.doesNotMatch(withoutGoal.nextSteps.join(" "), /goal date/);
+});
+
+test("summary reports a clean forecast when every concept is projected to hold", () => {
+  const journey = masteryJourney([
+    { conceptId: "kinetics", conceptLabel: "Kinetics", strength: 95, intervalDays: 30, easeFactor: 2.5, timesTested: 4, timesWrong: 0, lastAttemptAt: "2026-07-24T10:00:00.000Z", nextReviewAt: "2026-08-23T10:00:00.000Z" }
+  ]);
+  const summary = Journey.summarize(journey, { range: "all", now: FORECAST_NOW, studyGoal: EXAM_GOAL });
+
+  assert.match(summary.nextSteps[0], /every tracked concept is projected to hold above 40%/);
 });
 
 test("builds a zero habit profile from an empty or invalid journey", () => {
@@ -1498,7 +1727,7 @@ test("starts a study plan with an evidence-based weak-concept recovery", () => {
         lastAttemptAt: "2026-07-15T10:00:00.000Z",
         strength: 35,
         intervalDays: 1,
-        nextReviewAt: "2026-07-17T10:00:00.000Z"
+        nextReviewAt: "2026-07-16T09:00:00.000Z"
       }]
     }
   });
@@ -1538,7 +1767,7 @@ test("sizes a study plan to the learner's typical focus session", () => {
         lastAttemptAt: "2026-07-15T10:00:00.000Z",
         strength: 35,
         intervalDays: 1,
-        nextReviewAt: "2026-07-17T10:00:00.000Z"
+        nextReviewAt: "2026-07-16T09:00:00.000Z"
       }, {
         noteId: "note-sized",
         conceptId: "stable-sized",

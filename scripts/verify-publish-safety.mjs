@@ -6,17 +6,20 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const excludedDirectories = new Set([
   ".git", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
 ]);
-const excludedFiles = new Set([".env", ".exam-cram-backend-token"]);
+const excludedFiles = new Set([".env", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml"]);
+// Credential files carry no useful extension, so extname-based scanning skips them entirely.
+// Match them by name instead: a rename is what let a committed backend token pass this gate once.
+const secretFilePattern = /(?:^|[.\-])backend-token$/;
 const requiredIgnoreEntries = [
-  ".env", ".env.*", ".exam-cram-backend-token", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
+  ".env", ".env.*", "*-backend-token", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
 ];
 
+const findings = [];
 const candidates = [];
 await collect(projectRoot);
 
 const localSecrets = await loadLocalSecrets();
-const findings = [];
 for (const filename of candidates) {
   const content = await readFile(filename, "utf8");
   const displayName = relative(projectRoot, filename).replaceAll("\\", "/");
@@ -24,6 +27,8 @@ for (const filename of candidates) {
     ["private key material", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
     ["Google API credential", /AIza[0-9A-Za-z_-]{35}/],
     ["OpenAI credential", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
+    ["Stripe secret credential", /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/],
+    ["Stripe webhook secret", /\bwhsec_[A-Za-z0-9]{16,}\b/],
     ["GitHub credential", /\bgh[pousr]_[A-Za-z0-9]{20,}\b/],
     ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
     ["Slack credential", /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/],
@@ -64,7 +69,14 @@ async function collect(directory) {
       continue;
     }
     if (!entry.isFile() || excludedFiles.has(entry.name)) continue;
-    if (textExtensions.has(extname(entry.name).toLowerCase()) || [".gitignore", ".env.example"].includes(entry.name)) {
+    if (secretFilePattern.test(entry.name)) {
+      findings.push(`${relative(projectRoot, fullPath).replaceAll("\\", "/")}: credential file is present in a publishable tree`);
+      continue;
+    }
+    const isEnvironmentTemplate =
+      entry.name === ".env.example" ||
+      (entry.name.startsWith(".env.") && entry.name.endsWith(".example"));
+    if (textExtensions.has(extname(entry.name).toLowerCase()) || entry.name === ".gitignore" || isEnvironmentTemplate) {
       candidates.push(fullPath);
     }
   }

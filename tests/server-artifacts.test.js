@@ -19,6 +19,8 @@ const {
   prepareQuizArtifactInput,
   prepareStudyNotesInput,
   stripGeminiUnsupportedSchemaKeywords,
+  isQuizVerifierUnavailableError,
+  isRetryableQuizOutputError,
   isQuestionAnswerSupported,
   verifyQuizAnswersSemantically
 } = require("../server.js");
@@ -487,6 +489,45 @@ test("semantic grounding verification covers every answer and fails closed", asy
     }),
     /provider unavailable/i
   );
+});
+
+test("an unavailable verifier fails closed without triggering quiz regeneration", async () => {
+  const input = preparePhotosynthesisQuizInput({ sourceId: "source-photosynthesis-note" });
+  const quiz = normalizeQuizArtifact({
+    title: "Photosynthesis quiz",
+    questions: makePhotosynthesisQuestions({ sourceId: "source-photosynthesis-note" })
+  }, input);
+
+  // Transport failure, unparseable output, and a short verdict set are verifier failures,
+  // not evidence that the quiz itself should be regenerated. Each must fail closed without
+  // becoming a retryable quiz-output error.
+  const verifierFailures = [
+    async () => { throw new Error("provider unavailable"); },
+    async () => "not json at all",
+    async () => JSON.stringify({ checks: [{ questionIndex: 1, supported: true, reason: "Supported." }] })
+  ];
+
+  for (const failing of verifierFailures) {
+    await assert.rejects(verifyQuizAnswersSemantically(quiz, failing), (error) => {
+      assert.equal(isQuizVerifierUnavailableError(error), true);
+      assert.equal(isRetryableQuizOutputError(error), false);
+      return true;
+    });
+  }
+
+  // A genuine "this answer is unsupported" verdict must still discard the quiz and retry.
+  const rejecting = async () => JSON.stringify({
+    checks: quiz.questions.map((_, index) => ({
+      questionIndex: index + 1,
+      supported: index !== 2,
+      reason: index === 2 ? "The quote does not support this answer." : "Supported."
+    }))
+  });
+  await assert.rejects(verifyQuizAnswersSemantically(quiz, rejecting), (error) => {
+    assert.equal(isQuizVerifierUnavailableError(error), false);
+    assert.equal(isRetryableQuizOutputError(error), true);
+    return true;
+  });
 });
 
 test("server quiz artifacts receive distinct quiz IDs and globally unique question IDs", () => {

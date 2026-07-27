@@ -9,6 +9,7 @@ export const EXTENSION_FILES = Object.freeze([
   "popup.css",
   "popup-design-system.css",
   "vintage-planner.css",
+  "hosted-account-utils.js",
   "popup.js",
   "assets/page-actions/from-page.png",
   "assets/page-actions/from-video.png",

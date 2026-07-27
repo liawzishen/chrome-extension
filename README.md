@@ -56,6 +56,7 @@ A separate [design-test conversation](feedback/2026-07-16-design-test-review-md-
 | Unpacked build | `release/exam-cram-extension` |
 | Verification | Build, syntax, test, secret-scan, dependency-audit, and package commands are documented below |
 | Publication safety | The extension packager copies an explicit runtime allowlist and excludes local credentials |
+| Hosted commercial foundation | Provider-neutral account, entitlement, usage-reservation, and Stripe boundaries exist under `services/hosted-api`; billing is disabled and no public hosted service is deployed |
 
 ### Explicit chapters, least-privilege access, and release security
 
@@ -130,9 +131,24 @@ The comparison uses official product or pricing pages for business claims. Plans
 
 The strongest positioning opportunity is the integrated evidence-to-mastery loop. That conclusion is an inference from the products' official positioning, not a claim that no other competing product exists.
 
-## Business Model Hypothesis
+## Business Model And Hosted Foundation
 
-No payment or quota system is implemented in this repository. The proposed model is:
+No live payment, hosted identity, production database adapter, or public hosted
+generation service is deployed from this repository. A separate, disabled-by-default
+foundation now exists under `services/hosted-api`; it must not be confused with the
+learner-controlled loopback `server.js`.
+
+The approved launch model in [`handoff.md`](handoff.md) is:
+
+- **Free:** permanently useful local core plus bounded hosted previews
+- **Student Pro Monthly:** **$4.99 USD per month**
+- **Student Pro Annual:** **$49.99 USD billed once per year** (about $4.17/month)
+
+Stripe Checkout, Customer Portal, signed-event projection, provider-neutral
+entitlements, and atomic allowance reservations have testable server boundaries. They
+remain fail-closed until production identity, PostgreSQL persistence, deployment,
+privacy/terms, tax, refund, support, and security decisions are completed. See the
+[hosted-service operator guide](services/hosted-api/README.md).
 
 ### Free and always accessible
 
@@ -144,7 +160,7 @@ No payment or quota system is implemented in this repository. The proposed model
 - timed Focus sessions and custom domain/path rules
 - local deterministic fallback and optional self-hosted backend
 
-### Potential metered or premium capabilities
+### Approved metered or premium capabilities
 
 - captionless-video processing, because it has direct media-compute cost
 - larger source collections and higher AI-generation limits
@@ -152,7 +168,7 @@ No payment or quota system is implemented in this repository. The proposed model
 - scheduled/rolling Focus rules and optional strict mode
 - team, classroom, and institution administration after privacy and teacher controls mature
 
-Product principles for any future paid version:
+Product principles for the private beta and any later paid release:
 
 - show the remaining allowance before the user starts an expensive action
 - never lock notes, quizzes, citations, or exports that were already generated
@@ -190,21 +206,22 @@ Requirements:
    ```
 
 7. Keep the bounded defaults from `.env.example` unless you have a measured reason to change them. They control provider timeouts, concurrent API work, requests per minute, request-body bytes, and maximum study, note, and collection text.
-8. Leave `BACKEND_ACCESS_TOKEN` blank to generate a private token file for non-extension clients, or supply a strong private token through the environment. Never commit `.env`, the generated token file, provider keys, tokens, browser profiles, screenshots, or logs.
-9. Start the loopback backend:
+8. Keep `COST_TELEMETRY_PATH=.exam-cram-cost-telemetry.jsonl` to record privacy-safe local action, retry, validation-rejection, latency, media-duration, token, and estimated-cost data, or leave it blank to disable recording. Configure the provider-specific per-million-token rates in `.env`; Gemini rates are needed for video even when OpenAI handles other actions. Unpriced records are explicitly marked `incomplete`. The local file stops growing at `COST_TELEMETRY_MAX_BYTES` (50 MB by default), contains no source text, prompts, URLs, generated output, or credentials, and can be summarized with `npm run telemetry:report`.
+9. Leave `BACKEND_ACCESS_TOKEN` blank to generate a private token file for non-extension clients, or supply a strong private token through the environment. Never commit `.env`, the generated token file, provider keys, tokens, browser profiles, screenshots, telemetry, or logs.
+10. Start the loopback backend:
 
    ```powershell
    npm start
    ```
 
-10. In Exam-Cram Settings, keep the bundled endpoint and leave the token field empty:
+11. In Exam-Cram Settings, keep the bundled endpoint and leave the token field empty:
 
     ```text
     Endpoint: http://127.0.0.1:8787/api/study-session
     Backend access token: leave blank for the allowlisted bundled backend
     ```
 
-11. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; Exam-Cram reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
+12. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; Exam-Cram reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
 
 The provider key stays in the backend `.env` and is never placed in the extension. The bundled server accepts tokenless API posts only when it is listening on loopback, the socket is loopback, and Chrome supplies an exact origin listed in `ALLOWED_EXTENSION_ORIGINS`. Preview pages, missing or different origins, and other clients require the generated or configured bearer token. A supplied wrong token is rejected even when the request uses the trusted extension origin.
 
