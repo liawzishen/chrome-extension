@@ -1,9 +1,10 @@
 # NeatMind Business Model Handoff
 
-**Status:** Approved direction; Phase 0 instrumentation and a disabled Phase 1
-foundation are implemented, but no hosted beta or live billing is deployed
+**Status:** Approved direction; the hosted payment system is built, runnable, and
+verified against tests, but billing is still switched off and no live charge has
+been taken
 
-**Decision date:** 28 July 2026
+**Decision date:** 28 July 2026 (prices revised 30 July 2026)
 
 **Audience:** Product, design, engineering, growth, finance, support, privacy, and security
 
@@ -29,11 +30,41 @@ The repository now includes:
 - release packaging and secret scanning that reject Stripe credentials from the
   extension bundle.
 
-This is not a public paid service. Billing remains disabled, the supplied publishable
-Stripe key is intentionally not embedded, and private beta remains blocked on the
-identity provider, production PostgreSQL adapter, hosted generation deployment,
-durable webhook reconciliation, policy/legal decisions, operational ownership, and
-security review listed below.
+### Implementation update — 30 July 2026
+
+Two things changed materially since the 28 July entry.
+
+**The annual price is now USD $39.99, permanently.** It is not a first-term founding
+offer, so it carries no eligibility rule and no renewal-price transition. Every
+$49.99 figure below is superseded; `services/hosted-api/src/config.js` is the
+authority, and `STRIPE_PRICE_FOUNDING_ANNUAL` remains deliberately rejected.
+
+**The payment system is no longer a dormant foundation.** What was missing on
+28 July — a listener, an authenticator, a session writer, durable state — now
+exists:
+
+- an HTTP listener binding the API to a real socket, streaming request bodies so
+  the webhook still sees the exact bytes Stripe signed;
+- server-side Google OAuth sign-in with short-lived access tokens and refresh
+  tokens that rotate on every use, so the extension never holds a client secret;
+- durable `node:sqlite` state, so accounts, subscriptions, entitlements, sessions,
+  and usage survive a restart;
+- first-party `/pricing`, `/billing/success`, `/billing/canceled`, `/account` pages;
+- extension sign-in, Checkout, and Customer Portal wired into the panel;
+- dispute handling, a subscription reconciler for undelivered webhooks, and a
+  reservation sweeper;
+- a read-only Stripe preflight (`npm run hosted:verify-stripe`) that validates the
+  account against the approved catalog before billing is enabled.
+
+This is still **not a public paid service**. `BILLING_ENABLED` and
+`ALLOW_LIVE_BILLING` are both false, no live charge has been taken, and public
+launch remains blocked on the durable webhook queue with operator replay, the
+private generation adapter, and the policy, legal, tax, operational-ownership, and
+security reviews listed below. The multi-replica PostgreSQL adapter is no longer a
+launch blocker but remains a scaling one: the current store is correct for exactly
+one process.
+
+Runbook: `services/hosted-api/README.md`.
 
 ## 1. Purpose
 
@@ -53,8 +84,9 @@ It defines:
 
 This is a business and product specification, not authorization to expose the current
 loopback backend to the public internet. At the decision point, no payment, account,
-entitlement, hosted quota, or cloud-sync system existed; the implementation update
-above records the disabled foundation added since then, not a deployable paid service.
+entitlement, hosted quota, or cloud-sync system existed. The 30 July update above
+records a hosted payment system that is now built and runnable — but built is not the
+same as launched, and the remaining gate is the review list in §21, not more code.
 
 ### Quick index
 
@@ -80,7 +112,7 @@ NeatMind will use an **open-core freemium subscription model**:
 1. The extension's trustworthy local study loop remains useful for free.
 2. A free user can save and organize learning material, inspect evidence, complete a
    limited hosted-AI study loop, and keep previously created work.
-3. **NeatMind Student Pro costs USD $4.99 per month or USD $49.99 per year.**
+3. **NeatMind Student Pro costs USD $4.99 per month or USD $39.99 per year.**
 4. Pro sells hosted convenience, repeated AI transformation, multi-source synthesis,
    advanced practice, and bounded captionless-video processing.
 5. Local deterministic behavior and the optional self-hosted/bring-your-own-backend path
@@ -137,7 +169,7 @@ The model also matches the product's trust principles:
 | Curious or casual learner | Try a study workflow on occasional material | Free | Acquisition, trust, word of mouth |
 | Active student | Turn weekly course material into lessons and quizzes | Student Pro monthly, $4.99 | Core recurring revenue |
 | Exam crammer | Prepare intensively for one upcoming assessment | One month of Student Pro, $4.99 | Seasonal conversion without a punitive weekly price |
-| Year-round student | Maintain several subjects and a continuing Journey | Student Pro annual, $49.99 | Lower churn and upfront cash |
+| Year-round student | Maintain several subjects and a continuing Journey | Student Pro annual, $39.99 | Lower churn and upfront cash |
 | Privacy-conscious or technical learner | Keep provider choice and local control | Free self-hosted/BYOB path | Trust, community adoption, lower service cost |
 | Heavy hosted-AI user | Process unusually large volumes | Pro allowance plus BYOB overflow | Prevents one user from consuming the plan's margin |
 | Teacher or tutor | Prepare and share learning material | Not a launch segment | Research only until educator controls exist |
@@ -163,29 +195,32 @@ not broaden into classroom administration before the individual loop demonstrate
 | --- | ---: | --- | --- |
 | Free | $0 | None | Permanent core access plus limited hosted AI |
 | Student Pro Monthly | $4.99 USD | Every month | Full Pro entitlement for one billing month |
-| Student Pro Annual | $49.99 USD | Every year | Same Pro entitlement, with allowances resetting monthly |
+| Student Pro Annual | $39.99 USD | Every year | Same Pro entitlement, with allowances resetting monthly |
 
-Twelve monthly payments would cost $59.88. The annual plan saves $9.89, or approximately
-16.5%, and is approximately the cost of ten monthly payments. It must be displayed as:
+Twelve monthly payments would cost $59.88. The annual plan saves $19.89, or approximately
+33%, and is approximately the cost of eight monthly payments. It must be displayed as:
 
-> $49.99 billed once per year (about $4.17/month)
+> $39.99 billed once per year (about $3.33/month)
 
 Never show only the effective monthly number. The total charge and renewal interval must
 be adjacent to the purchase action.
 
-### 5.2 Optional founding offer
+### 5.2 Founding offer — withdrawn 30 July 2026
 
-A limited founding-student offer may be tested:
+The originally proposed founding offer was **$39.99 for the first annual term only**,
+renewing at $49.99. That is no longer the plan: **$39.99 is simply the annual price**,
+for the first term and every renewal.
 
-- **$39.99 for the first annual term only**;
-- renewal at the regular $49.99 annual price;
-- the regular renewal price and date shown before purchase;
-- a reminder before the first full-price renewal;
-- eligibility controlled server-side;
-- no permanent promise unless deliberately approved later.
+This is the simpler and more honest outcome. A promotional first term would have
+required server-side eligibility tracking, a renewal-price transition, and a
+pre-renewal reminder before the price rose — three mechanisms that exist only to
+manage the gap between the advertised price and the real one. With one standing
+price there is no gap, so `services/hosted-api/src/config.js` rejects
+`STRIPE_PRICE_FOUNDING_ANNUAL` outright rather than leaving a half-built promotional
+path available.
 
-This offer is provisional. It should not become the default annual price without
-retention and cost data.
+If a first-term discount is ever revisited, it needs all three mechanisms built and
+tested before a single customer sees the offer.
 
 ### 5.3 Plans explicitly excluded from launch
 
@@ -442,7 +477,7 @@ Cancellation:
 
 Annual billing:
 
-> $49.99 charged today for one year. Renews annually until canceled.
+> $39.99 charged today for one year. Renews annually until canceled.
 
 ### 9.4 Paywall design rules
 
@@ -537,8 +572,8 @@ Guardrails:
 Gross prices:
 
 - Monthly gross revenue per payer: **$4.99**
-- Annual gross cash collected: **$49.99**
-- Annual normalized monthly revenue: **$4.17**
+- Annual gross cash collected: **$39.99**
+- Annual normalized monthly revenue: **$3.33**
 
 Illustrative gross monthly revenue:
 
@@ -562,7 +597,7 @@ Use this sensitivity table for planning:
 | Gross charge | 10% deductions | 15% deductions | 30% deductions |
 | ---: | ---: | ---: | ---: |
 | $4.99 monthly | $4.49 net | $4.24 net | $3.49 net |
-| $49.99 annual | $44.99 net | $42.49 net | $34.99 net |
+| $39.99 annual | $35.99 net | $33.99 net | $27.99 net |
 | Annual net per month | $3.75 | $3.54 | $2.92 |
 
 "Deductions" here is a planning placeholder for the combination of processor/store fees,
@@ -1026,7 +1061,7 @@ enforcement cannot be bypassed by client flags.
 ### Phase 2: Private paid beta
 
 - Invite a bounded cohort of activated learners.
-- Offer $4.99 monthly and optionally the disclosed $39.99 founding annual term.
+- Offer $4.99 monthly and the standing $39.99 annual plan.
 - Provide self-service billing management.
 - Monitor cost, conversion, generation reliability, cancellation reasons, and support.
 - Interview both converters and non-converters.
@@ -1036,7 +1071,7 @@ systemic cancellation/refund confusion.
 
 ### Phase 3: Public Free + Pro launch
 
-- Publish $4.99 monthly and $49.99 annual.
+- Publish $4.99 monthly and $39.99 annual.
 - Enable contextual upgrade moments.
 - Publish privacy, terms, refund, cancellation, and billing-support information.
 - Keep remaining allowance visible.
@@ -1070,7 +1105,7 @@ The launch price itself is not the first experiment. Keep $4.99 stable and test:
 3. one lifetime multi-source preview versus one per month;
 4. 3 versus 5 Free monthly study builds, while monitoring conversion and retention;
 5. monthly-first versus annual-first presentation without obscuring the total charge;
-6. a $39.99 founding annual offer versus the regular $49.99 annual offer;
+6. annual-plan framing, now that $39.99 is the standing price rather than a promotion;
 7. an optional seven-day no-card Pro preview after activation;
 8. give-one-month/get-one-month referrals after retention is proven.
 
@@ -1152,29 +1187,35 @@ This model does not authorize:
 
 ## 21. Launch acceptance criteria
 
+A box is ticked here only when an automated test or a reproducible command proves it.
+Anything resting on a human review, a published policy document, or a named
+operational owner stays unticked even where the code is finished — a ticked box
+nobody verified is worse than an honest empty one. Unticked engineering items below
+are genuinely unbuilt, not merely unaudited.
+
 Business and UX:
 
 - [ ] Free users can complete the full source-to-Journey loop.
-- [ ] Monthly checkout states `$4.99 per month`.
-- [ ] Annual checkout states `$49.99 billed once per year`.
-- [ ] The renewal date and total are visible before purchase.
-- [ ] Remaining allowance is visible before a metered action.
-- [ ] Failed actions do not consume allowance.
-- [ ] Cancellation is self-service and shows the access-end date.
+- [x] Monthly checkout states `$4.99 per month`.
+- [x] Annual checkout states `$39.99 billed once per year`.
+- [x] The renewal date and total are visible before purchase.
+- [x] Remaining allowance is visible before a metered action.
+- [x] Failed actions do not consume allowance.
+- [x] Cancellation is self-service and shows the access-end date.
 - [ ] Downgraded users can open all existing artifacts and evidence.
 - [ ] Standard export remains available after downgrade.
-- [ ] BYOB/self-hosted continuation remains available.
+- [x] BYOB/self-hosted continuation remains available.
 - [ ] No screen claims an unimplemented Pro feature is currently available.
 
 Engineering and security:
 
-- [ ] Hosted entitlement checks are server-side.
-- [ ] Billing webhooks are signed, verified, replay-safe, and idempotent.
-- [ ] Usage reservations commit only after success.
-- [ ] Client retries cannot create duplicate charges or duplicate usage.
-- [ ] The usage ledger contains no raw study content or credentials.
-- [ ] Hosted tokens are scoped to the intended service.
-- [ ] Local and hosted backend modes remain clearly separated.
+- [x] Hosted entitlement checks are server-side.
+- [x] Billing webhooks are signed, verified, replay-safe, and idempotent.
+- [x] Usage reservations commit only after success.
+- [x] Client retries cannot create duplicate charges or duplicate usage.
+- [x] The usage ledger contains no raw study content or credentials.
+- [x] Hosted tokens are scoped to the intended service.
+- [x] Local and hosted backend modes remain clearly separated.
 - [ ] Account deletion, billing support, and incident procedures exist.
 - [ ] Tests cover purchase, renewal, failed renewal, cancellation, refund, expiry,
       allowance reset, quota exhaustion, and downgrade.
@@ -1195,7 +1236,7 @@ Finance and operations:
 
 - Free plus one Student Pro plan at launch.
 - Student Pro monthly price: **$4.99 USD**.
-- Student Pro annual price: **$49.99 USD**.
+- Student Pro annual price: **$39.99 USD** (revised 30 July 2026 from $49.99; permanent, not a founding term).
 - Open-core/local/self-hosted path remains.
 - Hosted usage is transparent and bounded.
 - Existing learner work and evidence remain accessible after cancellation.
@@ -1226,15 +1267,37 @@ Finance and operations:
 
 ## 23. Immediate next work
 
-The safest next sequence is:
+Steps 1 through 4 of the original sequence — cost telemetry, the separated
+account/entitlement/usage service, and the allowance UI — are done. What remains
+splits into three groups.
 
-1. add privacy-preserving cost telemetry to current backend actions;
-2. collect representative usage data;
-3. design the account/entitlement/usage service separately from the loopback server;
-4. prototype allowance UI with no real payment;
-5. test the Free-to-Pro explanation with students;
-6. implement a private hosted beta only after the security and billing boundaries are
-   reviewed.
+**A. Finish the sandbox configuration (hours, one person).** The service is built;
+four values are still unset in `.env.hosted`. See the setup brief in
+`Downloads/neatmind-stripe-setup-codex.md`, or §7–§11 of
+`services/hosted-api/README.md`:
 
-Until those steps are complete, the repository's existing statement remains true:
-payment and quota systems are proposed, not shipped.
+1. `STRIPE_SECRET_KEY` — a **test** key, never a live one during setup;
+2. `GOOGLE_OAUTH_CLIENT_SECRET` — the client id is already configured;
+3. `PUBLIC_APP_ORIGIN` — a fixed HTTPS origin, plus its `/auth/callback` registered
+   as an authorized redirect URI on the OAuth client;
+4. `HOSTED_ALLOWED_EXTENSION_ORIGINS` — the exact `chrome-extension://` origin.
+
+Then `npm run hosted:verify-stripe` supplies the two Price IDs, `stripe listen`
+supplies the webhook secret, and `BILLING_ENABLED=true` opens the sandbox.
+
+**B. Prove the money paths against Stripe test mode.** Purchase, renewal, failed
+renewal, grace expiry, cancellation, refund, dispute, expiry, duplicate delivery,
+out-of-order delivery, and resubscription, using test clocks for the monthly and
+annual transitions. The unit tests cover the projection logic; this covers the wire.
+
+**C. Clear the launch gates that are not code.** A durable webhook queue with
+dead-letter and operator replay; the private generation adapter; published refund,
+renewal, and cancellation policy; assigned tax and regional consumer obligations; a
+named support owner and escalation path; account deletion and data-export workflows;
+and a production security review.
+
+Until group C is closed, `ALLOW_LIVE_BILLING` stays false. The accurate statement is
+no longer "payment and quota systems are proposed, not shipped" — they are shipped
+and switched off, which is a different and more dangerous state, because the only
+thing standing between a test deployment and real charges is one environment
+variable and a deliberate decision.
