@@ -33,6 +33,9 @@ Implemented here:
 - **first-party billing pages** at `/pricing`, `/billing/success`,
   `/billing/canceled`, and `/account`;
 - **a reservation sweeper** that releases abandoned reservations on a timer;
+- **dispute handling** for `charge.dispute.created` and `charge.dispute.closed`;
+- **a subscription reconciler** that re-reads live Stripe subscriptions on a timer,
+  so a webhook that was never delivered still converges;
 - an in-memory adapter for deterministic tests;
 - the normalized PostgreSQL contract in `migrations/001_initial.sql`.
 
@@ -40,8 +43,9 @@ Not implemented yet:
 
 - the PostgreSQL repository adapter and migration runner (needed only to run more
   than one replica; see the persistence note below);
-- a durable webhook queue and reconciliation worker;
-- dispute events (`charge.dispute.*`);
+- a durable webhook queue with dead-letter and operator replay tooling — the
+  reconciler covers undelivered subscription state, but not a permanently failing
+  event that needs human inspection;
 - the private hosted generation adapter;
 - edge abuse controls, monitoring, deletion/export automation, and incident tooling.
 
@@ -282,7 +286,15 @@ The current billing projector handles:
 - `customer.subscription.deleted`;
 - `invoice.paid`;
 - `invoice.payment_failed`;
-- `charge.refunded`.
+- `charge.refunded`;
+- `charge.dispute.created`;
+- `charge.dispute.closed`.
+
+A dispute revokes access as soon as it opens, and unlike a refund this is not gated
+behind `REFUND_REVOKES_ACCESS`: the funds have already been withdrawn, so continuing
+to serve the charge is a straight loss. Winning the dispute restores only the
+revocation that dispute caused; a subscription that was separately canceled or
+refunded stays in its own terminal state.
 
 A full-refund event revokes access only when its signed/enriched data can be tied to
 the account's current subscription. A bare Charge normally requires an invoice lookup;
@@ -291,9 +303,18 @@ cannot be verified, webhook processing returns a retryable error and leaves the 
 unprocessed rather than revoking an unrelated newer subscription or silently accepting
 an unenforced refund policy.
 
-Dispute events and a reconciliation worker are not yet implemented. A public paid
-launch is blocked until dispute behavior, event recovery, and operator replay tooling
-are defined and tested.
+Because provider events can arrive out of order, or not at all, the reconciler in
+`src/runtime/reconciler.js` periodically re-reads every non-terminal subscription
+from Stripe and re-projects the live object. That is what closes the "learner paid
+but the webhook never landed" gap: an undelivered event cannot be replayed, so
+convergence has to come from reading current state rather than from event history.
+A reconciliation pass is deliberately not recorded in `processedBillingEvents`,
+since it is not a delivery and must not make a later real event look like a
+duplicate.
+
+Still missing before a public paid launch: a durable webhook queue with a
+dead-letter path and operator replay tooling, for events that fail permanently and
+need human inspection.
 
 ## Open deployment dependencies
 

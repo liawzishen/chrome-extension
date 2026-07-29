@@ -100,6 +100,46 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     }
   }
 
+  // Reconciliation reads the live object rather than replaying events, because a
+  // webhook that was never delivered leaves no event to replay.
+  async function retrieveSubscription(subscriptionId) {
+    const id = String(subscriptionId || "").trim();
+    assertDomain(/^sub_[A-Za-z0-9_]+$/.test(id), "STRIPE_SUBSCRIPTION_INVALID", "A valid Stripe subscription is required.", 400);
+    try {
+      return await stripe.subscriptions.retrieve(id);
+    } catch (error) {
+      const unavailable = new HostedDomainError(
+        "STRIPE_SUBSCRIPTION_UNAVAILABLE",
+        "The Stripe subscription could not be read.",
+        503
+      );
+      unavailable.cause = error;
+      throw unavailable;
+    }
+  }
+
+  // A Dispute names only its Charge, so tying it to a subscription needs the same
+  // Charge -> Invoice -> Subscription walk a bare refund needs.
+  async function resolveDisputeSubscriptionId(dispute) {
+    const inline = dispute?.charge;
+    if (inline && typeof inline === "object") return resolveRefundSubscriptionId(inline);
+    const chargeId = typeof inline === "string" ? inline.trim() : "";
+    if (!chargeId) return null;
+    let charge;
+    try {
+      charge = await stripe.charges.retrieve(chargeId);
+    } catch (error) {
+      const unavailable = new HostedDomainError(
+        "STRIPE_DISPUTE_RECONCILIATION_UNAVAILABLE",
+        "Stripe could not resolve the disputed charge to its subscription.",
+        503
+      );
+      unavailable.cause = error;
+      throw unavailable;
+    }
+    return resolveRefundSubscriptionId(charge);
+  }
+
   async function createPortalSession(input) {
     const account = input?.account;
     assertDomain(account?.stripeCustomerId, "BILLING_CUSTOMER_MISSING", "No billing customer exists for this account.", 409);
@@ -127,8 +167,10 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     constructWebhookEvent,
     createCheckoutSession,
     createPortalSession,
-    retrieveCheckoutSession,
+    resolveDisputeSubscriptionId,
     resolveRefundSubscriptionId,
+    retrieveCheckoutSession,
+    retrieveSubscription,
     validatePriceCatalog
   };
 }

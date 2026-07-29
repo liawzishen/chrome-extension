@@ -26,6 +26,7 @@ function createHostedService(options) {
         store,
         config,
         now,
+        resolveDisputeSubscriptionId: billingAdapter.resolveDisputeSubscriptionId,
         resolveRefundSubscriptionId: billingAdapter.resolveRefundSubscriptionId
       })
     : null;

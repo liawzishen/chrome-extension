@@ -8,6 +8,7 @@ const { SessionService } = require("../domain/session-service.js");
 const { UsageService } = require("../domain/usage-service.js");
 const { loadRuntimeConfig } = require("./config.js");
 const { createHostedHttpServer, readTlsMaterial } = require("./http-server.js");
+const { createSubscriptionReconciler } = require("./reconciler.js");
 const { createRuntimeRouter } = require("./router.js");
 
 // Builds every collaborator and returns them without binding a socket, so the
@@ -103,6 +104,26 @@ async function startHostedServer(options = {}) {
     // An operational timer must never be the reason the process refuses to exit.
     if (typeof sweep.unref === "function") sweep.unref();
     timers.push(sweep);
+  }
+
+  if (
+    runtimeConfig.reconcileIntervalMs > 0 &&
+    runtime.hostedService.billingAdapter &&
+    runtime.hostedService.billingService
+  ) {
+    const reconciler = createSubscriptionReconciler({
+      billingAdapter: runtime.hostedService.billingAdapter,
+      billingService: runtime.hostedService.billingService,
+      store: runtime.store,
+      logger
+    });
+    const reconcile = setInterval(() => {
+      reconciler.runOnce().catch((error) => {
+        logger.error("[NeatMind Hosted] reconciliation pass failed", { message: error?.message });
+      });
+    }, runtimeConfig.reconcileIntervalMs);
+    if (typeof reconcile.unref === "function") reconcile.unref();
+    timers.push(reconcile);
   }
 
   logger.log(

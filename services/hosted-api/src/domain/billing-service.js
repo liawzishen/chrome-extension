@@ -8,7 +8,9 @@ const SUPPORTED_EVENT_TYPES = new Set([
   "customer.subscription.deleted",
   "invoice.paid",
   "invoice.payment_failed",
-  "charge.refunded"
+  "charge.refunded",
+  "charge.dispute.created",
+  "charge.dispute.closed"
 ]);
 
 // Failures that no amount of Stripe retrying can turn into a success. They are
@@ -31,6 +33,40 @@ class BillingService {
       typeof options.resolveRefundSubscriptionId === "function"
         ? options.resolveRefundSubscriptionId
         : null;
+    this.resolveDisputeSubscriptionId =
+      typeof options.resolveDisputeSubscriptionId === "function"
+        ? options.resolveDisputeSubscriptionId
+        : null;
+  }
+
+  // Applies the live Stripe subscription object directly. A webhook that was
+  // never delivered leaves no event to replay, so periodic reconciliation is the
+  // only thing that closes the gap between "the learner paid" and "we noticed".
+  // The synthesized event is stamped with the current time so it always wins over
+  // stale projections, and it is not recorded in processedBillingEvents because
+  // it is not a delivery.
+  async reconcileSubscription(subscription) {
+    assertDomain(
+      subscription && typeof subscription === "object",
+      "INVALID_STRIPE_EVENT",
+      "A Stripe subscription object is required for reconciliation."
+    );
+    const syntheticEvent = {
+      id: `reconcile_${requireStripeId(subscription.id, "subscription id")}`,
+      type: subscription.status === "canceled"
+        ? "customer.subscription.deleted"
+        : "customer.subscription.updated",
+      created: Math.floor(this.now() / 1000)
+    };
+    return this.store.transaction((state) => {
+      try {
+        return { outcome: this.applySubscription(state, syntheticEvent, subscription) };
+      } catch (error) {
+        const permanent = classifyPermanentFailure(error);
+        if (!permanent) throw error;
+        return { outcome: permanent };
+      }
+    });
   }
 
   async processVerifiedEvent(event) {
@@ -78,6 +114,25 @@ class BillingService {
   }
 
   async prepareEventContext(event) {
+    if (event.type === "charge.dispute.created" || event.type === "charge.dispute.closed") {
+      const dispute = event?.data?.object;
+      const inline = getDisputeSubscriptionId(dispute);
+      if (inline) return { disputeSubscriptionId: inline };
+      assertDomain(
+        this.resolveDisputeSubscriptionId,
+        "DISPUTE_RECONCILIATION_REQUIRED",
+        "A dispute requires a verified charge-to-subscription lookup before it can be acknowledged.",
+        503
+      );
+      const resolved = await this.resolveDisputeSubscriptionId(dispute);
+      assertDomain(
+        typeof resolved === "string" && resolved.trim(),
+        "DISPUTE_RECONCILIATION_REQUIRED",
+        "The disputed Charge could not be tied to a subscription.",
+        503
+      );
+      return { disputeSubscriptionId: resolved.trim() };
+    }
     if (
       event.type !== "charge.refunded" ||
       !this.config.refundRevokesAccess ||
@@ -124,6 +179,9 @@ class BillingService {
         return this.applyInvoice(state, event, object, true);
       case "charge.refunded":
         return this.applyRefund(state, event, object, context.refundSubscriptionId);
+      case "charge.dispute.created":
+      case "charge.dispute.closed":
+        return this.applyDispute(state, event, object, context.disputeSubscriptionId);
       default:
         return "ignored";
     }
@@ -350,6 +408,61 @@ class BillingService {
     return "entitlement_revoked";
   }
 
+  // A dispute withdraws the funds immediately, so unlike a refund this is not
+  // gated behind refundRevokesAccess: continuing to serve a charge that has been
+  // pulled back is a straight loss. If the dispute is later won, access returns.
+  applyDispute(state, event, dispute, resolvedSubscriptionId) {
+    const subscriptionId = resolvedSubscriptionId || getDisputeSubscriptionId(dispute);
+    assertDomain(
+      subscriptionId,
+      "DISPUTE_RECONCILIATION_REQUIRED",
+      "The disputed Charge could not be tied to a subscription.",
+      503
+    );
+    const customerId = typeof dispute?.customer === "string" ? dispute.customer : null;
+    const accountId =
+      state.subscriptionAccounts.get(subscriptionId) ||
+      (customerId && state.customerAccounts.get(customerId));
+    assertDomain(
+      typeof accountId === "string" && state.accounts.has(accountId),
+      "UNKNOWN_BILLING_ACCOUNT",
+      "Dispute does not map to a known account."
+    );
+    const existing = state.subscriptions.get(accountId);
+    if (!existing || existing.stripeSubscriptionId !== subscriptionId) {
+      return "historical_dispute_recorded";
+    }
+    if (event.created < existing.lastStripeEventCreated) return "stale_dispute_event";
+
+    const nowIso = new Date(this.now()).toISOString();
+    const status = String(dispute?.status || "").toLowerCase();
+    existing.lastStripeEventCreated = event.created;
+    existing.updatedAt = nowIso;
+
+    if (event.type === "charge.dispute.closed" && status === "won") {
+      // Only lift the revocation this dispute caused. A subscription that was
+      // separately canceled or refunded must stay in its own terminal state, and
+      // reconciliation corrects any residual drift from the live Stripe object.
+      if (existing.status === "disputed") {
+        existing.status = "active";
+        existing.revokedAt = null;
+        existing.graceEndsAt = null;
+      }
+      this.refreshEntitlement(state, accountId, existing);
+      return "dispute_won_access_restored";
+    }
+    if (event.type === "charge.dispute.closed" && ["warning_closed", "warning_needs_response"].includes(status)) {
+      this.refreshEntitlement(state, accountId, existing);
+      return "dispute_warning_recorded";
+    }
+
+    existing.status = "disputed";
+    existing.revokedAt = nowIso;
+    existing.graceEndsAt = null;
+    this.refreshEntitlement(state, accountId, existing);
+    return "entitlement_revoked_for_dispute";
+  }
+
   refreshEntitlement(state, accountId, subscription) {
     state.entitlements.set(
       accountId,
@@ -445,6 +558,22 @@ function getChargeSubscriptionId(charge) {
     if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
     if (candidate && typeof candidate === "object" && typeof candidate.id === "string") {
       return candidate.id.trim();
+    }
+  }
+  return null;
+}
+
+function getDisputeSubscriptionId(dispute) {
+  const candidates = [
+    dispute?.charge?.invoice?.subscription,
+    dispute?.charge?.invoice?.parent?.subscription_details?.subscription,
+    dispute?.charge?.subscription,
+    dispute?.metadata?.subscription_id
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (candidate && typeof candidate === "object" && typeof candidate.id === "string") {
+      return candidate.id.trim() || null;
     }
   }
   return null;
