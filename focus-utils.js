@@ -23,7 +23,7 @@
   const MAX_CHAPTER_HISTORY = 500;
   const FOCUS_SESSION_TIME_LABEL = "Focus session time";
   const GLOBAL_OPTIONAL_HOST_PATTERN = "*://*/*";
-  const EXTENSION_RELOAD_REQUIRED_MESSAGE = "Reload Exam-Cram from chrome://extensions to activate updated permissions.";
+  const EXTENSION_RELOAD_REQUIRED_MESSAGE = "Reload NeatMind from chrome://extensions to activate updated permissions.";
   const DNR_RULE_ID_BASE = 840000;
   const DNR_RULE_ID_LIMIT = DNR_RULE_ID_BASE + MAX_RULES;
   const MESSAGE_TYPES = Object.freeze({

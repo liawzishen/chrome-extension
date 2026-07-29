@@ -59,7 +59,7 @@ class BillingService {
         const permanentOutcome = classifyPermanentFailure(error);
         if (!permanentOutcome) throw error;
         this.logger.error(
-          `[Exam-Cram Hosted Billing] ${error.code}: Stripe event ${eventId} (${eventType}) is permanently unprocessable and will not be retried.`,
+          `[NeatMind Hosted Billing] ${error.code}: Stripe event ${eventId} (${eventType}) is permanently unprocessable and will not be retried.`,
           { eventId, eventType, outcome: permanentOutcome, message: error.message }
         );
         outcome = permanentOutcome;

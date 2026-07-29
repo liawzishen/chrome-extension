@@ -930,10 +930,10 @@ async function requestChapterResourceGeneration(chapter, action) {
       await sidePanelOpen;
       setArtifactStatus(`${action === "regenerate" ? "Regeneration" : "Retry"} queued for ${chapter.importedChapterTitle || chapter.title}.`, false);
     } catch (error) {
-      setArtifactStatus(error?.message || "Open Exam-Cram to generate this chapter's resources.", true);
+      setArtifactStatus(error?.message || "Open NeatMind to generate this chapter's resources.", true);
     }
   } else {
-    setArtifactStatus("Resource generation is queued. Open Exam-Cram to continue.", false);
+    setArtifactStatus("Resource generation is queued. Open NeatMind to continue.", false);
   }
 }
 
@@ -1382,7 +1382,7 @@ async function openExternalStudySuggestion(chapter, concept, suggestion, button)
   try {
     if (!globalThis.chrome?.tabs?.create) {
       window.open(safeUrl, "_blank", "noopener");
-      setArtifactStatus("External page opened. In the installed extension, open Exam-Cram on that page and choose Save source to chapter.");
+      setArtifactStatus("External page opened. In the installed extension, open NeatMind on that page and choose Save source to chapter.");
       return;
     }
     await globalThis.chrome.tabs.create({ url: safeUrl, active: true });
@@ -1438,7 +1438,7 @@ async function openSavedArtifact(artifactId, button) {
     await draftSave;
     notifyArtifactReady(exactArtifact.id);
     await sidePanelOpen;
-    setArtifactStatus(`Opened “${exactArtifact.title || "saved note"}” in Exam-Cram.`);
+    setArtifactStatus(`Opened “${exactArtifact.title || "saved note"}” in NeatMind.`);
   } catch (error) {
     setArtifactStatus(error?.message || "The saved note could not be opened.", true);
   } finally {
@@ -1476,13 +1476,13 @@ async function openStudyPanel() {
   const sidePanelOpen = globalThis.chrome?.sidePanel?.open ? openSidePanelFromGesture() : null;
   try {
     if (!sidePanelOpen) {
-      page.createNoteHelp.textContent = "Open Exam-Cram from the Chrome toolbar while viewing the page you want to study.";
+      page.createNoteHelp.textContent = "Open NeatMind from the Chrome toolbar while viewing the page you want to study.";
       return;
     }
     await sidePanelOpen;
-    page.createNoteHelp.textContent = "Exam-Cram is open. Name a Journey chapter, collect related pages, then build the visual note.";
+    page.createNoteHelp.textContent = "NeatMind is open. Name a Journey chapter, collect related pages, then build the visual note.";
   } catch (error) {
-    page.createNoteHelp.textContent = error?.message || "Open Exam-Cram from the Chrome toolbar to create a visual note.";
+    page.createNoteHelp.textContent = error?.message || "Open NeatMind from the Chrome toolbar to create a visual note.";
   } finally {
     page.createNote.disabled = false;
   }

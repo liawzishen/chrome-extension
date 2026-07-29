@@ -319,7 +319,7 @@ test("retains loading recovery, an empty note CTA, and a complete WebGL fallback
   assert.match(script, /setLoadState\("error"/);
   assert.match(script, /button\.textContent = "Retry"/);
   assert.match(html, /id="forestEmpty"/);
-  assert.match(html, /id="pageCreateNoteButton"[^>]*>Open Exam-Cram</);
+  assert.match(html, /id="pageCreateNoteButton"[^>]*>Open NeatMind</);
   assert.match(html, /id="forestFallbackList"/);
   assert.match(forest, /root\.dataset\.renderer = 'fallback'/);
   assert.match(script, /renderFallback\(\)/);

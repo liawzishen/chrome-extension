@@ -518,8 +518,8 @@ async function refreshCrossSiteAccessState() {
   elements.accessBanner.classList.toggle("hidden", granted);
   if (!granted && elements.accessBannerText) {
     elements.accessBannerText.textContent = permissionPattern === "file:///*"
-      ? "Grant file access only when you want Exam-Cram to read a local HTML or PDF source."
-      : "Grant access to this website only. Exam-Cram reads its page after you choose a study action.";
+      ? "Grant file access only when you want NeatMind to read a local HTML or PDF source."
+      : "Grant access to this website only. NeatMind reads its page after you choose a study action.";
     elements.grantCrossSiteAccessButton.textContent = permissionPattern === "file:///*" ? "Allow this file" : "Allow this site";
   }
   return granted;
@@ -538,7 +538,7 @@ async function handleGrantCrossSiteAccess() {
         else resolve(Boolean(value));
       });
     });
-    if (!granted) throw new Error("Page access was not granted. Exam-Cram will stay open without reading this source.");
+    if (!granted) throw new Error("Page access was not granted. NeatMind will stay open without reading this source.");
     await refreshCrossSiteAccessState();
     await detectActiveSource();
     showStatus("This source is available. Its content is read only when you choose a study action.");
@@ -1145,7 +1145,7 @@ async function readImportedDocument(file) {
 
 async function extractDocumentSource(file) {
   const Reader = globalThis.ExamCramDocumentReader;
-  if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
   const name = String(file?.name || "Local document").slice(0, 180);
   const hintedKind = /\.pdf$/i.test(name) || file?.type === "application/pdf" ? "pdf" : "html";
   const maxBytes = hintedKind === "pdf" ? Reader.MAX_PDF_BYTES : Reader.MAX_HTML_BYTES;
@@ -2409,7 +2409,7 @@ async function detectActiveSource() {
     if (detectionSequence !== state.sourceDetectionSequence) return false;
     if (!Number.isInteger(tab?.id)) throw new Error("Open an HTML page, PDF document, or video.");
     const Reader = globalThis.ExamCramDocumentReader;
-    if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions.");
+    if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions.");
     const descriptor = Reader.classifyTabDocument(tab.url || "");
     documentDescriptor = descriptor;
     if (descriptor.local || descriptor.kind === "pdf") {
@@ -2458,17 +2458,17 @@ async function detectActiveSource() {
   } catch (error) {
     if (detectionSequence !== state.sourceDetectionSequence) return false;
     const activeUrlIsHidden = error?.code === "UNSUPPORTED_DOCUMENT_URL" && !String(tab?.url || "").trim();
-    const toolbarGuidance = "Exam-Cram cannot see this page yet. Click the Exam-Cram toolbar icon while this tab is active, then return to the panel.";
+    const toolbarGuidance = "NeatMind cannot see this page yet. Click the NeatMind toolbar icon while this tab is active, then return to the panel.";
     state.sourceDetectionError = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
     state.sourceVisibilityNeedsToolbar = activeUrlIsHidden;
     reconcileTranscriptBinding(null);
     state.detectedSource = null;
     elements.activeSourceIcon.textContent = "!";
-    elements.activeSourceTitle.textContent = activeUrlIsHidden ? "Open this page from the Exam-Cram toolbar" : "Source unavailable";
+    elements.activeSourceTitle.textContent = activeUrlIsHidden ? "Open this page from the NeatMind toolbar" : "Source unavailable";
     elements.activeSourceMeta.textContent = activeUrlIsHidden ? toolbarGuidance : (error?.message || "Could not inspect this tab.");
     if (activeUrlIsHidden) {
       elements.accessBanner?.classList.add("hidden");
-      setStudyPageActionCopy("Open from the toolbar", "Click the Exam-Cram toolbar icon on this tab to grant one-time page access.");
+      setStudyPageActionCopy("Open from the toolbar", "Click the NeatMind toolbar icon on this tab to grant one-time page access.");
     }
     const permissionProblem = /cannot access|cannot read|host permission|permission/i.test(error?.message || "");
     const hostname = (() => {
@@ -2918,7 +2918,7 @@ function openVideoCaptureConsent() {
 async function handleStartVideoCapture(event) {
   event?.preventDefault();
   if (!globalThis.ExamCramVideo) {
-    showStatus("Video capture tools did not load. Reload Exam-Cram from chrome://extensions.", true);
+    showStatus("Video capture tools did not load. Reload NeatMind from chrome://extensions.", true);
     return;
   }
   const detectedSource = state.detectedSource;
@@ -2949,7 +2949,7 @@ async function handleStartVideoCapture(event) {
     if (identity.paused) throw new Error("Play the video first, then start automatic transcription.");
     const sourceSnapshot = makeVideoSourceSnapshot(tab, identity);
     if (!globalThis.ExamCramVideo.sourceSnapshotsMatch(expectedSourceSnapshot, sourceSnapshot)) {
-      const error = new Error("The page or video changed while Exam-Cram was checking it. Refresh the source and try again.");
+      const error = new Error("The page or video changed while NeatMind was checking it. Refresh the source and try again.");
       error.code = "CAPTURE_SOURCE_CHANGED";
       throw error;
     }
@@ -2965,14 +2965,14 @@ async function handleStartVideoCapture(event) {
       recording: !identity.paused
     });
     if (authorization?.protocolVersion !== 3) {
-      const error = new Error("Exam-Cram's loaded video worker is out of date. Open chrome://extensions, click Reload for Exam-Cram, then reopen the video and try again.");
+      const error = new Error("NeatMind's loaded video worker is out of date. Open chrome://extensions, click Reload for NeatMind, then reopen the video and try again.");
       error.code = "VIDEO_WORKER_RELOAD_REQUIRED";
       throw error;
     }
     state.videoCaptureAuthorization = authorization;
     renderVideoCaptureAuthorization();
     elements.reloadExtensionButton?.classList.add("hidden");
-    showStatus("Tab audio is ready. Click the Exam-Cram toolbar icon once on this video tab; recording will start automatically.");
+    showStatus("Tab audio is ready. Click the NeatMind toolbar icon once on this video tab; recording will start automatically.");
   } catch (error) {
     const message = error.message || "Automatic transcription could not start.";
     if (elements.videoCaptureDialogStatus) {
@@ -2992,9 +2992,9 @@ function renderVideoCaptureAuthorization() {
   scheduleVideoCaptureAuthorizationExpiry(authorization);
   if (!authorization || !elements.videoCaptureDialogStatus) return;
   const messages = {
-    "awaiting-toolbar": "Ready. Keep this video tab active, then click the Exam-Cram toolbar icon once. Recording starts automatically.",
+    "awaiting-toolbar": "Ready. Keep this video tab active, then click the NeatMind toolbar icon once. Recording starts automatically.",
     authorizing: "Chrome authorized this tab. Starting the private offscreen recorder...",
-    "wrong-tab": authorization.message || "Return to the armed video tab and click the Exam-Cram toolbar icon there.",
+    "wrong-tab": authorization.message || "Return to the armed video tab and click the NeatMind toolbar icon there.",
     error: authorization.message || "Chrome could not authorize this tab. Keep the video active and try again.",
     expired: authorization.message || "The tab-audio request expired. Press Start tab audio again, then click the toolbar icon within one minute.",
     cleared: authorization.message || "The pending tab-audio request was cancelled."
@@ -3068,11 +3068,11 @@ function handleVideoCaptureDialogClosed() {
 
 function handleReloadExtension() {
   if (!globalThis.chrome?.runtime?.reload) {
-    showStatus("Open chrome://extensions and click Reload for Exam-Cram.", true);
+    showStatus("Open chrome://extensions and click Reload for NeatMind.", true);
     return;
   }
   if (elements.videoCaptureDialogStatus) {
-    elements.videoCaptureDialogStatus.textContent = "Reloading Exam-Cram. Reopen the side panel on the playing video when it finishes.";
+    elements.videoCaptureDialogStatus.textContent = "Reloading NeatMind. Reopen the side panel on the playing video when it finishes.";
   }
   globalThis.chrome.runtime.reload();
 }
@@ -5878,7 +5878,7 @@ function makeContentFingerprint(value) {
 }
 
 const PDF_VENDOR_SCRIPT = "document-reader-vendor.bundle.js";
-const PDF_VENDOR_UNAVAILABLE_MESSAGE = "The local PDF reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.";
+const PDF_VENDOR_UNAVAILABLE_MESSAGE = "The local PDF reader is unavailable. Reload NeatMind from chrome://extensions and try again.";
 let pdfVendorLoad = null;
 
 function getExtensionAssetUrl(fileName) {
@@ -5974,11 +5974,11 @@ async function ensureDocumentUrlAccess(sourceUrl, { request = false } = {}) {
   if (contained) return true;
   const hostname = url.hostname.replace(/^www\./i, "") || "this document host";
   if (!request || !globalThis.chrome?.permissions?.request) {
-    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", `Permission needed for this document. Allow Exam-Cram access to ${hostname} and try again.`);
+    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", `Permission needed for this document. Allow NeatMind access to ${hostname} and try again.`);
   }
   const granted = await callChromeBooleanMethod(globalThis.chrome.permissions, globalThis.chrome.permissions.request, [{ origins: [origin] }]);
   if (!granted) {
-    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_DENIED", `Document access was not granted for ${hostname}. The side panel will stay open, but Exam-Cram cannot read it.`);
+    throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_DENIED", `Document access was not granted for ${hostname}. The side panel will stay open, but NeatMind cannot read it.`);
   }
   return true;
 }
@@ -6058,7 +6058,7 @@ async function extractPdfDocumentFromTab(tab, descriptor, { probe = false } = {}
   if (kind !== "pdf") {
     throw new Reader.DocumentReaderError(
       probe ? "NOT_PDF_DOCUMENT" : "UNSUPPORTED_DOCUMENT",
-      probe ? "The active source is HTML, not PDF." : "Exam-Cram can read HTML pages and PDF documents only."
+      probe ? "The active source is HTML, not PDF." : "NeatMind can read HTML pages and PDF documents only."
     );
   }
   const parsed = await Reader.extractPdfText(fetched.bytes, await getPdfJs(), {
@@ -6101,7 +6101,7 @@ async function extractCurrentPage() {
     throw new Error("Current-page reading is available in the browser extension. You can still use Open HTML or PDF file here.");
   }
   const Reader = globalThis.ExamCramDocumentReader;
-  if (!Reader) throw new Error("The document reader is unavailable. Reload Exam-Cram from chrome://extensions and try again.");
+  if (!Reader) throw new Error("The document reader is unavailable. Reload NeatMind from chrome://extensions and try again.");
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const tab = await getActiveTab();
     if (!Number.isInteger(tab?.id)) throw new Error("Open an HTML page or PDF document before creating a visual note.");
@@ -6121,7 +6121,7 @@ async function extractCurrentPage() {
       if (attempt === 0) continue;
       const message = String(error?.message || "");
       if (/cannot access|cannot read|host permission|permission/i.test(message)) {
-        throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", "Permission needed for this page. Allow Exam-Cram access to this site and try again.");
+        throw new Reader.DocumentReaderError("DOCUMENT_PERMISSION_NEEDED", "Permission needed for this page. Allow NeatMind access to this site and try again.");
       }
       throw new Reader.DocumentReaderError("HTML_READ_FAILED", "Chrome could not read this HTML page. Protected browser pages and extension galleries are not supported.");
     }

@@ -202,7 +202,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -216,7 +216,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -230,7 +230,7 @@ const server = http.createServer(async (request, response) => {
       if (!GEMINI_API_KEY) {
         sendJson(response, 500, {
           code: "GEMINI_API_KEY_MISSING",
-          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the Exam-Cram backend after adding it to .env."
+          error: "Automatic video transcription requires GEMINI_API_KEY. Restart the NeatMind backend after adding it to .env."
         });
         return;
       }
@@ -268,7 +268,7 @@ server.maxRequestsPerSocket = 100;
 
 if (require.main === module) {
   server.listen(PORT, SERVER_HOST, () => {
-    console.log(`Exam-Cram ${AI_PROVIDER} backend running at http://${SERVER_HOST}:${PORT} using ${getActiveModel()}`);
+    console.log(`NeatMind ${AI_PROVIDER} backend running at http://${SERVER_HOST}:${PORT} using ${getActiveModel()}`);
     console.log(`Backend access token loaded from ${process.env.BACKEND_ACCESS_TOKEN ? "BACKEND_ACCESS_TOKEN" : BACKEND_TOKEN_FILE}.`);
     logCostTelemetryStatus();
     if (CONFIGURED_EXTENSION_ORIGINS.size === 0) {
@@ -444,7 +444,7 @@ function assertAuthorizedRequest(request) {
     if (isTrustedLoopbackExtensionRequest(request)) return;
     throw createHttpError(
       403,
-      "A valid Exam-Cram backend access token is required.",
+      "A valid NeatMind backend access token is required.",
       "BACKEND_TOKEN_REQUIRED"
     );
   }
@@ -455,7 +455,7 @@ function assertAuthorizedRequest(request) {
   if (!valid) {
     throw createHttpError(
       403,
-      "The supplied Exam-Cram backend access token is invalid.",
+      "The supplied NeatMind backend access token is invalid.",
       "BACKEND_TOKEN_INVALID"
     );
   }
@@ -496,7 +496,7 @@ function redactSensitiveText(value) {
 function logSanitizedServerError(error) {
   const code = String(error?.code || "BACKEND_ERROR").replace(/[^A-Z0-9_-]/gi, "").slice(0, 80) || "BACKEND_ERROR";
   const message = redactSensitiveText(error?.message || "Unexpected server error.");
-  console.error(`[Exam-Cram Backend] ${code}: ${message}`);
+  console.error(`[NeatMind Backend] ${code}: ${message}`);
 }
 
 function getPublicErrorMessage(error, statusCode) {
@@ -1404,7 +1404,7 @@ function normalizeAudioTranscriptionError(error, attemptCount) {
   let message = String(error?.message || "Gemini could not transcribe this audio chunk.");
   if ([401, 403].includes(providerStatus)) {
     code = "GEMINI_AUTH_FAILED";
-    message = "Gemini rejected the backend API key. Update GEMINI_API_KEY and restart the Exam-Cram backend.";
+    message = "Gemini rejected the backend API key. Update GEMINI_API_KEY and restart the NeatMind backend.";
   } else if (providerStatus === 429) {
     code = "GEMINI_RATE_LIMITED";
     message = "Gemini rate-limited audio transcription. Wait briefly, then try again.";
@@ -3268,7 +3268,7 @@ function reportGroundingRepair(itemKind, index, error, values = {}) {
           ? "sourceAnchor"
           : "detail";
   const value = cleanOutputText(values[field] || values.detail || values.sourceAnchor || "").slice(0, 220);
-  console.warn("[Exam-Cram] Corrected AI grounding issue.", {
+  console.warn("[NeatMind] Corrected AI grounding issue.", {
     item: `${itemKind} ${Number(index) + 1}`,
     field,
     value,

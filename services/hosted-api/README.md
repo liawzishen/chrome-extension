@@ -1,4 +1,4 @@
-# Exam-Cram hosted API foundation
+# NeatMind hosted API foundation
 
 This directory contains the provider-neutral account, billing, entitlement, and usage
 foundation described in `handoff.md`. It is deliberately separate from the bundled
@@ -18,39 +18,54 @@ Implemented here:
 - a metered generation gateway that commits only schema-validated success;
 - a fail-closed Stripe configuration and adapter boundary;
 - server-side validation that configured recurring Prices are active USD $4.99 monthly
-  and USD $49.99 annual catalog entries before Checkout;
+  and USD $39.99 annual catalog entries before Checkout;
 - an account-scoped Checkout-attempt coordinator that prevents concurrent subscription
   sessions and recovers ambiguous retries with a deterministic provider key;
 - signature-verified billing-event projection behavior;
 - a bounded Fetch `Request`/`Response` API boundary with exact-origin and injected
   authentication checks;
+- **an HTTP listener** that binds that boundary to a real socket, bridging
+  `node:http` onto the fetch-style handler without buffering request bodies;
+- **server-side Google sign-in** and a rotating hosted session, so the extension
+  never holds an OAuth client secret and the API validates a token it minted;
+- **durable persistence** through `node:sqlite`, so accounts, subscriptions,
+  entitlements, sessions, and usage survive a restart;
+- **first-party billing pages** at `/pricing`, `/billing/success`,
+  `/billing/canceled`, and `/account`;
+- **a reservation sweeper** that releases abandoned reservations on a timer;
 - an in-memory adapter for deterministic tests;
 - the normalized PostgreSQL contract in `migrations/001_initial.sql`.
 
 Not implemented yet:
 
-- a production HTTP listener/runtime deployment and edge abuse controls;
-- production OIDC authentication and session lifecycle;
-- the PostgreSQL repository adapter and migration runner;
-- a durable webhook queue/reconciliation worker;
+- the PostgreSQL repository adapter and migration runner (needed only to run more
+  than one replica; see the persistence note below);
+- a durable webhook queue and reconciliation worker;
+- dispute events (`charge.dispute.*`);
 - the private hosted generation adapter;
-- the reservation-expiry worker;
-- a hosted billing/account webpage;
-- production deployment, monitoring, deletion/export automation, or incident tooling.
+- edge abuse controls, monitoring, deletion/export automation, and incident tooling.
 
-The in-memory store is not a production database. It serializes work only inside one
-Node.js process and must never be used to enforce a real allowance across replicas.
+**Single-process by design.** The domain reads and writes synchronous Maps inside
+one transaction callback. `SqliteHostedStore` keeps that authoritative copy in
+memory and writes every committed change through to disk while the store's
+serialization lock is still held. That is durable and correct for exactly one
+process; two replicas would each hold their own authoritative memory and silently
+diverge on allowance enforcement. Running more than one instance requires making
+the store contract async and moving to PostgreSQL row locking — not a second copy
+of the SQLite adapter behind a load balancer.
 
 ## Repository layout
 
 ```text
 services/hosted-api/
+  bin/serve.js                   process entrypoint (npm run hosted:serve)
   migrations/001_initial.sql     PostgreSQL metadata and usage-ledger contract
   src/config.js                  fail-closed hosted billing configuration
   src/http-api.js                bounded authenticated HTTP/API contract
   src/index.js                   dependency-injected service assembly
-  src/domain/                    policy, billing, and usage rules
-  src/adapters/                  in-memory test and Stripe provider adapters
+  src/domain/                    policy, billing, checkout, usage, session, account
+  src/adapters/                  memory, SQLite, Stripe, and Google OAuth adapters
+  src/runtime/                   listener, router, billing pages, runtime config
 ```
 
 The PostgreSQL schema is `hosted`. It contains account and operational metadata only.
@@ -68,25 +83,7 @@ provider response bodies, credentials, and payment-card data are prohibited.
    `.env.hosted` is ignored by Git. Do not combine local provider secrets and hosted
    production secrets into a committed file.
 
-2. Provision a dedicated PostgreSQL database with encrypted connections, backups,
-   point-in-time recovery, and separate migration/runtime roles.
-
-3. Apply the initial migration with the migration role:
-
-   ```powershell
-   psql "$env:DATABASE_URL" -v ON_ERROR_STOP=1 -f services/hosted-api/migrations/001_initial.sql
-   ```
-
-   The migration enables `pgcrypto` for UUID generation and creates the `hosted`
-   schema. On a managed service, the migration role therefore needs permission to
-   create that extension and schema.
-
-4. Grant the future runtime role only the table/sequence/function permissions its
-   repository adapter requires. Do not give the browser extension or billing webpage
-   direct database credentials. Keep schema migration permission out of the runtime
-   role.
-
-5. Run the repository checks before connecting any external system:
+2. Run the repository checks before connecting any external system:
 
    ```powershell
    npm test
@@ -94,43 +91,81 @@ provider response bodies, credentials, and payment-card data are prohibited.
    npm run security:secrets
    ```
 
-6. Select and configure a production OIDC identity provider. Hosted API tokens must be
-   short lived and validated for signature, issuer, audience, expiry, and account
-   state. An exact Chrome extension origin allowlist is an additional boundary, not a
-   replacement for authentication.
+3. Choose the fixed first-party HTTPS origin and set `PUBLIC_APP_ORIGIN`. Checkout
+   success, cancel, portal return, OAuth redirect, and session audience are all
+   derived from this one value; a client must never supply an arbitrary return URL
+   or Stripe Price ID. For local verification, run an HTTPS tunnel (for example
+   `cloudflared tunnel --url http://127.0.0.1:8790`) and use the HTTPS URL it
+   prints. `http://localhost` is rejected: the origin must be HTTPS.
 
-7. Configure a first-party HTTPS account/billing origin. Checkout success, cancel, and
-   portal return URLs are derived from this fixed origin; a client must never supply
-   an arbitrary return URL or Stripe Price ID.
+4. Create a Google OAuth client. Google Cloud console -> APIs & Services ->
+   Credentials -> Create OAuth client ID -> **Web application**, with the authorized
+   redirect URI `<PUBLIC_APP_ORIGIN>/auth/callback`. Put the ID and secret in
+   `GOOGLE_OAUTH_CLIENT_ID` and `GOOGLE_OAUTH_CLIENT_SECRET`. The secret stays on
+   the server; the extension never receives it.
 
-   When wiring the private hosted generation adapter, also inject a randomly generated
-   `USAGE_REQUEST_HMAC_KEY` of at least 32 bytes. Service assembly refuses to enable
-   hosted generation without it.
+5. Generate the session signing key and set the storage path:
 
-8. Complete Stripe **sandbox** setup:
+   ```powershell
+   node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
+   ```
 
-   - create one $4.99 USD monthly recurring Price;
-   - create one $49.99 USD annual recurring Price;
+   Put it in `HOSTED_SESSION_SIGNING_KEY`, and set `HOSTED_SQLITE_PATH`. That
+   database holds real subscription state: back it up, and never commit it.
+
+6. Set `HOSTED_ALLOWED_EXTENSION_ORIGINS` to the exact `chrome-extension://<id>`
+   origin. Load the unpacked extension once to read its ID from `chrome://extensions`.
+   An origin allowlist is an additional boundary, not a replacement for
+   authentication.
+
+   When wiring the private hosted generation adapter, also inject a randomly
+   generated `USAGE_REQUEST_HMAC_KEY` of at least 32 bytes. Service assembly refuses
+   to enable hosted generation without it.
+
+7. Complete Stripe **test-mode** setup:
+
+   - create one product with two recurring USD Prices: $4.99 monthly and $39.99
+     annual, both `interval_count` 1;
    - configure the Customer Portal for cancellation and payment-method updates;
-   - register only the webhook events handled by the service;
-   - set sandbox `sk_test_...`, `whsec_...`, and `price_...` values in secret
-     management;
-   - explicitly decide automatic-tax, refund-revocation, and grace-period behavior;
+   - set `sk_test_...` and both `price_...` values in secret management;
+   - explicitly decide automatic-tax, refund-revocation, and grace-period behavior.
+     `STRIPE_AUTOMATIC_TAX` must be `false` unless every Price carries an explicit
+     `tax_behavior` and Stripe Tax is configured;
    - leave `ALLOW_LIVE_BILLING=false`.
 
    The installed `stripe@22.3.2` SDK is aligned to `2026-06-24.dahlia`, which is why
    the template pins that API version. Upgrade the SDK, request version, webhook
    endpoint version, fixtures, and lifecycle tests together; do not change only one.
 
-9. Set `BILLING_ENABLED=true` only in the sandbox environment. The configuration fails
-   closed if any required secret, Price ID, fixed HTTPS origin, or policy decision is
-   absent.
+8. Forward webhooks to the running service and take the signing secret it prints:
 
-10. Test purchase, renewal, failed renewal, grace expiry, cancellation, refund,
+   ```powershell
+   stripe listen --forward-to http://127.0.0.1:8790/v1/billing/webhook
+   ```
+
+   Copy the printed `whsec_...` into `STRIPE_WEBHOOK_SECRET`. When you later create
+   a real dashboard endpoint, register only the seven events the projector handles.
+
+9. Set `BILLING_ENABLED=true` and start the service:
+
+   ```powershell
+   npm run hosted:serve
+   ```
+
+   The configuration fails closed if any required secret, Price ID, fixed HTTPS
+   origin, or policy decision is absent, and the process reports which one.
+
+10. Point the extension at the service: in `popup.js`, set `HOSTED_ACCOUNT_CONFIG`
+    `apiOrigin` to `PUBLIC_APP_ORIGIN`, repeat it in `allowedApiOrigins`, and set
+    `enabled: true`. Reload the extension, open the settings panel, and use **Sign
+    in**. All three must agree or hosted mode stays closed.
+
+11. Test purchase, renewal, failed renewal, grace expiry, cancellation, refund,
     expiry, duplicate delivery, out-of-order delivery, and resubscription. Use Stripe
-    test clocks for monthly and annual transitions.
+    test clocks for monthly and annual transitions, and card `4242 4242 4242 4242`
+    for a successful payment.
 
-11. Complete the security, privacy, finance, tax, support, and Chrome Web Store policy
+12. Complete the security, privacy, finance, tax, support, and Chrome Web Store policy
     reviews. Only then copy separately created **live** secrets into the deployment
     secret manager and deliberately set `ALLOW_LIVE_BILLING=true`.
 
@@ -138,11 +173,24 @@ The `pk_live_...` publishable key is not required for the selected Stripe-hosted
 Checkout flow. The service creates Checkout and Portal sessions server-side and returns
 their hosted URLs. Do not add a publishable key merely because one is available, and
 never place `sk_...` or `whsec_...` values in source, extension storage, logs, or chat.
+A key that has been pasted into any of those is compromised: roll it in the Stripe
+dashboard rather than hoping it was not read.
 
 ## Persistence invariants
 
-The production PostgreSQL adapter must perform allowance reservation in one database
-transaction:
+**What runs today.** `SqliteHostedStore` extends the in-memory store rather than
+replacing it. The undo journal already records which collections and keys each
+transaction touched, so on commit the store compares each touched key against its
+pre-image and writes only genuine changes, inside one `BEGIN IMMEDIATE`
+transaction, before the serialization lock is released. `usageTotals`,
+`activeReservations`, and `finalizedReservations` are deliberately not persisted:
+they are derived indexes rebuilt from `reservations` at load, and storing them
+would create a second thing to keep correct. A write failure latches the store
+closed with `STORE_PERSISTENCE_FAILED` rather than letting memory keep answering
+for a disk it has outrun.
+
+**What a multi-replica deployment would need instead.** The PostgreSQL adapter must
+perform allowance reservation in one database transaction:
 
 1. load or create each `usage_allowance_periods` row;
 2. lock every affected period in deterministic action order with `FOR UPDATE`;
@@ -221,7 +269,6 @@ Billing remains disabled until an accountable owner records all of these:
 - `STRIPE_AUTOMATIC_TAX`: whether Stripe automatic tax is enabled;
 - `REFUND_REVOKES_ACCESS`: whether a full refund ends Pro immediately;
 - `BILLING_GRACE_DAYS`: exact failed-renewal grace period, from 0 through 30 days;
-- whether the optional $39.99 founding annual offer is enabled;
 - refund window, renewal reminder, dispute, and statutory-rights procedures;
 - which regions can buy and whether displayed prices include tax;
 - treatment of partial refunds and disputes;

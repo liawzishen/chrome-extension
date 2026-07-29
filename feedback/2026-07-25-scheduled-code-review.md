@@ -15,7 +15,7 @@ quality, performance, and anything else worth flagging. No code was touched.
 
 I diffed both trees to see what's actually different before reviewing:
 
-- **`server.js` and `journey-utils.js` differ by rebranding only** (`Exam-Cram` →
+- **`server.js` and `journey-utils.js` differ by rebranding only** (`NeatMind` →
   `NeatMind`, storage keys `examCram*` → `neatMind*`). No functional change. This means
   every logic-level finding from the 2026-07-23 review (still sitting uncommitted in this
   repo at `feedback/2026-07-23-scheduled-code-review.md`) is **still accurate against the
@@ -28,7 +28,7 @@ I diffed both trees to see what's actually different before reviewing:
   genuinely new, well-isolated feature — pure state module with its own test file
   (`tests/study-time-utils.test.js`), same pattern the 2026-07-20 review praised when it
   was still uncommitted.
-- The whole repo was renamed **Exam-Cram → NeatMind** (`.env.example`, README, manifest,
+- The whole repo was renamed **NeatMind → NeatMind** (`.env.example`, README, manifest,
   hackathon docs, storage keys, log prefixes, the token filename
   `.exam-cram-backend-token` → `.neatmind-backend-token`).
 
@@ -100,7 +100,7 @@ classification first should also reduce how often this worst case is actually hi
 1. **Fix the verifier's error classification** (`server.js:2736-2858`) — smallest, most
    isolated, prevents a silent regression in fallback rate on the feature you just shipped.
 2. **Reconcile the branch divergence** before more local work accumulates on the older
-   `Exam-Cram`-branded schema — not a code-quality issue, but it will become a merge-pain
+   `NeatMind`-branded schema — not a code-quality issue, but it will become a merge-pain
    issue the longer it sits.
 3. **Wire `summarize()` to the mastery model** — the highest-value place where the
    product's actual differentiator (active recall + progress memory) still isn't visible

@@ -4,7 +4,7 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE SCHEMA IF NOT EXISTS hosted;
 
 COMMENT ON SCHEMA hosted IS
-  'Account, billing, entitlement, and usage metadata for the Exam-Cram hosted service. Raw study content does not belong in this schema.';
+  'Account, billing, entitlement, and usage metadata for the NeatMind hosted service. Raw study content does not belong in this schema.';
 
 CREATE TABLE hosted.schema_migrations (
   version text PRIMARY KEY,

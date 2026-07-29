@@ -1,8 +1,8 @@
-# Exam-Cram system architecture
+# NeatMind system architecture
 
 ## Architectural intent
 
-Exam-Cram is organized around one trustworthy study loop: a deliberately chosen source becomes evidence-linked practice and a durable next study action. The design favors explicit provenance, stable ownership, and a deterministic judge path over feature breadth.
+NeatMind is organized around one trustworthy study loop: a deliberately chosen source becomes evidence-linked practice and a durable next study action. The design favors explicit provenance, stable ownership, and a deterministic judge path over feature breadth.
 
 ## System context
 
@@ -10,7 +10,7 @@ Exam-Cram is organized around one trustworthy study loop: a deliberately chosen 
 flowchart LR
   learner["Student / judge"] --> panel["Chrome side panel"]
 
-  subgraph extension["Exam-Cram Chrome extension"]
+  subgraph extension["NeatMind Chrome extension"]
     panel --> capture["Source capture and normalization"]
     panel --> demo["Curated Mathematics demo"]
     capture --> validation["Evidence and artifact validation"]

@@ -30,7 +30,7 @@ test("returns explicit errors when a PDF viewer hides its source", () => {
     () => Reader.recoverDocumentSourceUrl(`chrome-extension://${Reader.PDF_VIEWER_EXTENSION_ID}/index.html`),
     (error) => error.code === "PDF_SOURCE_URL_UNAVAILABLE" && /Open HTML or PDF file/.test(error.message)
   );
-  assert.match(Reader.FILE_ACCESS_GUIDANCE, /chrome:\/\/extensions > Exam-Cram > Allow access to file URLs/);
+  assert.match(Reader.FILE_ACCESS_GUIDANCE, /chrome:\/\/extensions > NeatMind > Allow access to file URLs/);
 });
 
 test("never treats binary PDF or arbitrary binary data as HTML", () => {

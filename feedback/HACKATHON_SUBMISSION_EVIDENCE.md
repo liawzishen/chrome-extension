@@ -31,7 +31,7 @@ The official submission period runs from **2026-07-13 09:00 PDT** through **2026
 | Requirement | Evidence or action | Status |
 | --- | --- | --- |
 | Codex and GPT-5.6 build evidence | Submit the primary `/feedback` Session ID and retain this detailed collaboration narrative. | Documented |
-| One submission track | **Education** is the recommended match for Exam-Cram; select it in Devpost. | Ready to select |
+| One submission track | **Education** is the recommended match for NeatMind; select it in Devpost. | Ready to select |
 | Detailed project description | Product summary, scope, PRD, and technical specification are linked from `hackathon/README.md`. | Ready |
 | Explain Codex/GPT-5.6 collaboration | Root README, hackathon README, and the builder-led collaboration report document the builder’s direction, review process, and Codex implementation support. | Ready |
 | Public YouTube demo under 3 minutes with audio | Record a working demo with a specific voiceover on the user problem, product flow, Codex work, and GPT-5.6 build use. | Pending |

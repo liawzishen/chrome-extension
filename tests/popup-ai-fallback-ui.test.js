@@ -39,7 +39,7 @@ test("local visual-note presentation suppresses repeated examples but retains la
 
 test("a hidden active-tab URL directs the learner to the toolbar rather than a dead permission state", () => {
   assert.match(script, /const activeUrlIsHidden = error\?\.code === "UNSUPPORTED_DOCUMENT_URL" && !String\(tab\?\.url \|\| ""\)\.trim\(\)/);
-  assert.match(script, /Click the Exam-Cram toolbar icon while this tab is active, then return to the panel\./);
+  assert.match(script, /Click the NeatMind toolbar icon while this tab is active, then return to the panel\./);
   assert.match(script, /state\.sourceVisibilityNeedsToolbar = activeUrlIsHidden/);
   assert.match(script, /elements\.accessBanner\?\.classList\.add\("hidden"\)/);
   assert.match(script, /!refreshed && !state\.sourceVisibilityNeedsToolbar/);

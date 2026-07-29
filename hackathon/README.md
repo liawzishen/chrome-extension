@@ -1,6 +1,6 @@
-# Exam-Cram Assistant — Hackathon Submission
+# NeatMind — Hackathon Submission
 
-Exam-Cram Assistant is a source-grounded Chrome study companion for students in any subject. It turns student-selected pages, PDFs, notes, and videos into visual lessons, active-recall quizzes, and a persistent learning journey.
+NeatMind is a source-grounded Chrome study companion for students in any subject. It turns student-selected pages, PDFs, notes, and videos into visual lessons, active-recall quizzes, and a persistent learning journey.
 
 ## Problem
 
@@ -8,7 +8,7 @@ Students learn from scattered sources and often end up with unverified summaries
 
 ## Solution
 
-Exam-Cram creates an evidence-to-mastery loop:
+NeatMind creates an evidence-to-mastery loop:
 
 ```text
 Choose or create a chapter

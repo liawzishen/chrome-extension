@@ -1,4 +1,4 @@
-# Exam-Cram Business Model Handoff
+# NeatMind Business Model Handoff
 
 **Status:** Approved direction; Phase 0 instrumentation and a disabled Phase 1
 foundation are implemented, but no hosted beta or live billing is deployed
@@ -7,7 +7,7 @@ foundation are implemented, but no hosted beta or live billing is deployed
 
 **Audience:** Product, design, engineering, growth, finance, support, privacy, and security
 
-**Product:** Exam-Cram Assistant
+**Product:** NeatMind
 
 ### Implementation update — 28 July 2026
 
@@ -75,12 +75,12 @@ above records the disabled foundation added since then, not a deployable paid se
 
 ## 2. Executive decision
 
-Exam-Cram will use an **open-core freemium subscription model**:
+NeatMind will use an **open-core freemium subscription model**:
 
 1. The extension's trustworthy local study loop remains useful for free.
 2. A free user can save and organize learning material, inspect evidence, complete a
    limited hosted-AI study loop, and keep previously created work.
-3. **Exam-Cram Student Pro costs USD $4.99 per month or USD $49.99 per year.**
+3. **NeatMind Student Pro costs USD $4.99 per month or USD $49.99 per year.**
 4. Pro sells hosted convenience, repeated AI transformation, multi-source synthesis,
    advanced practice, and bounded captionless-video processing.
 5. Local deterministic behavior and the optional self-hosted/bring-your-own-backend path
@@ -103,9 +103,9 @@ The paid promise is:
 > Serious, source-grounded exam preparation for $4.99 per month, without configuring
 > an AI provider or giving up access to your work.
 
-## 3. Why this model fits Exam-Cram
+## 3. Why this model fits NeatMind
 
-Exam-Cram is not positioned as a generic chatbot or the largest collection of AI
+NeatMind is not positioned as a generic chatbot or the largest collection of AI
 features. Its defensible product loop is:
 
 ```text
@@ -1093,7 +1093,7 @@ Pricing checked in July 2026:
 | Product | Observed business pattern | Lesson |
 | --- | --- | --- |
 | Laxu AI | One free upload; Pro advertised at $4.99/month | Direct low-price precedent |
-| Cramberry | Five free AI generations; $4.99/week or $14.99/month | Exam urgency supports short subscriptions, but Exam-Cram can be fairer |
+| Cramberry | Five free AI generations; $4.99/week or $14.99/month | Exam urgency supports short subscriptions, but NeatMind can be fairer |
 | Cardlet | Free AI credits and study-set cap; Pro $8/month | Habit-forming Free plus usage expansion |
 | RemNote | Durable notes/flashcards free; separate Pro and higher AI plan | Preserve the knowledge system; meter hosted AI |
 | Glasp | Explicit free and paid limits for summaries, PDF chat, and transcription | Publish expensive-action allowances |
@@ -1139,7 +1139,7 @@ competitor remaining at its observed price.
 
 This model does not authorize:
 
-- turning Exam-Cram into a universal AI chatbot;
+- turning NeatMind into a universal AI chatbot;
 - crawling unrelated tabs or browsing history;
 - selling or advertising against learner content;
 - locking evidence or previously generated artifacts;

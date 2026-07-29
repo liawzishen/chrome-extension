@@ -23,7 +23,7 @@ async function initExport() {
   const payload = await readExportPayload(exportId);
   const rawModel = payload?.exportModel || payload?.model || payload?.item;
   if (!api || !rawModel || payload?.exportId !== exportId || !api.isExportPayloadFresh(payload)) {
-    showEmpty("No export is ready. Return to Exam-Cram, open a visual note, and choose Export.");
+    showEmpty("No export is ready. Return to NeatMind, open a visual note, and choose Export.");
     return;
   }
 
@@ -31,7 +31,7 @@ async function initExport() {
   storageKey = `${EXPORT_STORAGE_PREFIX}:${exportId}`;
   exportModel = api.createExportModel(rawModel);
   selections = api.sanitizeSelections(payload.selections, exportModel);
-  document.title = `${exportModel.title} — Exam-Cram Export`;
+  document.title = `${exportModel.title} — NeatMind Export`;
   renderOptions();
   renderPreview();
   elements.options.addEventListener("change", handleSelectionChange);

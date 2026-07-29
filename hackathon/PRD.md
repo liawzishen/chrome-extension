@@ -2,7 +2,7 @@
 
 ## Product vision
 
-Exam-Cram helps students build understanding from their own learning sources, then turn that understanding into active recall and a persistent record of progress.
+NeatMind helps students build understanding from their own learning sources, then turn that understanding into active recall and a persistent record of progress.
 
 ## Users and jobs
 
@@ -16,10 +16,10 @@ Exam-Cram helps students build understanding from their own learning sources, th
 
 1. The student creates or selects a chapter.
 2. The student explicitly saves a source to that chapter.
-3. Exam-Cram creates a visual note and cheat sheet grounded in the saved evidence.
+3. NeatMind creates a visual note and cheat sheet grounded in the saved evidence.
 4. The student explores concepts and verifies supporting evidence.
 5. The student generates a quiz and submits answers.
-6. Exam-Cram records progress and shows the next learning action in Journey.
+6. NeatMind records progress and shows the next learning action in Journey.
 
 ## Functional requirements
 

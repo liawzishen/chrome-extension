@@ -200,7 +200,7 @@ test("turns stale permission manifests and Chrome's raw mismatch into a reload i
     () => Focus.validateFocusPermissionManifest(staleManifest),
     (error) => (
       error.code === "EXTENSION_RELOAD_REQUIRED"
-      && error.message === "Reload Exam-Cram from chrome://extensions to activate updated permissions."
+      && error.message === "Reload NeatMind from chrome://extensions to activate updated permissions."
     )
   );
 
