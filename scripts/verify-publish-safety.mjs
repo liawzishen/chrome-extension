@@ -6,7 +6,7 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const excludedDirectories = new Set([
   ".git", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
 ]);
-const excludedFiles = new Set([".env", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
+const excludedFiles = new Set([".env", ".env.hosted", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml"]);
 // Credential files carry no useful extension, so extname-based scanning skips them entirely.
 // Match them by name instead: a rename is what let a committed backend token pass this gate once.
@@ -29,6 +29,7 @@ for (const filename of candidates) {
     ["OpenAI credential", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
     ["Stripe credential", /\b(?:pk|sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/],
     ["Stripe webhook secret", /\bwhsec_[A-Za-z0-9]{16,}\b/],
+    ["Google OAuth client secret", /\bGOCSPX-[A-Za-z0-9_-]{20,}\b/],
     ["GitHub credential", /\bgh[pousr]_[A-Za-z0-9]{20,}\b/],
     ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
     ["Slack credential", /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/],
@@ -87,15 +88,25 @@ async function collect(directory) {
 
 async function loadLocalSecrets() {
   const secrets = [];
-  const env = await readFile(resolve(projectRoot, ".env"), "utf8").catch(() => "");
-  env.split(/\r?\n/).forEach((line) => {
-    const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
-    const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
-    const sensitiveName = /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|ALLOWED_EXTENSION_ORIGINS)/.test(match?.[1] || "");
-    if (match && sensitiveName && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
-      secrets.push({ name: match[1], value });
-    }
-  });
+  // .env.hosted holds the Stripe secret key, webhook signing secret, Google OAuth
+  // client secret, and session signing key. Those are the highest-value secrets in
+  // the project, so a copy of one leaking into a publishable file has to be caught
+  // by value, not only by the format patterns above: a client secret or a signing
+  // key has no recognisable shape.
+  for (const envFile of [".env", ".env.hosted"]) {
+    const env = await readFile(resolve(projectRoot, envFile), "utf8").catch(() => "");
+    env.split(/\r?\n/).forEach((line) => {
+      const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
+      const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
+      const sensitiveName = /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|ALLOWED_EXTENSION_ORIGINS)/.test(match?.[1] || "");
+      // CLIENT_ID is deliberately not treated as a secret: an OAuth client id is
+      // public by design and appears in client-side code.
+      const publicByDesign = /CLIENT_ID$/.test(match?.[1] || "");
+      if (match && sensitiveName && !publicByDesign && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
+        secrets.push({ name: match[1], value });
+      }
+    });
+  }
   const backendToken = (await readFile(resolve(projectRoot, ".exam-cram-backend-token"), "utf8").catch(() => "")).trim();
   if (backendToken.length >= 12) secrets.push({ name: "BACKEND_ACCESS_TOKEN_FILE", value: backendToken });
   return secrets;

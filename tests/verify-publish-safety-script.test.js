@@ -31,6 +31,54 @@ test("publish safety scan flags a renamed backend token file", () => {
   }
 });
 
+test("publish safety scan catches a hosted secret copied into a publishable file", () => {
+  // .env.hosted holds the Stripe secret key, webhook secret, Google client secret,
+  // and session signing key. A signing key has no recognisable format, so only a
+  // by-value comparison against that file can catch a copy of one.
+  const signingKey = "hosted-session-signing-key-that-must-never-be-published";
+  const root = makeSandbox({
+    ".env.hosted": `HOSTED_SESSION_SIGNING_KEY=${signingKey}\n`,
+    "leaked.js": `const key = "${signingKey}";\n`
+  });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 1, `expected a failing scan, got:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /leaked\.js: matches local secret HOSTED_SESSION_SIGNING_KEY/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publish safety scan does not treat a public OAuth client id as a secret", () => {
+  // An OAuth client id is public by design and appears in client-side code.
+  // Treating it as a secret would make the gate cry wolf on correct configuration.
+  const clientId = "601750311540-uos1m292f91qcqc9j2u3f39nul5kktlv.apps.googleusercontent.com";
+  const root = makeSandbox({
+    ".env.hosted": `GOOGLE_OAUTH_CLIENT_ID=${clientId}\n`,
+    "docs-note.md": `The public client id is ${clientId}\n`
+  });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 0, `expected a passing scan, got:\n${result.stdout}${result.stderr}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publish safety scan flags a Google OAuth client secret by format", () => {
+  // Assembled at runtime: writing the literal here would make this very file trip
+  // the gate it is testing.
+  const sampleSecret = ["GOCSPX", "abcdefghijklmnopqrstuvwxyz01"].join("-");
+  const root = makeSandbox({ "config-sample.js": `const secret = "${sampleSecret}";\n` });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 1, `expected a failing scan, got:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /Google OAuth client secret/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("publish safety scan passes on the same tree without a credential file", () => {
   const root = makeSandbox({});
   try {

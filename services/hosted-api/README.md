@@ -141,6 +141,19 @@ provider response bodies, credentials, and payment-card data are prohibited.
    the template pins that API version. Upgrade the SDK, request version, webhook
    endpoint version, fixtures, and lifecycle tests together; do not change only one.
 
+   Then set `STRIPE_PRODUCT_ID` and run the read-only preflight instead of copying
+   Price IDs by hand:
+
+   ```powershell
+   npm run hosted:verify-stripe
+   ```
+
+   It checks the product, both amounts, currency, interval, `interval_count`,
+   duplicate prices, tax-behavior consistency, and the Customer Portal, then prints
+   the exact `STRIPE_PRICE_PRO_MONTHLY=` and `STRIPE_PRICE_PRO_ANNUAL=` lines to
+   paste. It creates and modifies nothing. A product id from one mode does not
+   resolve in the other, and the preflight says so explicitly when that happens.
+
 8. Forward webhooks to the running service and take the signing secret it prints:
 
    ```powershell
