@@ -4,9 +4,11 @@ const SUPPORTED_STRIPE_API_VERSION = "2026-06-24.dahlia";
 
 // Approved Student Pro unit amounts in cents. Changing launch prices requires a
 // reviewed code/policy-version change; environment variables cannot silently reprice.
+// The annual price is the permanent $39.99 rate, not a first-term promotion, so it
+// carries no renewal transition and STRIPE_PRICE_FOUNDING_ANNUAL stays rejected.
 const DEFAULT_PRICE_AMOUNTS = Object.freeze({
   month: 499,
-  year: 4999
+  year: 3999
 });
 
 function loadHostedConfig(env = process.env) {

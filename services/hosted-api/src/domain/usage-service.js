@@ -30,6 +30,20 @@ class UsageService {
     pruneAccountBuckets(state, accountId, now);
   }
 
+  // maintain() only ever runs for an account that is actively transacting, so an
+  // abandoned reservation on an idle account would hold its units forever. The
+  // deployed sweeper calls this to release them on a timer instead.
+  async sweepExpiredReservations() {
+    return this.store.transaction((state) => {
+      ensureIndexes(state);
+      const now = this.now();
+      const before = state.activeReservations.size;
+      expireReservations(state, now);
+      pruneFinalizedReservations(state, now, this.finalizedRetentionMs, this.maxFinalizedReservations);
+      return { expired: before - state.activeReservations.size };
+    });
+  }
+
   async getEntitlement(accountId) {
     return this.store.transaction((state) => {
       const account = requireActiveAccount(state, accountId);

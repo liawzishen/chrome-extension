@@ -8,6 +8,28 @@ const { assertDomain } = require("../domain/errors.js");
 const BILLING_EVENT_RETENTION_MAX = 5_000;
 const BILLING_EVENT_RETENTION_MS = 30 * 86_400_000;
 
+// The collections a durable adapter has to write. `usageTotals`,
+// `activeReservations` and `finalizedReservations` are deliberately absent: they
+// are derived indexes that rebuildUsageIndexes() regenerates from `reservations`
+// at load, so persisting them would only create a second thing to keep correct.
+const DURABLE_COLLECTIONS = Object.freeze([
+  "accounts",
+  "subscriptions",
+  "entitlements",
+  "reservations",
+  "idempotency",
+  "processedBillingEvents",
+  "billingReceipts",
+  "customerAccounts",
+  "subscriptionAccounts",
+  "checkoutAttempts",
+  "checkoutIdempotency",
+  "activeCheckoutAccounts",
+  "checkoutSessions",
+  "authSessions",
+  "identityAccounts"
+]);
+
 class MemoryHostedStore {
   constructor(seed = {}, options = {}) {
     // Rollback uses an undo journal rather than a whole-state snapshot: a
@@ -16,25 +38,29 @@ class MemoryHostedStore {
     // actually touches instead of for the size of the entire store.
     this.journal = new TransactionJournal();
     this.state = {
-      accounts: new JournaledMap(seed.accounts || [], this.journal),
-      subscriptions: new JournaledMap(seed.subscriptions || [], this.journal),
-      entitlements: new JournaledMap(seed.entitlements || [], this.journal),
-      reservations: new JournaledMap(seed.reservations || [], this.journal),
-      idempotency: new JournaledMap(seed.idempotency || [], this.journal),
-      processedBillingEvents: new JournaledSet(seed.processedBillingEvents || [], this.journal),
-      billingReceipts: new JournaledMap(seed.billingReceipts || [], this.journal),
-      customerAccounts: new JournaledMap(seed.customerAccounts || [], this.journal),
-      subscriptionAccounts: new JournaledMap(seed.subscriptionAccounts || [], this.journal),
-      checkoutAttempts: new JournaledMap(seed.checkoutAttempts || [], this.journal),
-      checkoutIdempotency: new JournaledMap(seed.checkoutIdempotency || [], this.journal),
-      activeCheckoutAccounts: new JournaledMap(seed.activeCheckoutAccounts || [], this.journal),
-      checkoutSessions: new JournaledMap(seed.checkoutSessions || [], this.journal),
+      accounts: new JournaledMap(seed.accounts || [], this.journal, "accounts"),
+      subscriptions: new JournaledMap(seed.subscriptions || [], this.journal, "subscriptions"),
+      entitlements: new JournaledMap(seed.entitlements || [], this.journal, "entitlements"),
+      reservations: new JournaledMap(seed.reservations || [], this.journal, "reservations"),
+      idempotency: new JournaledMap(seed.idempotency || [], this.journal, "idempotency"),
+      processedBillingEvents: new JournaledSet(seed.processedBillingEvents || [], this.journal, "processedBillingEvents"),
+      billingReceipts: new JournaledMap(seed.billingReceipts || [], this.journal, "billingReceipts"),
+      customerAccounts: new JournaledMap(seed.customerAccounts || [], this.journal, "customerAccounts"),
+      subscriptionAccounts: new JournaledMap(seed.subscriptionAccounts || [], this.journal, "subscriptionAccounts"),
+      checkoutAttempts: new JournaledMap(seed.checkoutAttempts || [], this.journal, "checkoutAttempts"),
+      checkoutIdempotency: new JournaledMap(seed.checkoutIdempotency || [], this.journal, "checkoutIdempotency"),
+      activeCheckoutAccounts: new JournaledMap(seed.activeCheckoutAccounts || [], this.journal, "activeCheckoutAccounts"),
+      checkoutSessions: new JournaledMap(seed.checkoutSessions || [], this.journal, "checkoutSessions"),
+      authSessions: new JournaledMap(seed.authSessions || [], this.journal, "authSessions"),
+      // `${provider}:${subject}` -> accountId. The identity provider's subject is
+      // the stable join key; email is display data and can change under the user.
+      identityAccounts: new JournaledMap(seed.identityAccounts || [], this.journal, "identityAccounts"),
       // These are derived usage indexes, but they still participate in the same
       // undo journal. A failed reservation transaction must not roll back the
       // source reservation while leaving its counters or expiry index mutated.
-      usageTotals: new JournaledMap(seed.usageTotals || [], this.journal),
-      activeReservations: new JournaledMap(seed.activeReservations || [], this.journal),
-      finalizedReservations: new JournaledMap(seed.finalizedReservations || [], this.journal)
+      usageTotals: new JournaledMap(seed.usageTotals || [], this.journal, "usageTotals"),
+      activeReservations: new JournaledMap(seed.activeReservations || [], this.journal, "activeReservations"),
+      finalizedReservations: new JournaledMap(seed.finalizedReservations || [], this.journal, "finalizedReservations")
     };
     if (!seed.usageTotals || !seed.activeReservations || !seed.finalizedReservations) {
       rebuildUsageIndexes(this.state);
@@ -45,6 +71,7 @@ class MemoryHostedStore {
       maxAgeMs: clampInteger(options.billingEventRetentionMs, 60_000, 365 * 86_400_000, BILLING_EVENT_RETENTION_MS)
     };
     this.stats = { transactions: 0, journaledEntries: 0, evictedBillingEvents: 0 };
+    this.lastEvictedBillingEvents = [];
     this.lock = Promise.resolve();
   }
 
@@ -60,6 +87,9 @@ class MemoryHostedStore {
       const result = await operation(this.state);
       this.journal.commit();
       this.pruneBillingHistory();
+      // Runs while the serialization lock is still held, so a durable subclass can
+      // write the changeset before any other transaction is allowed to overwrite it.
+      this.afterCommit();
       this.stats.transactions += 1;
       return result;
     } catch (error) {
@@ -70,9 +100,15 @@ class MemoryHostedStore {
     }
   }
 
+  // Overridden by durable adapters. The base store keeps nothing beyond memory.
+  afterCommit() {}
+
   // Runs after the journal is committed so eviction never costs a snapshot and
   // never resurrects entries a rolled back transaction was supposed to drop.
   pruneBillingHistory() {
+    // Eviction runs after the journal has committed, so it produces no changeset
+    // entries. A durable adapter reads this list to delete the same rows.
+    this.lastEvictedBillingEvents = [];
     const { maxEntries, maxAgeMs } = this.billingEventRetention;
     const events = this.state.processedBillingEvents;
     const receipts = this.state.billingReceipts;
@@ -88,6 +124,7 @@ class MemoryHostedStore {
       if (remaining <= maxEntries && !expired) continue;
       events.delete(eventId);
       receipts.delete(eventId);
+      this.lastEvictedBillingEvents.push(eventId);
       remaining -= 1;
       this.stats.evictedBillingEvents += 1;
     }
@@ -100,6 +137,7 @@ class MemoryHostedStore {
       if (events.has(eventId) && !isExpiredReceipt(receipt, cutoff)) continue;
       receipts.delete(eventId);
       events.delete(eventId);
+      this.lastEvictedBillingEvents.push(eventId);
       overflow -= 1;
       this.stats.evictedBillingEvents += 1;
     }
@@ -136,10 +174,14 @@ class TransactionJournal {
     this.active = false;
     this.collections = new Set();
     this.stats = null;
+    // Populated on every commit with only the entries whose value actually
+    // changed. A durable adapter reads this instead of diffing the whole store.
+    this.changeset = [];
   }
 
   begin(stats) {
     this.collections.clear();
+    this.changeset = [];
     this.stats = stats || null;
     this.active = true;
   }
@@ -150,7 +192,12 @@ class TransactionJournal {
   }
 
   commit() {
+    const changeset = [];
+    // Collect before discarding: discardUndo() drops the pre-images that make
+    // "did this key actually change?" answerable.
+    for (const collection of this.collections) collection.collectChanges(changeset);
     for (const collection of this.collections) collection.discardUndo();
+    this.changeset = changeset;
     this.end();
   }
 
@@ -166,13 +213,26 @@ class TransactionJournal {
 }
 
 class JournaledMap extends Map {
-  constructor(entries, journal) {
+  constructor(entries, journal, name = "") {
     // Map's constructor calls the overridden set(), so seed after the journal exists.
     super();
     this.journal = journal;
+    this.name = name;
     this.undo = new Map();
     this.keyOrder = null;
     for (const [key, value] of entries) super.set(key, value);
+  }
+
+  // A key is journaled on read as well as on write, so "touched" is far wider
+  // than "changed". Comparing against the pre-image keeps a durable adapter from
+  // rewriting rows that a transaction only looked at.
+  collectChanges(out) {
+    for (const [key, entry] of this.undo) {
+      const exists = super.has(key);
+      const value = exists ? super.get(key) : undefined;
+      if (entry.existed === exists && sameSnapshot(entry.value, value)) continue;
+      out.push({ collection: this.name, key, exists, value });
+    }
   }
 
   record(key) {
@@ -254,13 +314,22 @@ class JournaledMap extends Map {
 }
 
 class JournaledSet extends Set {
-  constructor(values, journal) {
+  constructor(values, journal, name = "") {
     // Set's constructor calls the overridden add(), so seed after the journal exists.
     super();
     this.journal = journal;
+    this.name = name;
     this.undo = new Map();
     this.valueOrder = null;
     for (const value of values) super.add(value);
+  }
+
+  collectChanges(out) {
+    for (const [value, existed] of this.undo) {
+      const exists = super.has(value);
+      if (existed === exists) continue;
+      out.push({ collection: this.name, key: value, exists, value: exists ? value : undefined });
+    }
   }
 
   record(value) {
@@ -314,6 +383,19 @@ class JournaledSet extends Set {
 
 function cloneValue(value) {
   return value !== null && typeof value === "object" ? structuredClone(value) : value;
+}
+
+function sameSnapshot(left, right) {
+  if (left === right) return true;
+  if (left === null || right === null || left === undefined || right === undefined) return false;
+  if (typeof left !== "object" || typeof right !== "object") return false;
+  return snapshotJson(left) === snapshotJson(right);
+}
+
+function snapshotJson(value) {
+  // Plain JSON.stringify flattens a Map to "{}", which would report two different
+  // usage-total buckets as identical.
+  return JSON.stringify(value, (key, entry) => (entry instanceof Map ? [...entry.entries()] : entry));
 }
 
 function rebuildUsageIndexes(state) {
@@ -381,4 +463,4 @@ function normalizeId(value, label) {
   return id;
 }
 
-module.exports = { MemoryHostedStore };
+module.exports = { DURABLE_COLLECTIONS, MemoryHostedStore };

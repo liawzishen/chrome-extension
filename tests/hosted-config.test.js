@@ -104,7 +104,7 @@ test("approved unit amounts are fixed to the published launch catalog", () => {
   }));
   assert.deepEqual(config.priceAmounts, {
     month: 499,
-    year: 4999
+    year: 3999
   });
   assert.equal(Object.isFrozen(config.priceAmounts), true);
   assertConfigError(
