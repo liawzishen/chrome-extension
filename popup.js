@@ -13,18 +13,24 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
-// INCOMPLETE FEATURE - no writer exists for this key.
-// readHostedSession() reads HOSTED_SESSION_STORAGE_KEY out of chrome.storage.session, but nothing in
-// this extension (popup, background worker, or content script) ever writes it. Hosted mode is therefore
-// unauthenticatable: flipping HOSTED_ACCOUNT_CONFIG.enabled to true makes every hosted request fail with
-// HOSTED_AUTH_REQUIRED, because normalizeHostedAccessToken() is always handed an empty session.
-// A writer would have to: (1) capture an access token from the hosted sign-in flow - either an
-// identity/launchWebAuthFlow redirect or a message from an allow-listed hosted-origin content script whose
-// sender.origin is verified against hostedAccountConfig.apiOrigin; (2) store { accessToken, expiresAt } under
-// this key via chrome.storage.session.set so the token never reaches disk; (3) clear the key on sign-out and
-// on expiry, and re-run refreshHostedAccount() afterwards so the UI reflects the new session.
-// Until that lands, hosted mode must stay disabled.
+// Hosted sign-in is written by signInToHostedAccount(), which runs the hosted
+// service's /auth/start flow through chrome.identity.launchWebAuthFlow. Two
+// different lifetimes are stored deliberately:
+//   - the short-lived access token goes in chrome.storage.session, so it never
+//     reaches disk and dies with the browser session;
+//   - the rotating refresh token goes in chrome.storage.local, so a browser
+//     restart does not force a paying subscriber to sign in again.
+// ensureHostedAccessToken() silently redeems the refresh token when the access
+// token has expired, and clearHostedSession() drops both on sign-out.
+//
+// TO ENABLE: set apiOrigin to the deployed hosted API origin (the same value as
+// PUBLIC_APP_ORIGIN in .env.hosted), repeat it in allowedApiOrigins, and set
+// enabled to true. resolveConfig() reports active:false for a missing, non-HTTPS,
+// or non-allow-listed origin, so every hosted path stays closed until all three
+// agree.
 const HOSTED_SESSION_STORAGE_KEY = "examCramHostedSession";
+const HOSTED_REFRESH_STORAGE_KEY = "examCramHostedRefresh";
+const HOSTED_CHECKOUT_KEY_STORAGE_KEY = "examCramHostedCheckoutKeys";
 const HOSTED_ACCOUNT_CONFIG = Object.freeze({
   enabled: false,
   apiOrigin: "",
@@ -250,6 +256,9 @@ const elements = {
   hostedAccountWebButton: document.getElementById("hostedAccountWebButton"),
   hostedRefreshAccountButton: document.getElementById("hostedRefreshAccountButton"),
   hostedManageBillingButton: document.getElementById("hostedManageBillingButton"),
+  hostedSignInButton: document.getElementById("hostedSignInButton"),
+  hostedSignOutButton: document.getElementById("hostedSignOutButton"),
+  hostedUpgradeAnnualButton: document.getElementById("hostedUpgradeAnnualButton"),
   hostedAllowanceDialog: document.getElementById("hostedAllowanceDialog"),
   hostedAllowanceDialogTitle: document.getElementById("hostedAllowanceDialogTitle"),
   hostedAllowanceDialogMessage: document.getElementById("hostedAllowanceDialogMessage"),
@@ -351,10 +360,13 @@ function init() {
   elements.saveSettingsButton.addEventListener("click", saveSettings);
   elements.clearLearningMemoryButton?.addEventListener("click", handleClearLearningMemory);
   elements.apiEndpointInput?.addEventListener("change", handleBackendEndpointChange);
-  elements.hostedAccountWebButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account")));
+  elements.hostedSignInButton?.addEventListener("click", () => void handleHostedAccountAction(() => signInToHostedAccount()));
+  elements.hostedSignOutButton?.addEventListener("click", () => void handleHostedAccountAction(() => signOutOfHostedAccount()));
+  elements.hostedAccountWebButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/pricing")));
   elements.hostedRefreshAccountButton?.addEventListener("click", () => void handleHostedAccountAction(() => refreshHostedAccount({ force: true })));
-  elements.hostedManageBillingButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account/billing")));
-  elements.hostedUpgradeButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/pricing")));
+  elements.hostedManageBillingButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedBillingPortal()));
+  elements.hostedUpgradeButton?.addEventListener("click", () => void handleHostedAccountAction(() => startHostedCheckout("month")));
+  elements.hostedUpgradeAnnualButton?.addEventListener("click", () => void handleHostedAccountAction(() => startHostedCheckout("year")));
   elements.hostedUseOwnBackendButton?.addEventListener("click", handleUseOwnBackendFromHostedDialog);
 
   void initializePersistentPanel();
@@ -11773,7 +11785,7 @@ function renderHostedAccountUi(settings = {}, error = null) {
       ? safeHostedAccountMessage(error)
       : snapshot?.authenticated
         ? accountStatusMessage(snapshot)
-        : "Sign in on the Exam-Cram website, then refresh usage before selecting hosted AI.";
+        : "Sign in with Google to use hosted AI, or keep using your own backend.";
   }
   if (elements.hostedAllowanceList) {
     const rows = snapshot?.allowances?.map((allowance) => {
@@ -11788,7 +11800,12 @@ function renderHostedAccountUi(settings = {}, error = null) {
     }) || [];
     elements.hostedAllowanceList.replaceChildren(...rows);
   }
-  elements.hostedManageBillingButton?.classList.toggle("hidden", !snapshot?.authenticated);
+  const authenticated = Boolean(snapshot?.authenticated);
+  elements.hostedSignInButton?.classList.toggle("hidden", authenticated);
+  elements.hostedSignOutButton?.classList.toggle("hidden", !authenticated);
+  // Manage billing opens Stripe's portal, which only exists once the account has
+  // a billing customer, so it stays hidden for a signed-out or never-paid user.
+  elements.hostedManageBillingButton?.classList.toggle("hidden", !authenticated);
   renderHostedAllowanceNotices(snapshot, hostedSelected);
 }
 
@@ -11834,13 +11851,9 @@ async function refreshHostedAccount({ force = false } = {}) {
   if (state.hostedAccountRefresh) return state.hostedAccountRefresh;
 
   state.hostedAccountRefresh = (async () => {
-    const session = await readHostedSession();
-    const accessToken = normalizeHostedAccessToken(session?.accessToken, session?.expiresAt);
-    if (!accessToken) {
-      state.hostedAccessToken = "";
-      state.hostedAccountSnapshot = null;
-      throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED" });
-    }
+    // Redeems the stored refresh token when the access token has lapsed, so a
+    // returning subscriber is not asked to sign in again just to read their plan.
+    const accessToken = await ensureHostedAccessToken();
     const headers = {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`
@@ -11908,6 +11921,250 @@ function normalizeHostedAccessToken(value, expiresAt) {
   const expiry = Date.parse(expiresAt || "");
   if (Number.isFinite(expiry) && expiry <= Date.now() + 30_000) return "";
   return token;
+}
+
+function chromeStorageGet(area, key) {
+  if (!globalThis.chrome?.storage?.[area]?.get) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    chrome.storage[area].get(key, (result) => {
+      const runtimeError = chrome.runtime?.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "Hosted session storage could not be read."));
+        return;
+      }
+      resolve(result?.[key] ?? null);
+    });
+  });
+}
+
+function chromeStorageSet(area, key, value) {
+  if (!globalThis.chrome?.storage?.[area]?.set) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    chrome.storage[area].set({ [key]: value }, () => {
+      const runtimeError = chrome.runtime?.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "Hosted session storage could not be written."));
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+function chromeStorageRemove(area, key) {
+  if (!globalThis.chrome?.storage?.[area]?.remove) return Promise.resolve();
+  return new Promise((resolve) => {
+    chrome.storage[area].remove(key, () => {
+      void chrome.runtime?.lastError;
+      resolve();
+    });
+  });
+}
+
+async function writeHostedSession(session) {
+  const accessToken = String(session?.accessToken || "").trim();
+  const refreshToken = String(session?.refreshToken || "").trim();
+  if (!accessToken || !refreshToken) {
+    throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED" });
+  }
+  await chromeStorageSet("session", HOSTED_SESSION_STORAGE_KEY, {
+    accessToken,
+    expiresAt: String(session.expiresAt || "")
+  });
+  await chromeStorageSet("local", HOSTED_REFRESH_STORAGE_KEY, {
+    refreshToken,
+    refreshExpiresAt: String(session.refreshExpiresAt || "")
+  });
+  state.hostedAccessToken = accessToken;
+  return accessToken;
+}
+
+async function clearHostedSession() {
+  state.hostedAccessToken = "";
+  state.hostedAccountSnapshot = null;
+  await chromeStorageRemove("session", HOSTED_SESSION_STORAGE_KEY);
+  await chromeStorageRemove("local", HOSTED_REFRESH_STORAGE_KEY);
+  await chromeStorageRemove("session", HOSTED_CHECKOUT_KEY_STORAGE_KEY);
+}
+
+// Returns a usable access token, silently redeeming the stored refresh token when
+// the access token has lapsed. Anything that cannot be recovered without the user
+// raises HOSTED_AUTH_REQUIRED so the caller can surface a sign-in prompt.
+async function ensureHostedAccessToken() {
+  const session = await readHostedSession();
+  const existing = normalizeHostedAccessToken(session?.accessToken, session?.expiresAt);
+  if (existing) return existing;
+
+  const stored = await chromeStorageGet("local", HOSTED_REFRESH_STORAGE_KEY);
+  const refreshToken = String(stored?.refreshToken || "").trim();
+  const refreshExpiry = Date.parse(stored?.refreshExpiresAt || "");
+  if (!refreshToken || (Number.isFinite(refreshExpiry) && refreshExpiry <= Date.now())) {
+    await clearHostedSession();
+    throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED" });
+  }
+
+  const endpoint = HostedAccount?.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/v1/auth/refresh");
+  if (!endpoint) throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    cache: "no-store",
+    body: JSON.stringify({ refreshToken })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    // A refresh token the server no longer recognises is unrecoverable; wiping it
+    // stops every later call from retrying a credential that will never work.
+    await clearHostedSession();
+    throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED", cause: payload?.error });
+  }
+  return writeHostedSession(payload);
+}
+
+async function signInToHostedAccount() {
+  if (!hostedAccountConfig.active) {
+    throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+  }
+  if (!globalThis.chrome?.identity?.launchWebAuthFlow) {
+    throw new Error("This browser build cannot open the hosted sign-in window.");
+  }
+  const redirectUri = chrome.identity.getRedirectURL();
+  const startUrl = new URL("/auth/start", `${hostedAccountConfig.apiOrigin}/`);
+  startUrl.searchParams.set("return_to", redirectUri);
+  if (startUrl.origin !== hostedAccountConfig.apiOrigin) {
+    throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+  }
+
+  const responseUrl = await new Promise((resolve, reject) => {
+    chrome.identity.launchWebAuthFlow({ url: startUrl.href, interactive: true }, (result) => {
+      const runtimeError = chrome.runtime?.lastError;
+      if (runtimeError) {
+        reject(new Error(runtimeError.message || "Hosted sign-in was cancelled."));
+        return;
+      }
+      resolve(String(result || ""));
+    });
+  });
+
+  const fragment = responseUrl.includes("#") ? responseUrl.slice(responseUrl.indexOf("#") + 1) : "";
+  const returned = new URLSearchParams(fragment);
+  const providerError = returned.get("error");
+  if (providerError) {
+    throw new Error(`Hosted sign-in was refused (${String(providerError).slice(0, 60)}).`);
+  }
+  await writeHostedSession({
+    accessToken: returned.get("access_token"),
+    expiresAt: returned.get("expires_at"),
+    refreshToken: returned.get("refresh_token"),
+    refreshExpiresAt: returned.get("refresh_expires_at")
+  });
+  return refreshHostedAccount({ force: true });
+}
+
+async function signOutOfHostedAccount() {
+  const stored = await chromeStorageGet("local", HOSTED_REFRESH_STORAGE_KEY);
+  const refreshToken = String(stored?.refreshToken || "").trim();
+  const endpoint = HostedAccount?.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/v1/auth/signout");
+  if (refreshToken && endpoint) {
+    // Best effort: a server that cannot be reached must not trap the user in a
+    // session they asked to end, so local credentials are dropped either way.
+    await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      body: JSON.stringify({ refreshToken })
+    }).catch(() => null);
+  }
+  await clearHostedSession();
+  const settings = await getStorage(STORAGE_KEYS.settings, {}).catch(() => ({}));
+  renderHostedAccountUi(settings);
+  showStatus("Signed out of the hosted account.");
+}
+
+function hostedIdempotencyKey() {
+  const random = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  return `neatmind-${random}`.slice(0, 160);
+}
+
+// Checkout keys are remembered per interval so that clicking Upgrade twice
+// recovers the Checkout session already open on Stripe instead of being refused
+// as a second concurrent subscription attempt.
+async function takeHostedCheckoutKey(interval) {
+  const stored = (await chromeStorageGet("session", HOSTED_CHECKOUT_KEY_STORAGE_KEY)) || {};
+  const existing = String(stored?.[interval] || "").trim();
+  if (/^[a-zA-Z0-9._:-]{16,160}$/.test(existing)) return existing;
+  const created = hostedIdempotencyKey();
+  await chromeStorageSet("session", HOSTED_CHECKOUT_KEY_STORAGE_KEY, { ...stored, [interval]: created });
+  return created;
+}
+
+async function dropHostedCheckoutKey(interval) {
+  const stored = (await chromeStorageGet("session", HOSTED_CHECKOUT_KEY_STORAGE_KEY)) || {};
+  delete stored[interval];
+  await chromeStorageSet("session", HOSTED_CHECKOUT_KEY_STORAGE_KEY, stored);
+}
+
+async function requestHostedBillingUrl(path, { idempotencyKey, body }) {
+  const endpoint = HostedAccount?.buildApiUrl(HOSTED_ACCOUNT_CONFIG, path);
+  if (!endpoint) throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
+  const accessToken = await ensureHostedAccessToken();
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": idempotencyKey
+    },
+    cache: "no-store",
+    body: JSON.stringify(body || {})
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw backendRequestError(response, payload, "The hosted billing service could not be reached.");
+  }
+  return payload;
+}
+
+async function startHostedCheckout(interval = "month") {
+  const normalized = interval === "year" ? "year" : "month";
+  const idempotencyKey = await takeHostedCheckoutKey(normalized);
+  let payload;
+  try {
+    payload = await requestHostedBillingUrl("/v1/billing/checkout", {
+      idempotencyKey,
+      body: { interval: normalized }
+    });
+  } catch (error) {
+    // A finished or lapsed Checkout attempt can never be resumed, so the stored
+    // key has to go before the next click, or the user is stuck on a dead session.
+    const code = String(error?.backendCode || error?.code || "");
+    if (["CHECKOUT_ALREADY_COMPLETED", "CHECKOUT_SESSION_EXPIRED", "CHECKOUT_IDEMPOTENCY_FINALIZED"].includes(code)) {
+      await dropHostedCheckoutKey(normalized);
+    }
+    throw error;
+  }
+  const checkoutUrl = String(payload?.checkout?.url || "");
+  if (!/^https:\/\/checkout\.stripe\.com\//.test(checkoutUrl)) {
+    throw new Error("The hosted service did not return a valid Stripe Checkout link.");
+  }
+  await openSafeExternalUrl(checkoutUrl);
+  showStatus("Stripe Checkout opened in a new tab. Refresh your account after paying.");
+  return checkoutUrl;
+}
+
+async function openHostedBillingPortal() {
+  const payload = await requestHostedBillingUrl("/v1/billing/portal", {
+    idempotencyKey: hostedIdempotencyKey(),
+    body: {}
+  });
+  const portalUrl = String(payload?.portal?.url || "");
+  if (!/^https:\/\/billing\.stripe\.com\//.test(portalUrl)) {
+    throw new Error("The hosted service did not return a valid Stripe billing portal link.");
+  }
+  await openSafeExternalUrl(portalUrl);
+  return portalUrl;
 }
 
 async function getMeteredBackendHeaders(settings, endpoint, action, units = 1) {

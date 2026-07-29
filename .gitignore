@@ -6,6 +6,13 @@
 *-backend-token
 .exam-cram-backend-token
 .exam-cram-cost-telemetry.jsonl
+
+# Hosted-service database. Holds real account, subscription, and session state:
+# never commit it, and back it up out of band.
+.neatmind-hosted/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.pem
 *.key
 *.p12

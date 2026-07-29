@@ -108,7 +108,13 @@ test("the six metered call sites, not the factory, decide to surface a hosted fa
   const surfaced = source.match(/throw surfaceHostedAccessError\(\s*\n\s*backendRequestError\(/g) || [];
   assert.equal(surfaced.length, 7, "every settings-aware throw site must opt in to the dialog");
   const bare = source.match(/throw backendRequestError\(/g) || [];
-  assert.equal(bare.length, 1, "only refreshHostedAccount may throw an unsurfaced backend error");
+  assert.equal(
+    bare.length,
+    2,
+    "only refreshHostedAccount and requestHostedBillingUrl may throw an unsurfaced backend error: "
+      + "both are account actions routed through handleHostedAccountAction, not metered study actions "
+      + "that belong in the allowance dialog"
+  );
 });
 
 test("refreshing the hosted account reads the entitlement from the usage response", async () => {
@@ -127,11 +133,9 @@ test("refreshing the hosted account reads the entitlement from the usage respons
     state: { hostedAccountSnapshot: null, hostedAccountRefresh: null, hostedAccessToken: "" },
     createHostedAccessError: (decision) => Object.assign(new Error(decision.code), decision),
     backendRequestError: (_response, _payload, fallback) => new Error(fallback),
-    readHostedSession: async () => ({
-      accessToken: "hosted-session-access-token",
-      expiresAt: new Date(Date.now() + 3_600_000).toISOString()
-    }),
-    normalizeHostedAccessToken: (value) => String(value || ""),
+    // Token acquisition, including silently redeeming a stored refresh token,
+    // now belongs to ensureHostedAccessToken rather than this function.
+    ensureHostedAccessToken: async () => "hosted-session-access-token",
     getStorage: async () => ({ backendMode: "hosted" }),
     renderHostedAccountUi: () => {},
     fetch: async (url) => {
@@ -205,9 +209,43 @@ test("quiz generation calls the metered header helper directly like its six sibl
   );
 });
 
-test("the hosted session key records that nothing writes it yet", () => {
+test("the hosted session writer splits credential lifetimes between session and disk", () => {
   const declaration = sourceBetween("const DEFAULT_API_ENDPOINT =", "const HOSTED_ACCOUNT_CONFIG =");
   assert.match(declaration, /HOSTED_SESSION_STORAGE_KEY/);
-  assert.match(declaration, /no writer/i);
+  assert.match(declaration, /HOSTED_REFRESH_STORAGE_KEY/);
   assert.match(declaration, /chrome\.storage\.session/);
+
+  const writer = sourceBetween("async function writeHostedSession(", "async function clearHostedSession(");
+  assert.match(writer, /chromeStorageSet\("session", HOSTED_SESSION_STORAGE_KEY/);
+  assert.match(writer, /chromeStorageSet\("local", HOSTED_REFRESH_STORAGE_KEY/);
+  // The access token must never reach disk, and the refresh token must never be
+  // session-only, or a browser restart would sign a paying subscriber out.
+  assert.doesNotMatch(writer, /chromeStorageSet\("local", HOSTED_SESSION_STORAGE_KEY/);
+  assert.doesNotMatch(writer, /chromeStorageSet\("session", HOSTED_REFRESH_STORAGE_KEY/);
+});
+
+test("signing out drops both stored credentials", () => {
+  const clear = sourceBetween("async function clearHostedSession(", "// Returns a usable access token");
+  assert.match(clear, /chromeStorageRemove\("session", HOSTED_SESSION_STORAGE_KEY\)/);
+  assert.match(clear, /chromeStorageRemove\("local", HOSTED_REFRESH_STORAGE_KEY\)/);
+});
+
+test("sign-in hands launchWebAuthFlow the extension's own redirect URL", () => {
+  const signIn = sourceBetween("async function signInToHostedAccount(", "async function signOutOfHostedAccount(");
+  assert.match(signIn, /chrome\.identity\.getRedirectURL\(\)/);
+  assert.match(signIn, /launchWebAuthFlow/);
+  // The origin check stops a tampered config from sending the returned tokens
+  // anywhere other than the configured hosted service.
+  assert.match(signIn, /startUrl\.origin !== hostedAccountConfig\.apiOrigin/);
+});
+
+test("billing actions only ever open a Stripe-hosted URL", () => {
+  // The source guards with a regex literal, so the dots arrive here escaped.
+  const checkout = sourceBetween("async function startHostedCheckout(", "async function openHostedBillingPortal(");
+  assert.match(checkout, /\^https:\\\/\\\/checkout\\\.stripe\\\.com\\\//);
+  assert.match(checkout, /openSafeExternalUrl/);
+
+  const portal = sourceBetween("async function openHostedBillingPortal(", "function startProgress(");
+  assert.match(portal, /\^https:\\\/\\\/billing\\\.stripe\\\.com\\\//);
+  assert.match(portal, /openSafeExternalUrl/);
 });

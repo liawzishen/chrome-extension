@@ -548,9 +548,11 @@
               <span>Use hosted Exam-Cram AI</span>
             </label>
             <div class="hosted-account-actions">
-              <button id="hostedAccountWebButton" class="secondary compact-button" type="button">Open account</button>
+              <button id="hostedSignInButton" class="primary compact-button" type="button">Sign in</button>
+              <button id="hostedAccountWebButton" class="secondary compact-button" type="button">View plans</button>
               <button id="hostedRefreshAccountButton" class="text-button" type="button">Refresh usage</button>
               <button id="hostedManageBillingButton" class="text-button hidden" type="button">Manage billing</button>
+              <button id="hostedSignOutButton" class="text-button hidden" type="button">Sign out</button>
             </div>
           </section>
           <label for="apiEndpointInput">AI backend endpoint</label>
@@ -573,7 +575,9 @@
           <h2 id="hostedAllowanceDialogTitle">Continue this study action</h2>
           <p id="hostedAllowanceDialogMessage">Hosted AI is unavailable for this action.</p>
           <p id="hostedAllowanceDialogReset" class="hint hidden"></p>
-          <button id="hostedUpgradeButton" class="primary" type="button">View Student Pro</button>
+          <button id="hostedUpgradeButton" class="primary" type="button">Student Pro &mdash; $4.99 per month</button>
+          <button id="hostedUpgradeAnnualButton" class="secondary" type="button">Or $39.99 billed once per year</button>
+          <p class="hint">Both plans renew until canceled. Canceling stops future renewals; your notes, quizzes, evidence, exports, and Journey history stay available.</p>
           <button id="hostedUseOwnBackendButton" class="secondary" type="button">Use my own backend</button>
           <menu>
             <button value="cancel" class="text-button">Not now</button>
