@@ -8,6 +8,7 @@ const {
 } = require("./policy.js");
 
 const ALLOWED_ACTIONS = new Set(Object.values(ACTIONS));
+const REPLAYABLE_STATES = new Set(["reserved", "committed"]);
 
 class UsageService {
   constructor(options) {
@@ -16,6 +17,17 @@ class UsageService {
     this.now = typeof options.now === "function" ? options.now : Date.now;
     this.reservationTtlMs = clampInteger(options.reservationTtlMs, 30_000, 30 * 60_000, 10 * 60_000);
     this.graceMs = clampInteger(options.graceMs, 0, 30 * 24 * 60 * 60 * 1000, 3 * 24 * 60 * 60 * 1000);
+    this.finalizedRetentionMs = clampInteger(options.finalizedRetentionMs, 60_000, 30 * 24 * 60 * 60 * 1000, 24 * 60 * 60 * 1000);
+    this.maxFinalizedReservations = clampInteger(options.maxFinalizedReservations, 100, 1_000_000, 10_000);
+  }
+
+  // Expiry, retention pruning and stale-window cleanup for one account, all proportional to
+  // that account's live work rather than to everything the store has ever held.
+  maintain(state, accountId, now) {
+    ensureIndexes(state);
+    expireReservations(state, now);
+    pruneFinalizedReservations(state, now, this.finalizedRetentionMs, this.maxFinalizedReservations);
+    pruneAccountBuckets(state, accountId, now);
   }
 
   async getEntitlement(accountId) {
@@ -30,7 +42,7 @@ class UsageService {
     return this.store.transaction((state) => {
       const account = requireActiveAccount(state, accountId);
       const now = this.now();
-      expireReservations(state, now);
+      this.maintain(state, account.id, now);
       const subscription = state.subscriptions.get(account.id) || null;
       const entitlement = resolveEntitlement(subscription, now, { graceMs: this.graceMs });
       const policy = getPolicyForEntitlement(entitlement);
@@ -52,13 +64,19 @@ class UsageService {
     return this.store.transaction((state) => {
       const account = requireActiveAccount(state, accountId);
       const now = this.now();
-      expireReservations(state, now);
+      this.maintain(state, account.id, now);
       const idempotencyIndex = `${account.id}:${idempotencyKey}`;
       const existingId = state.idempotency.get(idempotencyIndex);
-      if (existingId) {
-        const existing = state.reservations.get(existingId);
-        assertDomain(existing?.requestDigest === digest, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for different work.", 409);
-        return { ...structuredClone(existing), idempotentReplay: true };
+      const existing = existingId ? state.reservations.get(existingId) : undefined;
+      if (existing) {
+        assertDomain(existing.requestDigest === digest, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for different work.", 409);
+        // Only live work replays. A released or expired reservation means the client is retrying
+        // failed work under the standard retry contract, so it earns a fresh reservation.
+        if (REPLAYABLE_STATES.has(existing.state)) {
+          return { ...structuredClone(existing), idempotentReplay: true };
+        }
+      } else if (existingId) {
+        state.idempotency.delete(idempotencyIndex);
       }
 
       const subscription = state.subscriptions.get(account.id) || null;
@@ -113,6 +131,8 @@ class UsageService {
       };
       state.reservations.set(reservation.id, reservation);
       state.idempotency.set(idempotencyIndex, reservation.id);
+      state.activeReservations.set(reservation.id, now + this.reservationTtlMs);
+      applyTotals(state, reservation, "reserved", 1);
       return { ...structuredClone(reservation), idempotentReplay: false };
     });
   }
@@ -127,6 +147,7 @@ class UsageService {
 
   async transition(reservationId, targetState, resultCode) {
     const result = await this.store.transaction((state) => {
+      ensureIndexes(state);
       const reservation = state.reservations.get(String(reservationId || ""));
       assertDomain(reservation, "RESERVATION_NOT_FOUND", "The usage reservation was not found.", 404);
       if (reservation.state === targetState) return { ...structuredClone(reservation), idempotentReplay: true };
@@ -136,12 +157,14 @@ class UsageService {
         reservation.state = "expired";
         reservation.releasedAt = new Date(now).toISOString();
         reservation.resultCode = "RESERVATION_EXPIRED";
+        finalizeIndexes(state, reservation, now);
         return { ...structuredClone(reservation), expiredDuringCommit: true };
       }
       reservation.state = targetState;
       reservation.resultCode = normalizeResultCode(resultCode);
       if (targetState === "committed") reservation.committedAt = new Date(now).toISOString();
       else reservation.releasedAt = new Date(now).toISOString();
+      finalizeIndexes(state, reservation, now);
       return { ...structuredClone(reservation), idempotentReplay: false };
     });
     if (result.expiredDuringCommit) {
@@ -200,24 +223,108 @@ function requireActiveAccount(state, accountId) {
   return account;
 }
 
-function expireReservations(state, now) {
+// The store keeps three derived indexes alongside `reservations`:
+//   activeReservations    id -> expiry timestamp, only for reservations still in "reserved"
+//   usageTotals           accountId -> bucket key -> running reserved/committed unit totals
+//   finalizedReservations id -> finalization timestamp, in FIFO order for retention pruning
+// They are rebuilt from scratch whenever a store hands over state that has none (fresh or seeded).
+function ensureIndexes(state) {
+  if (state.usageTotals instanceof Map
+    && state.activeReservations instanceof Map
+    && state.finalizedReservations instanceof Map) {
+    return;
+  }
+  state.usageTotals = new Map();
+  state.activeReservations = new Map();
+  state.finalizedReservations = new Map();
   for (const reservation of state.reservations.values()) {
-    if (reservation.state === "reserved" && Date.parse(reservation.expiresAt) <= now) {
-      reservation.state = "expired";
-      reservation.releasedAt = new Date(now).toISOString();
-      reservation.resultCode = "RESERVATION_EXPIRED";
+    if (reservation.state === "reserved") {
+      state.activeReservations.set(reservation.id, Date.parse(reservation.expiresAt));
+      applyTotals(state, reservation, "reserved", 1);
+      continue;
     }
+    if (reservation.state === "committed") applyTotals(state, reservation, "committed", 1);
+    const finalizedAt = Date.parse(reservation.committedAt || reservation.releasedAt || reservation.createdAt);
+    state.finalizedReservations.set(reservation.id, Number.isFinite(finalizedAt) ? finalizedAt : 0);
   }
 }
 
-function countUsage(state, accountId, action, periodKey) {
-  const totals = { reserved: 0, committed: 0 };
-  for (const reservation of state.reservations.values()) {
-    if (reservation.accountId !== accountId || !["reserved", "committed"].includes(reservation.state)) continue;
-    const matching = reservation.items.find((item) => item.action === action && item.periodKey === periodKey);
-    if (matching) totals[reservation.state] += matching.units;
+function bucketKey(action, periodKey) {
+  return `${action} ${periodKey}`;
+}
+
+function applyTotals(state, reservation, field, sign) {
+  let buckets = state.usageTotals.get(reservation.accountId);
+  if (!buckets) {
+    if (sign < 0) return;
+    buckets = new Map();
+    state.usageTotals.set(reservation.accountId, buckets);
   }
-  return totals;
+  for (const item of reservation.items) {
+    const key = bucketKey(item.action, item.periodKey);
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      if (sign < 0) continue;
+      bucket = { reserved: 0, committed: 0, periodEnd: item.periodEnd ? Date.parse(item.periodEnd) : null };
+      buckets.set(key, bucket);
+    }
+    bucket[field] += sign * item.units;
+    if (bucket.reserved <= 0 && bucket.committed <= 0) buckets.delete(key);
+  }
+  if (buckets.size === 0) state.usageTotals.delete(reservation.accountId);
+}
+
+function finalizeIndexes(state, reservation, now) {
+  state.activeReservations.delete(reservation.id);
+  applyTotals(state, reservation, "reserved", -1);
+  if (reservation.state === "committed") applyTotals(state, reservation, "committed", 1);
+  state.finalizedReservations.set(reservation.id, now);
+}
+
+function expireReservations(state, now) {
+  for (const [reservationId, expiresAt] of state.activeReservations) {
+    if (expiresAt > now) continue;
+    const reservation = state.reservations.get(reservationId);
+    if (!reservation) {
+      state.activeReservations.delete(reservationId);
+      continue;
+    }
+    reservation.state = "expired";
+    reservation.releasedAt = new Date(now).toISOString();
+    reservation.resultCode = "RESERVATION_EXPIRED";
+    finalizeIndexes(state, reservation, now);
+  }
+}
+
+// Finalized reservations only exist to answer idempotent replays; their units already live in
+// usageTotals, so dropping them past the retention window cannot lose accounted usage.
+function pruneFinalizedReservations(state, now, retentionMs, maxRetained) {
+  for (const [reservationId, finalizedAt] of state.finalizedReservations) {
+    if (state.finalizedReservations.size <= maxRetained && finalizedAt + retentionMs > now) break;
+    state.finalizedReservations.delete(reservationId);
+    const reservation = state.reservations.get(reservationId);
+    state.reservations.delete(reservationId);
+    if (!reservation) continue;
+    const idempotencyIndex = `${reservation.accountId}:${reservation.idempotencyKey}`;
+    if (state.idempotency.get(idempotencyIndex) === reservationId) state.idempotency.delete(idempotencyIndex);
+  }
+}
+
+function pruneAccountBuckets(state, accountId, now) {
+  const buckets = state.usageTotals.get(accountId);
+  if (!buckets) return;
+  for (const [key, bucket] of buckets) {
+    if (bucket.periodEnd !== null && bucket.periodEnd <= now && bucket.reserved <= 0) buckets.delete(key);
+  }
+  if (buckets.size === 0) state.usageTotals.delete(accountId);
+}
+
+function countUsage(state, accountId, action, periodKey) {
+  const bucket = state.usageTotals.get(accountId)?.get(bucketKey(action, periodKey));
+  return {
+    reserved: bucket ? Math.max(0, bucket.reserved) : 0,
+    committed: bucket ? Math.max(0, bucket.committed) : 0
+  };
 }
 
 function formatAllowance(action, definition, period, totals) {

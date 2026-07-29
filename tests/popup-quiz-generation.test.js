@@ -147,7 +147,8 @@ test("the quiz service boundary rejects partial and ungrounded responses", async
     }),
     startSimulatedProgress: () => () => {},
     updateGenerationProgress: () => {},
-    getBackendHeaders: () => ({})
+    HostedAccount: { ACTIONS: { QUIZ_BUILD: "quiz_build" } },
+    getMeteredBackendHeaders: async () => ({})
   };
   const harness = vm.runInNewContext(`(() => {
     ${sourceBetween("const STOP_WORDS = new Set([", "const state = {")}

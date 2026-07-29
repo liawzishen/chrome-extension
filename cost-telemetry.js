@@ -95,9 +95,9 @@ function createCostTelemetry(options = {}) {
           .map((usage) => ({
             ...usage,
             estimatedCostUsd: roundUsd(usage.estimatedCostUsd),
-            costStatus: usage.unpricedCalls === 0 ? "configured" : "incomplete"
+            costStatus: usage.priceConfigured ? "configured" : "incomplete"
           }))
-          .map(({ unpricedCalls, ...usage }) => usage)
+          .map(({ priceConfigured, unpricedCalls, ...usage }) => usage)
           .sort((left, right) => left.operation.localeCompare(right.operation))
       };
       writer.enqueue(JSON.stringify(event));
@@ -185,11 +185,17 @@ function extractProviderUsage(provider, result) {
 }
 
 function normalizePrices(value = {}) {
-  const normalized = {};
+  const normalized = Object.create(null);
   for (const [key, price] of Object.entries(value || {})) {
     const amount = Number(price);
-    if (/^[a-z0-9._-]+:(input|output)$/i.test(key) && Number.isFinite(amount) && amount >= 0) {
-      normalized[key.toLowerCase()] = amount;
+    const normalizedKey = String(key || "").trim().toLowerCase();
+    if (
+      /^[a-z0-9._/:-]+:(input|output)$/.test(normalizedKey) &&
+      normalizedKey.length <= 260 &&
+      Number.isFinite(amount) &&
+      amount >= 0
+    ) {
+      normalized[normalizedKey] = amount;
     }
   }
   return normalized;
@@ -273,11 +279,16 @@ function recordProviderCall(context, provider, model, operation, priceConfigured
   return providerEvent;
 }
 
-function getProviderEvent(context, provider, model, operation) {
+function getProviderEvent(context, provider, model, operation, priceConfigured = false) {
+  const rawProvider = String(provider || "").trim().toLowerCase();
+  const rawModel = String(model || "").trim().toLowerCase();
+  const rawOperation = String(operation || "").trim().toLowerCase();
   const normalizedProvider = normalizeIdentifier(provider, "unknown");
   const normalizedModel = normalizeIdentifier(model, "unknown");
-  const normalizedOperation = PROVIDER_OPERATIONS.get(String(operation || "").toLowerCase()) || "unknown";
-  const key = `${normalizedProvider}:${normalizedModel}:${normalizedOperation}`;
+  const normalizedOperation = PROVIDER_OPERATIONS.get(rawOperation) || "unknown";
+  // Keep display labels bounded and sanitized, but do not key rows by those labels:
+  // distinct provider model IDs can sanitize to the same value and have different rates.
+  const key = JSON.stringify([rawProvider, rawModel, rawOperation]);
   let providerEvent = context.providerUsage.get(key);
   if (!providerEvent) {
     providerEvent = {
@@ -293,9 +304,12 @@ function getProviderEvent(context, provider, model, operation) {
       inputTokens: 0,
       outputTokens: 0,
       estimatedCostUsd: 0,
+      priceConfigured: priceConfigured === true,
       unpricedCalls: 0
     };
     context.providerUsage.set(key, providerEvent);
+  } else if (!priceConfigured) {
+    providerEvent.priceConfigured = false;
   }
   return providerEvent;
 }

@@ -19,6 +19,8 @@ Implemented here:
 - a fail-closed Stripe configuration and adapter boundary;
 - server-side validation that configured recurring Prices are active USD $4.99 monthly
   and USD $49.99 annual catalog entries before Checkout;
+- an account-scoped Checkout-attempt coordinator that prevents concurrent subscription
+  sessions and recovers ambiguous retries with a deterministic provider key;
 - signature-verified billing-event projection behavior;
 - a bounded Fetch `Request`/`Response` API boundary with exact-origin and injected
   authentication checks;
@@ -101,6 +103,10 @@ provider response bodies, credentials, and payment-card data are prohibited.
    portal return URLs are derived from this fixed origin; a client must never supply
    an arbitrary return URL or Stripe Price ID.
 
+   When wiring the private hosted generation adapter, also inject a randomly generated
+   `USAGE_REQUEST_HMAC_KEY` of at least 32 bytes. Service assembly refuses to enable
+   hosted generation without it.
+
 8. Complete Stripe **sandbox** setup:
 
    - create one $4.99 USD monthly recurring Price;
@@ -140,7 +146,8 @@ transaction:
 
 1. load or create each `usage_allowance_periods` row;
 2. lock every affected period in deterministic action order with `FOR UPDATE`;
-3. find an existing `(account_id, idempotency_key)` operation;
+3. find the newest `(account_id, idempotency_key)` operation and verify that every
+   retained attempt for that key has the same request digest;
 4. compare a server-keyed HMAC of the canonical route and bounded request, and reject
    a reused key whose request digest differs;
 5. verify `reserved_units + committed_units + requested_units <= allowance_limit`;
@@ -151,12 +158,21 @@ transaction:
 Successful, schema-validated provider work moves reserved units to committed units in
 one transaction. Failure moves them out of reserved units and marks the operation
 released. The expiry worker does the same for abandoned reservations. Repeating the
-same transition is an idempotent read; it must not update counters twice.
+same transition is an idempotent read; it must not update counters twice. A retry after
+`released` or `expired` creates a new attempt with the same digest. The database permits
+that history while its partial unique index still allows only one `reserved` or
+`committed` operation for the account/key pair.
 
 The API boundary must produce the request fingerprint with a server-only HMAC key.
 Never put raw source text into the usage store, and do not use an unsalted content hash
 as an analytics identifier. A duplicate committed operation must replay its stored
 artifact/result; it must never execute provider work a second time.
+
+The private generation adapter must also provide `prepareGenerationRequest` and
+`validateGenerationResult`. Those trusted server functions validate the operation
+schema, create the bounded provider input, map the operation to its usage items, and
+schema-check the result before usage can commit. The browser's `action`, `items`, and
+`units` fields are never authoritative and are not passed to provider dispatch.
 
 For a combined study session, both `study_build` and `quiz_build` are reserved and
 committed atomically. Video usage is stored as exact integer milliseconds. Duplicate
@@ -168,6 +184,11 @@ deduplicates deliveries. Because provider events can arrive out of order, the du
 worker must reconcile the current Stripe customer/subscription object rather than
 granting access solely from event arrival order. The table intentionally has no raw
 payload column.
+
+Checkout creation must persist its `creating` attempt before calling Stripe. The
+database partial unique index permits only one `creating` or `open` attempt per account.
+The same client idempotency key derives the same provider key, so a lost response can be
+recovered without creating a second subscription session.
 
 ## Policy currently encoded
 
@@ -215,6 +236,13 @@ The current billing projector handles:
 - `invoice.paid`;
 - `invoice.payment_failed`;
 - `charge.refunded`.
+
+A full-refund event revokes access only when its signed/enriched data can be tied to
+the account's current subscription. A bare Charge normally requires an invoice lookup;
+the Stripe adapter performs that lookup before the event is acknowledged. If the link
+cannot be verified, webhook processing returns a retryable error and leaves the event
+unprocessed rather than revoking an unrelated newer subscription or silently accepting
+an unenforced refund policy.
 
 Dispute events and a reconciliation worker are not yet implemented. A public paid
 launch is blocked until dispute behavior, event recovery, and operator replay tooling

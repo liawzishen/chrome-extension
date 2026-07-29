@@ -13,6 +13,12 @@ class HostedGenerationGateway {
       "A hosted generation handler is required.",
       500
     );
+    assertDomain(
+      typeof input?.validateResult === "function",
+      "GENERATION_RESULT_VALIDATOR_REQUIRED",
+      "A hosted generation result validator is required.",
+      500
+    );
     const reservation = await this.usageService.reserve({
       accountId: input.accountId,
       idempotencyKey: input.idempotencyKey,
@@ -25,7 +31,7 @@ class HostedGenerationGateway {
     }
 
     try {
-      const result = await input.run();
+      const result = await input.validateResult(await input.run());
       const committed = await this.usageService.commit(reservation.id, "OK");
       const usage = await this.usageService.getUsage(input.accountId);
       return {
@@ -44,13 +50,14 @@ class HostedGenerationGateway {
 
   async replayExisting(input, reservation) {
     if (reservation.state === "committed" && typeof input.loadCommittedResult === "function") {
-      const result = await input.loadCommittedResult(reservation.id);
+      const loaded = await input.loadCommittedResult(reservation.id);
       assertDomain(
-        result !== undefined,
+        loaded !== undefined,
         "IDEMPOTENT_RESULT_UNAVAILABLE",
         "The completed hosted result is not available for replay.",
         409
       );
+      const result = await input.validateResult(loaded);
       return {
         result,
         usage: await this.usageService.getUsage(input.accountId),

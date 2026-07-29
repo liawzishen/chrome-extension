@@ -1,5 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { spawnSync } = require("node:child_process");
+const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 
 process.env.BACKEND_ACCESS_TOKEN = "test-token-that-is-long-enough-123456";
 process.env.ALLOWED_EXTENSION_ORIGINS = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";

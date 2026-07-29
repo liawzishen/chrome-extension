@@ -12,16 +12,18 @@ function createStripeBillingAdapter(config, dependencies = {}) {
 
   async function validatePriceCatalog() {
     if (!priceCatalogValidation) {
-      priceCatalogValidation = Promise.all([
-        retrieveAndValidatePrice(stripe, config, config.priceIds.month, {
-          amount: 499,
-          interval: "month"
-        }),
-        retrieveAndValidatePrice(stripe, config, config.priceIds.year, {
-          amount: 4999,
-          interval: "year"
-        })
-      ]).then(([month, year]) => Object.freeze({ month, year }));
+      const expectedCatalog = expectedPriceCatalog(config);
+      const pending = Promise.all(
+        expectedCatalog.map((entry) => retrieveAndValidatePrice(stripe, config, entry.priceId, entry))
+      ).then((prices) => Object.freeze(Object.fromEntries(
+        expectedCatalog.map((entry, index) => [entry.key, prices[index]])
+      )));
+      // A transient Stripe failure must not stay memoized, or one blip would keep every
+      // later checkout and webhook returning 503 until the process restarts.
+      pending.catch(() => {
+        if (priceCatalogValidation === pending) priceCatalogValidation = null;
+      });
+      priceCatalogValidation = pending;
     }
     return priceCatalogValidation;
   }
@@ -31,7 +33,7 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     const account = input?.account;
     assertDomain(account?.id, "ACCOUNT_REQUIRED", "An authenticated account is required.", 401);
     await validatePriceCatalog();
-    const priceId = interval === "month" ? config.priceIds.month : config.priceIds.year;
+    const priceId = config.priceIds[interval];
     const parameters = {
       mode: "subscription",
       ui_mode: "hosted_page",
@@ -58,8 +60,44 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     const session = await stripe.checkout.sessions.create(parameters, {
       idempotencyKey: normalizeStripeIdempotencyKey(input?.idempotencyKey)
     });
-    assertDomain(/^https:\/\/checkout\.stripe\.com\//.test(String(session?.url || "")), "STRIPE_CHECKOUT_INVALID", "Stripe did not return a valid hosted Checkout URL.", 502);
-    return { id: session.id, url: session.url };
+    return normalizeCheckoutSession(session);
+  }
+
+  async function retrieveCheckoutSession(input) {
+    const sessionId = String(input?.sessionId || "").trim();
+    assertDomain(/^cs_[A-Za-z0-9_]+$/.test(sessionId), "STRIPE_CHECKOUT_INVALID", "A valid Stripe Checkout session is required.", 400);
+    let session;
+    try {
+      session = await stripe.checkout.sessions.retrieve(sessionId);
+    } catch (error) {
+      const unavailable = new HostedDomainError(
+        "STRIPE_CHECKOUT_UNAVAILABLE",
+        "The existing Stripe Checkout session could not be recovered.",
+        503
+      );
+      unavailable.cause = error;
+      throw unavailable;
+    }
+    return normalizeCheckoutSession(session);
+  }
+
+  async function resolveRefundSubscriptionId(charge) {
+    const embedded = extractInvoiceSubscriptionId(charge?.invoice);
+    if (embedded) return embedded;
+    const invoiceId = typeof charge?.invoice === "string" ? charge.invoice.trim() : "";
+    if (!invoiceId) return null;
+    try {
+      const invoice = await stripe.invoices.retrieve(invoiceId);
+      return extractInvoiceSubscriptionId(invoice);
+    } catch (error) {
+      const unavailable = new HostedDomainError(
+        "STRIPE_REFUND_RECONCILIATION_UNAVAILABLE",
+        "Stripe could not resolve the refunded invoice to its subscription.",
+        503
+      );
+      unavailable.cause = error;
+      throw unavailable;
+    }
   }
 
   async function createPortalSession(input) {
@@ -89,8 +127,61 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     constructWebhookEvent,
     createCheckoutSession,
     createPortalSession,
+    retrieveCheckoutSession,
+    resolveRefundSubscriptionId,
     validatePriceCatalog
   };
+}
+
+function normalizeCheckoutSession(session) {
+  const id = String(session?.id || "").trim();
+  const status = String(session?.status || "open").toLowerCase();
+  const url = String(session?.url || "");
+  assertDomain(/^cs_[A-Za-z0-9_]+$/.test(id), "STRIPE_CHECKOUT_INVALID", "Stripe did not return a valid Checkout session.", 502);
+  assertDomain(["open", "complete", "expired"].includes(status), "STRIPE_CHECKOUT_INVALID", "Stripe returned an invalid Checkout status.", 502);
+  if (status === "open") {
+    assertDomain(/^https:\/\/checkout\.stripe\.com\//.test(url), "STRIPE_CHECKOUT_INVALID", "Stripe did not return a valid hosted Checkout URL.", 502);
+  }
+  const expiresAt = Number.isFinite(session?.expires_at)
+    ? new Date(session.expires_at * 1000).toISOString()
+    : null;
+  return {
+    id,
+    url: status === "open" ? url : "",
+    status,
+    expiresAt
+  };
+}
+
+function extractInvoiceSubscriptionId(invoice) {
+  if (!invoice || typeof invoice !== "object") return null;
+  const candidate =
+    invoice.subscription ||
+    invoice?.parent?.subscription_details?.subscription;
+  if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  if (candidate && typeof candidate === "object" && typeof candidate.id === "string") {
+    return candidate.id.trim() || null;
+  }
+  return null;
+}
+
+function expectedPriceCatalog(config) {
+  const catalog = [
+    { key: "month", priceId: config.priceIds.month, amount: expectedAmount(config, "month"), interval: "month" },
+    { key: "year", priceId: config.priceIds.year, amount: expectedAmount(config, "year"), interval: "year" }
+  ];
+  return catalog;
+}
+
+function expectedAmount(config, key) {
+  const amount = config.priceAmounts?.[key];
+  assertDomain(
+    Number.isInteger(amount) && amount > 0,
+    "STRIPE_PRICE_AMOUNT_UNCONFIGURED",
+    "The approved Stripe unit amount for this plan is not configured.",
+    500
+  );
+  return amount;
 }
 
 async function retrieveAndValidatePrice(stripe, config, priceId, expected) {
@@ -131,7 +222,8 @@ async function retrieveAndValidatePrice(stripe, config, priceId, expected) {
 
 function normalizeInterval(value) {
   const interval = String(value || "").toLowerCase();
-  assertDomain(interval === "month" || interval === "year", "BILLING_INTERVAL_INVALID", "Billing interval must be month or year.", 400);
+  const allowed = ["month", "year"];
+  assertDomain(allowed.includes(interval), "BILLING_INTERVAL_INVALID", `Billing interval must be one of ${allowed.join(", ")}.`, 400);
   return interval;
 }
 

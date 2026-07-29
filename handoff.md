@@ -19,8 +19,10 @@ The repository now includes:
 - versioned Free and Student Pro allowance policies with atomic reserve/commit/release
   reference behavior;
 - server-owned Stripe Price mapping, hosted Checkout and Customer Portal sessions,
-  raw-body webhook signature verification, replay protection, and billing-state
-  projection tests;
+  account-scoped pending-Checkout coordination, raw-body webhook signature
+  verification, replay protection, and billing-state projection tests;
+- server-keyed request HMACs plus trusted server-side generation preparation and
+  result-validation hooks, so browsers cannot choose cheaper metering;
 - a normalized PostgreSQL persistence contract;
 - a dormant, fail-closed extension account/allowance prototype that preserves the
   local, self-hosted, and BYOB paths;
@@ -50,8 +52,9 @@ It defines:
 - analytics, rollout, risks, and acceptance criteria.
 
 This is a business and product specification, not authorization to expose the current
-loopback backend to the public internet. No payment, account, entitlement, hosted quota,
-or cloud-sync system exists in the repository today.
+loopback backend to the public internet. At the decision point, no payment, account,
+entitlement, hosted quota, or cloud-sync system existed; the implementation update
+above records the disabled foundation added since then, not a deployable paid service.
 
 ### Quick index
 

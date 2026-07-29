@@ -6,7 +6,7 @@ const { HostedGenerationGateway } = require("../services/hosted-api/src/domain/g
 const { ACTIONS } = require("../services/hosted-api/src/domain/policy.js");
 const { UsageService } = require("../services/hosted-api/src/domain/usage-service.js");
 
-async function createFixture() {
+async function createFixture(overrides = {}) {
   let now = Date.parse("2026-07-28T12:00:00.000Z");
   const store = new MemoryHostedStore();
   const account = await store.createAccount({
@@ -18,7 +18,8 @@ async function createFixture() {
   const usageService = new UsageService({
     store,
     now: () => now,
-    reservationTtlMs: 60_000
+    reservationTtlMs: 60_000,
+    ...overrides
   });
   return {
     account,
@@ -28,6 +29,49 @@ async function createFixture() {
       now = Date.parse(value);
     }
   };
+}
+
+// Counts how many reservation records a read walks over, so the tests can assert that
+// usage counting stays proportional to live work instead of total service history.
+class CountingReservationMap extends Map {
+  constructor(entries) {
+    super(entries);
+    this.visited = 0;
+  }
+
+  reset() {
+    this.visited = 0;
+  }
+
+  values() {
+    const iterator = super.values();
+    const owner = this;
+    return {
+      next() {
+        const step = iterator.next();
+        if (!step.done) owner.visited += 1;
+        return step;
+      },
+      [Symbol.iterator]() {
+        return this;
+      }
+    };
+  }
+
+  [Symbol.iterator]() {
+    const iterator = super[Symbol.iterator]();
+    const owner = this;
+    return {
+      next() {
+        const step = iterator.next();
+        if (!step.done) owner.visited += 1;
+        return step;
+      },
+      [Symbol.iterator]() {
+        return this;
+      }
+    };
+  }
 }
 
 function reservationInput(accountId, key, items) {
@@ -197,7 +241,8 @@ test("generation gateway commits only success and releases provider failures", a
     idempotencyKey: "gateway-success-key",
     requestFingerprint: fingerprint("gateway-success-request"),
     items: [{ action: ACTIONS.STUDY_BUILD, units: 1 }],
-    run: async () => ({ artifactId: "artifact_123" })
+    run: async () => ({ artifactId: "artifact_123" }),
+    validateResult: async (result) => result
   });
   assert.equal(success.reservation.state, "committed");
   assert.deepEqual(success.result, { artifactId: "artifact_123" });
@@ -212,9 +257,25 @@ test("generation gateway commits only success and releases provider failures", a
         const error = new Error("provider unavailable");
         error.code = "PROVIDER_UNAVAILABLE";
         throw error;
-      }
+      },
+      validateResult: async (result) => result
     }),
     /provider unavailable/
+  );
+  await assert.rejects(
+    gateway.execute({
+      accountId: fixture.account.id,
+      idempotencyKey: "gateway-invalid-result",
+      requestFingerprint: fingerprint("gateway-invalid-result-request"),
+      items: [{ action: ACTIONS.STUDY_BUILD, units: 1 }],
+      run: async () => ({ malformed: true }),
+      validateResult: async () => {
+        const error = new Error("result schema rejected");
+        error.code = "RESULT_SCHEMA_INVALID";
+        throw error;
+      }
+    }),
+    /result schema rejected/
   );
   const usage = await fixture.usageService.getUsage(fixture.account.id);
   const study = usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD);
@@ -235,7 +296,8 @@ test("generation idempotency never repeats provider work and can replay a stored
     run: async () => {
       providerCalls += 1;
       return { artifactId: "quiz_123" };
-    }
+    },
+    validateResult: async (result) => result
   };
   await gateway.execute(input);
 
@@ -252,4 +314,146 @@ test("generation idempotency never repeats provider work and can replay a stored
   assert.equal(replay.idempotentReplay, true);
   assert.deepEqual(replay.result, { artifactId: "quiz_123" });
   assert.equal(providerCalls, 1);
+});
+
+test("a released reservation lets the same idempotency key reserve fresh work", async () => {
+  const fixture = await createFixture();
+  const input = reservationInput(
+    fixture.account.id,
+    "retry-after-release",
+    [{ action: ACTIONS.STUDY_BUILD, units: 1 }]
+  );
+  const first = await fixture.usageService.reserve(input);
+  await fixture.usageService.release(first.id, "PROVIDER_FAILED");
+
+  const retry = await fixture.usageService.reserve(input);
+  assert.equal(retry.idempotentReplay, false);
+  assert.notEqual(retry.id, first.id);
+  assert.equal(retry.state, "reserved");
+
+  const committed = await fixture.usageService.commit(retry.id);
+  assert.equal(committed.state, "committed");
+
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  const study = usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD);
+  assert.equal(study.committed, 1);
+  assert.equal(study.reserved, 0);
+
+  await assert.rejects(
+    fixture.usageService.reserve({
+      ...input,
+      items: [{ action: ACTIONS.STUDY_BUILD, units: 2 }]
+    }),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT"
+  );
+});
+
+test("an expired reservation lets the same idempotency key reserve fresh work", async () => {
+  const fixture = await createFixture();
+  const input = reservationInput(
+    fixture.account.id,
+    "retry-after-expiry",
+    [{ action: ACTIONS.JOURNEY_SUMMARY, units: 1 }]
+  );
+  const first = await fixture.usageService.reserve(input);
+  fixture.setNow("2026-07-28T12:05:00.000Z");
+
+  const retry = await fixture.usageService.reserve(input);
+  assert.equal(retry.idempotentReplay, false);
+  assert.notEqual(retry.id, first.id);
+  assert.equal(fixture.store.state.reservations.get(first.id).state, "expired");
+
+  const committed = await fixture.usageService.commit(retry.id);
+  assert.equal(committed.state, "committed");
+});
+
+test("the generation gateway retries a failed request under the same idempotency key", async () => {
+  const fixture = await createFixture();
+  const gateway = new HostedGenerationGateway({ usageService: fixture.usageService });
+  let providerCalls = 0;
+  const input = {
+    accountId: fixture.account.id,
+    idempotencyKey: "gateway-retry-after-failure",
+    requestFingerprint: fingerprint("gateway-retry-request"),
+    items: [{ action: ACTIONS.STUDY_BUILD, units: 1 }],
+    run: async () => {
+      providerCalls += 1;
+      if (providerCalls === 1) {
+        const error = new Error("provider unavailable");
+        error.code = "PROVIDER_UNAVAILABLE";
+        throw error;
+      }
+      return { artifactId: "study_retry" };
+    },
+    validateResult: async (result) => result
+  };
+
+  await assert.rejects(gateway.execute(input), /provider unavailable/);
+  const retry = await gateway.execute(input);
+  assert.equal(providerCalls, 2);
+  assert.deepEqual(retry.result, { artifactId: "study_retry" });
+  assert.equal(retry.reservation.state, "committed");
+
+  const study = retry.usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD);
+  assert.equal(study.committed, 1);
+  assert.equal(study.reserved, 0);
+  assert.equal(study.remaining, 2);
+});
+
+test("finalized reservations are evicted once retention lapses without losing committed usage", async () => {
+  const fixture = await createFixture({ finalizedRetentionMs: 60 * 60_000 });
+  for (let index = 0; index < 60; index += 1) {
+    const reservation = await fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      `evict-${index}`,
+      [{ action: ACTIONS.VIDEO_PROCESSING, units: 1000 }]
+    ));
+    await fixture.usageService.commit(reservation.id);
+  }
+  assert.equal(fixture.store.state.reservations.size, 60);
+
+  fixture.setNow("2026-07-28T14:00:00.000Z");
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  const video = usage.allowances.find((item) => item.action === ACTIONS.VIDEO_PROCESSING);
+  assert.equal(video.committed, 60_000);
+  assert.equal(video.remaining, 15 * 60 * 1000 - 60_000);
+  assert.equal(fixture.store.state.reservations.size, 0);
+  assert.equal(fixture.store.state.idempotency.size, 0);
+
+  await assert.rejects(
+    fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      "evict-over-limit",
+      [{ action: ACTIONS.VIDEO_PROCESSING, units: 15 * 60 * 1000 - 60_000 + 1 }]
+    )),
+    (error) => error.code === "ALLOWANCE_EXHAUSTED"
+  );
+});
+
+test("usage counting does not walk the whole reservation history", async () => {
+  const fixture = await createFixture();
+  const other = await fixture.store.createAccount({
+    id: "account_other",
+    email: "other@example.test",
+    emailVerified: true,
+    createdAt: Date.parse("2026-07-28T12:00:00.000Z")
+  });
+  for (let index = 0; index < 40; index += 1) {
+    const reservation = await fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      `history-${index}`,
+      [{ action: ACTIONS.VIDEO_PROCESSING, units: 1000 }]
+    ));
+    await fixture.usageService.commit(reservation.id);
+  }
+
+  const counting = new CountingReservationMap(fixture.store.state.reservations);
+  fixture.store.state.reservations = counting;
+  counting.reset();
+  const usage = await fixture.usageService.getUsage(other.id);
+  assert.equal(usage.allowances.length, 7);
+  assert.ok(
+    counting.visited <= 8,
+    `getUsage walked ${counting.visited} reservation records for an unrelated account`
+  );
 });

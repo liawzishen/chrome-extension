@@ -54,6 +54,41 @@ test("past-due subscriptions only retain Pro during an explicitly dated grace pe
   assert.equal(afterEnd.plan, "free");
 });
 
+test("past-due subscriptions without a stored deadline never mint their own rolling grace", () => {
+  const subscription = {
+    status: "past_due",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    currentPeriodEnd: "2026-07-28T00:00:00.000Z",
+    graceEndsAt: null
+  };
+  const graceOptions = { graceMs: 3 * 86_400_000 };
+  const soon = resolveEntitlement(subscription, "2026-07-29T00:00:00.000Z", graceOptions);
+  const muchLater = resolveEntitlement(subscription, "2026-12-31T00:00:00.000Z", graceOptions);
+  assert.equal(soon.plan, "free");
+  assert.equal(soon.status, "past_due");
+  assert.equal(muchLater.plan, "free");
+  assert.equal(muchLater.status, "past_due");
+});
+
+test("a paid subscription without a period end fails closed instead of running forever", () => {
+  const missingPeriodEnd = resolveEntitlement({
+    status: "active",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    currentPeriodEnd: null
+  }, "2027-07-01T00:00:00.000Z");
+  assert.equal(missingPeriodEnd.plan, "free");
+  assert.equal(missingPeriodEnd.status, "missing_period_end");
+
+  const datedGrace = resolveEntitlement({
+    status: "past_due",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    currentPeriodEnd: null,
+    graceEndsAt: "2026-07-31T00:00:00.000Z"
+  }, "2026-07-30T00:00:00.000Z");
+  assert.equal(datedGrace.plan, "student_pro");
+  assert.equal(datedGrace.status, "grace");
+});
+
 test("revocation overrides an otherwise active paid period", () => {
   const entitlement = resolveEntitlement({
     status: "active",

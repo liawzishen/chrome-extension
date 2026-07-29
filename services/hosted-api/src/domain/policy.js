@@ -62,18 +62,22 @@ function freezePolicy(policy) {
   return Object.freeze(policy);
 }
 
+// `options` is accepted for call-site compatibility but deliberately carries no
+// grace fallback: grace has to come from a persisted deadline (see below).
 function resolveEntitlement(subscription, nowValue = Date.now(), options = {}) {
   const now = toTimestamp(nowValue);
-  const graceMs = Math.max(0, Number(options.graceMs) || 0);
   if (!subscription) return freeEntitlement(now, "no_subscription");
 
   const status = String(subscription.status || "").toLowerCase();
   const effectiveStart = toOptionalTimestamp(subscription.effectiveStartAt ?? subscription.createdAt);
   const periodEnd = toOptionalTimestamp(subscription.currentPeriodEnd);
-  const graceEndsAt = toOptionalTimestamp(subscription.graceEndsAt)
-    ?? (status === "past_due" && graceMs > 0 ? now + graceMs : null);
+  // Grace must be a stored deadline written once when the payment first failed.
+  // Deriving it from `now` here would restart the window on every single call,
+  // so a permanently failing card would keep Pro forever.
+  const graceEndsAt = toOptionalTimestamp(subscription.graceEndsAt);
   const started = effectiveStart === null || effectiveStart <= now;
-  const inPaidPeriod = periodEnd === null || now < periodEnd;
+  // Fail closed: an absent period end is missing data, not an unlimited licence.
+  const inPaidPeriod = periodEnd !== null && now < periodEnd;
   const paidStatus = status === "active" || status === "trialing";
   const inGrace = status === "past_due" && graceEndsAt !== null && now < graceEndsAt;
 
@@ -90,6 +94,9 @@ function resolveEntitlement(subscription, nowValue = Date.now(), options = {}) {
       cancelAtPeriodEnd: Boolean(subscription.cancelAtPeriodEnd),
       source: "subscription"
     };
+  }
+  if (started && paidStatus && periodEnd === null) {
+    return freeEntitlement(now, "missing_period_end");
   }
   return freeEntitlement(now, status || "inactive_subscription");
 }

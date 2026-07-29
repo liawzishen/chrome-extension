@@ -124,6 +124,13 @@ CREATE TABLE hosted.billing_checkout_attempts (
 CREATE INDEX billing_checkout_attempts_account_created_idx
   ON hosted.billing_checkout_attempts (account_id, created_at DESC);
 
+-- The runtime expires stale attempts before inserting a replacement. This unique
+-- guard is the final database-level protection against two creating/open Checkout
+-- sessions racing for the same account.
+CREATE UNIQUE INDEX billing_checkout_attempts_one_pending_per_account_idx
+  ON hosted.billing_checkout_attempts (account_id)
+  WHERE status IN ('creating', 'open');
+
 CREATE TABLE hosted.billing_subscriptions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   account_id uuid NOT NULL REFERENCES hosted.accounts(id) ON DELETE RESTRICT,
@@ -390,14 +397,21 @@ CREATE TABLE hosted.usage_operations (
         AND released_at IS NOT NULL
         AND result_code IS NOT NULL
       )
-    ),
-  CONSTRAINT usage_operations_account_idempotency_unique
-    UNIQUE (account_id, idempotency_key)
+    )
 );
 
 CREATE INDEX usage_operations_reserved_expiry_idx
   ON hosted.usage_operations (expires_at)
   WHERE state = 'reserved';
+
+CREATE INDEX usage_operations_account_idempotency_idx
+  ON hosted.usage_operations (account_id, idempotency_key, created_at DESC);
+
+-- Released/expired work may be retried with the same client key, but only one
+-- live or committed operation for that key can exist at a time.
+CREATE UNIQUE INDEX usage_operations_live_idempotency_unique_idx
+  ON hosted.usage_operations (account_id, idempotency_key)
+  WHERE state IN ('reserved', 'committed');
 
 CREATE INDEX usage_operations_account_created_idx
   ON hosted.usage_operations (account_id, created_at DESC);

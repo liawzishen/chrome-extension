@@ -227,6 +227,63 @@ test("Gemini video cost is priced independently from the main provider", async (
   assert.equal(event.mediaDurationMs, 120_000);
 });
 
+test("configured rates still apply to model ids that need sanitizing for usage labels", async () => {
+  const lines = [];
+  const telemetry = createCostTelemetry({
+    outputPath: "unused-in-test",
+    writeLine: (line) => lines.push(line),
+    prices: {
+      // Google's own fully-qualified model id: legal in GEMINI_MODEL, illegal in a usage label.
+      "gemini.models/gemini-3.1-flash-lite:input": 2,
+      "gemini.models/gemini-3.1-flash-lite:output": 4
+    }
+  });
+
+  await telemetry.runAction("study_build", { sourceType: "notes" }, async () => {
+    telemetry.recordProviderResult("gemini", "models/gemini-3.1-flash-lite", "study_notes", {
+      usageMetadata: { promptTokenCount: 1_000_000, candidatesTokenCount: 500_000 }
+    });
+  });
+  await telemetry.flush();
+
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.costStatus, "configured");
+  assert.equal(event.estimatedCostUsd, 4);
+  assert.equal(event.providerUsage[0].model, "models_gemini-3.1-flash-lite");
+  assert.equal(event.providerUsage[0].estimatedCostUsd, 4);
+  assert.equal(event.providerUsage[0].costStatus, "configured");
+});
+
+test("a provider row created only by a validation rejection reports its missing rate", async () => {
+  const lines = [];
+  const telemetry = createCostTelemetry({
+    outputPath: "unused-in-test",
+    writeLine: (line) => lines.push(line),
+    prices: {
+      "openai.priced-model:input": 1,
+      "openai.priced-model:output": 2
+    }
+  });
+
+  await telemetry.runAction("quiz_build", { sourceType: "notes" }, async () => {
+    telemetry.recordProviderResult("openai", "priced-model", "quiz_only", {
+      usage: { input_tokens: 10, output_tokens: 5 }
+    });
+    telemetry.recordValidationRejection("openai", "unpriced-model", "quiz_grounding_verification");
+  });
+  await telemetry.flush();
+
+  const event = JSON.parse(lines[0]);
+  const priced = event.providerUsage.find((usage) => usage.model === "priced-model");
+  const unpriced = event.providerUsage.find((usage) => usage.model === "unpriced-model");
+  assert.equal(priced.costStatus, "configured");
+  assert.equal(unpriced.calls, 0);
+  assert.equal(unpriced.validationRejections, 1);
+  assert.equal(unpriced.costStatus, "incomplete");
+  assert.equal("unpricedCalls" in unpriced, false);
+  assert.equal("priceConfigured" in unpriced, false);
+});
+
 test("telemetry write failures never fail the learner action and warn once", async () => {
   const warnings = [];
   const originalWarn = console.warn;

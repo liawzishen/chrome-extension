@@ -13,6 +13,17 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_API_ENDPOINT = "http://127.0.0.1:8787/api/study-session";
+// INCOMPLETE FEATURE - no writer exists for this key.
+// readHostedSession() reads HOSTED_SESSION_STORAGE_KEY out of chrome.storage.session, but nothing in
+// this extension (popup, background worker, or content script) ever writes it. Hosted mode is therefore
+// unauthenticatable: flipping HOSTED_ACCOUNT_CONFIG.enabled to true makes every hosted request fail with
+// HOSTED_AUTH_REQUIRED, because normalizeHostedAccessToken() is always handed an empty session.
+// A writer would have to: (1) capture an access token from the hosted sign-in flow - either an
+// identity/launchWebAuthFlow redirect or a message from an allow-listed hosted-origin content script whose
+// sender.origin is verified against hostedAccountConfig.apiOrigin; (2) store { accessToken, expiresAt } under
+// this key via chrome.storage.session.set so the token never reaches disk; (3) clear the key on sign-out and
+// on expiry, and re-run refreshHostedAccount() afterwards so the UI reflects the new session.
+// Until that lands, hosted mode must stay disabled.
 const HOSTED_SESSION_STORAGE_KEY = "examCramHostedSession";
 const HOSTED_ACCOUNT_CONFIG = Object.freeze({
   enabled: false,
@@ -340,10 +351,10 @@ function init() {
   elements.saveSettingsButton.addEventListener("click", saveSettings);
   elements.clearLearningMemoryButton?.addEventListener("click", handleClearLearningMemory);
   elements.apiEndpointInput?.addEventListener("change", handleBackendEndpointChange);
-  elements.hostedAccountWebButton?.addEventListener("click", () => void openHostedWebPath("/account"));
-  elements.hostedRefreshAccountButton?.addEventListener("click", () => void refreshHostedAccount({ force: true }));
-  elements.hostedManageBillingButton?.addEventListener("click", () => void openHostedWebPath("/account/billing"));
-  elements.hostedUpgradeButton?.addEventListener("click", () => void openHostedWebPath("/pricing"));
+  elements.hostedAccountWebButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account")));
+  elements.hostedRefreshAccountButton?.addEventListener("click", () => void handleHostedAccountAction(() => refreshHostedAccount({ force: true })));
+  elements.hostedManageBillingButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account/billing")));
+  elements.hostedUpgradeButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/pricing")));
   elements.hostedUseOwnBackendButton?.addEventListener("click", handleUseOwnBackendFromHostedDialog);
 
   void initializePersistentPanel();
@@ -1370,11 +1381,14 @@ async function classifyImportSourcesWithBackend(files, journey) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw backendRequestError(
-      response,
-      payload,
-      "The source sorter could not classify these files.",
-      { settings, action: HostedAccount?.ACTIONS.CLASSIFICATION_BATCH }
+    throw surfaceHostedAccessError(
+      backendRequestError(
+        response,
+        payload,
+        "The source sorter could not classify these files.",
+        { settings, action: HostedAccount?.ACTIONS.CLASSIFICATION_BATCH }
+      ),
+      settings
     );
   }
   return normalizeImportClassificationResponse(payload, files);
@@ -2748,11 +2762,14 @@ async function requestAutomaticYouTubeTranscript(tab, identity) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw backendRequestError(
-      response,
-      payload,
-      "Gemini could not analyze this public YouTube URL. Use explicit tab-audio transcription instead.",
-      { settings, action: HostedAccount?.ACTIONS.VIDEO_PROCESSING }
+    throw surfaceHostedAccessError(
+      backendRequestError(
+        response,
+        payload,
+        "Gemini could not analyze this public YouTube URL. Use explicit tab-audio transcription instead.",
+        { settings, action: HostedAccount?.ACTIONS.VIDEO_PROCESSING }
+      ),
+      settings
     );
   }
   const normalizedSegments = globalThis.ExamCramJourney?.normalizeTranscriptSegments(payload.segments) || [];
@@ -3891,16 +3908,19 @@ async function generateNotesWithBackend(endpoint, input, settings = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw backendRequestError(
-      response,
-      payload,
-      "AI notes backend failed. Check your endpoint or clear settings for local mode.",
-      {
-        settings,
-        action: input.sourceType === "collection"
-          ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
-          : HostedAccount?.ACTIONS.STUDY_BUILD
-      }
+    throw surfaceHostedAccessError(
+      backendRequestError(
+        response,
+        payload,
+        "AI notes backend failed. Check your endpoint or clear settings for local mode.",
+        {
+          settings,
+          action: input.sourceType === "collection"
+            ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
+            : HostedAccount?.ACTIONS.STUDY_BUILD
+        }
+      ),
+      settings
     );
   }
   if (!payload.summary || !payload.terms || !payload.visualLesson?.visualModel
@@ -4687,13 +4707,11 @@ async function generateQuizWithBackend(endpoint, input, settings = {}) {
   try {
     response = await fetch(endpoint, {
       method: "POST",
-      headers: typeof getMeteredBackendHeaders === "function"
-        ? await getMeteredBackendHeaders(
-            settings,
-            endpoint,
-            typeof HostedAccount !== "undefined" ? HostedAccount?.ACTIONS.QUIZ_BUILD : "quiz_build"
-          )
-        : getBackendHeaders(settings, endpoint),
+      headers: await getMeteredBackendHeaders(
+        settings,
+        endpoint,
+        HostedAccount?.ACTIONS.QUIZ_BUILD
+      ),
       body: JSON.stringify(input)
     });
   } finally {
@@ -4701,11 +4719,14 @@ async function generateQuizWithBackend(endpoint, input, settings = {}) {
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw backendRequestError(
-      response,
-      payload,
-      "The quiz service could not generate questions.",
-      { settings, action: HostedAccount?.ACTIONS.QUIZ_BUILD }
+    throw surfaceHostedAccessError(
+      backendRequestError(
+        response,
+        payload,
+        "The quiz service could not generate questions.",
+        { settings, action: HostedAccount?.ACTIONS.QUIZ_BUILD }
+      ),
+      settings
     );
   }
   return assertQuizSemanticVerification(
@@ -5126,11 +5147,14 @@ async function generateWithBackend(endpoint, input, settings = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw backendRequestError(
-      response,
-      payload,
-      "AI backend failed. Check your endpoint or use local mode.",
-      { settings, action: HostedAccount?.ACTIONS.STUDY_BUILD }
+    throw surfaceHostedAccessError(
+      backendRequestError(
+        response,
+        payload,
+        "AI backend failed. Check your endpoint or use local mode.",
+        { settings, action: HostedAccount?.ACTIONS.STUDY_BUILD }
+      ),
+      settings
     );
   }
   if (!payload.summary || !payload.questions) {
@@ -8001,11 +8025,14 @@ async function requestVisualFollowup({ question, model, context, selectedNode, s
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw backendRequestError(
-        response,
-        payload,
-        "The visual tutor follow-up service is unavailable.",
-        { settings, action: HostedAccount?.ACTIONS.VISUAL_FOLLOWUP }
+      throw surfaceHostedAccessError(
+        backendRequestError(
+          response,
+          payload,
+          "The visual tutor follow-up service is unavailable.",
+          { settings, action: HostedAccount?.ACTIONS.VISUAL_FOLLOWUP }
+        ),
+        settings
       );
     }
     const answer = visualText(
@@ -11008,15 +11035,15 @@ async function handleSummarizeJourney() {
     const journey = await getJourney();
     // The study goal carries the exam date, so the summary can project which concepts will have
     // decayed below the retention threshold by then instead of only reporting the present.
-    const summaryStudyGoal = await getStudyGoal().catch(() => null);
+    const [settings, storedFocus, summaryStudyGoal] = await Promise.all([
+      getStorage(STORAGE_KEYS.settings, {}),
+      getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({})),
+      getStudyGoal().catch(() => null)
+    ]);
     let summary = globalThis.ExamCramJourney.summarize(journey, {
       range: elements.journeyRange.value,
       studyGoal: summaryStudyGoal
     });
-    const [settings, storedFocus] = await Promise.all([
-      getStorage(STORAGE_KEYS.settings, {}),
-      getStorage(STORAGE_KEYS.focusState, {}).catch(() => ({}))
-    ]);
     const focusHistory = Array.isArray(storedFocus?.history) ? storedFocus.history : [];
     const summaryNow = Date.now();
     const habitProfile = typeof globalThis.ExamCramJourney.buildHabitProfile === "function"
@@ -11063,11 +11090,14 @@ async function handleSummarizeJourney() {
         });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw backendRequestError(
-            response,
-            payload,
-            "AI journey summary failed.",
-            { settings, action: HostedAccount?.ACTIONS.JOURNEY_SUMMARY }
+          throw surfaceHostedAccessError(
+            backendRequestError(
+              response,
+              payload,
+              "AI journey summary failed.",
+              { settings, action: HostedAccount?.ACTIONS.JOURNEY_SUMMARY }
+            ),
+            settings
           );
         }
         if (payload.overview && Array.isArray(payload.nextSteps)) summary = payload;
@@ -11815,7 +11845,9 @@ async function refreshHostedAccount({ force = false } = {}) {
       Accept: "application/json",
       Authorization: `Bearer ${accessToken}`
     };
-    const endpoints = ["/v1/me", "/v1/entitlements", "/v1/usage"]
+    // /v1/usage already carries the current entitlement, so a separate /v1/entitlements call would only
+    // repeat it - and open another server store transaction that deep-clones the whole state.
+    const endpoints = ["/v1/me", "/v1/usage"]
       .map((path) => HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, path));
     if (endpoints.some((endpoint) => !endpoint)) {
       throw createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE" });
@@ -11835,11 +11867,11 @@ async function refreshHostedAccount({ force = false } = {}) {
         );
       }
     });
-    const [profilePayload, entitlementPayload, usagePayload] = payloads;
+    const [profilePayload, usagePayload] = payloads;
     state.hostedAccessToken = accessToken;
     state.hostedAccountSnapshot = HostedAccount.normalizeSnapshot({
       account: profilePayload.account,
-      entitlement: entitlementPayload.entitlement || usagePayload.entitlement,
+      entitlement: usagePayload.entitlement,
       policyVersion: usagePayload.policyVersion,
       allowances: usagePayload.allowances,
       refreshedAt: new Date().toISOString()
@@ -11953,9 +11985,16 @@ function backendRequestError(response, payload, fallback, options = {}) {
           period: { end: detail.details.periodEndsAt || null }
         }
       : null;
-    if (HostedAccount?.isHostedMode(options.settings, HOSTED_ACCOUNT_CONFIG)) {
-      queueHostedAccessDialog(error);
-    }
+  }
+  return error;
+}
+
+// Kept separate from backendRequestError so that building an error - for logging, retry classification,
+// or a nested fallback - never pops a modal. Only a caller that has decided to give up on the request
+// and show the failure calls this.
+function surfaceHostedAccessError(error, settings) {
+  if (error?.isHostedAccess && HostedAccount?.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)) {
+    queueHostedAccessDialog(error);
   }
   return error;
 }
@@ -11999,6 +12038,19 @@ async function handleUseOwnBackendFromHostedDialog() {
   const settings = await getStorage(STORAGE_KEYS.settings, {});
   renderHostedAccountUi({ ...settings, backendMode: "custom" });
   elements.apiEndpointInput?.focus();
+}
+
+async function handleHostedAccountAction(operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    // Hosted buttons are fire-and-forget click handlers, so a rejection here would otherwise be an
+    // unhandled promise the user never sees. Route it back into the settings panel and the status line.
+    const settings = await getStorage(STORAGE_KEYS.settings, {}).catch(() => ({}));
+    renderHostedAccountUi(settings, error);
+    showStatus(safeHostedAccountMessage(error), true);
+    return null;
+  }
 }
 
 async function openHostedWebPath(pathname) {

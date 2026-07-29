@@ -19,6 +19,10 @@ function adapterConfig(overrides = {}) {
       year: "price_annual123",
       foundingYear: ""
     },
+    priceAmounts: {
+      month: 499,
+      year: 4999
+    },
     ...overrides
   };
 }
@@ -26,6 +30,8 @@ function adapterConfig(overrides = {}) {
 function createFakeStripe(overrides = {}) {
   const calls = {
     checkout: [],
+    checkoutRetrieve: [],
+    invoices: [],
     portal: [],
     prices: []
   };
@@ -33,14 +39,15 @@ function createFakeStripe(overrides = {}) {
     prices: {
       retrieve: async (priceId) => {
         calls.prices.push(priceId);
-        const annual = priceId === "price_annual123";
+        const founding = priceId === "price_founding123";
+        const annual = founding || priceId === "price_annual123";
         return {
           id: priceId,
           active: true,
           livemode: false,
           currency: "usd",
           type: "recurring",
-          unit_amount: annual ? 4999 : 499,
+          unit_amount: founding ? 3999 : annual ? 4999 : 499,
           recurring: {
             interval: annual ? "year" : "month",
             interval_count: 1
@@ -56,6 +63,15 @@ function createFakeStripe(overrides = {}) {
             id: "cs_test_unit123",
             url: "https://checkout.stripe.com/c/pay/cs_test_unit123"
           };
+        },
+        retrieve: async (sessionId) => {
+          calls.checkoutRetrieve.push(sessionId);
+          return {
+            id: sessionId,
+            status: "open",
+            expires_at: 1_785_326_400,
+            url: "https://checkout.stripe.com/c/pay/cs_test_unit123"
+          };
         }
       }
     },
@@ -68,6 +84,19 @@ function createFakeStripe(overrides = {}) {
             url: "https://billing.stripe.com/p/session/test_unit123"
           };
         }
+      }
+    },
+    invoices: {
+      retrieve: async (invoiceId) => {
+        calls.invoices.push(invoiceId);
+        return {
+          id: invoiceId,
+          parent: {
+            subscription_details: {
+              subscription: "sub_resolved123"
+            }
+          }
+        };
       }
     },
     webhooks: {
@@ -110,7 +139,9 @@ test("checkout maps a monthly choice to server-owned price and redirect values",
 
   assert.deepEqual(result, {
     id: "cs_test_unit123",
-    url: "https://checkout.stripe.com/c/pay/cs_test_unit123"
+    url: "https://checkout.stripe.com/c/pay/cs_test_unit123",
+    status: "open",
+    expiresAt: null
   });
   assert.equal(calls.checkout.length, 1);
   assert.deepEqual(calls.checkout[0], {
@@ -168,6 +199,33 @@ test("annual checkout reuses only the authenticated account's stored Stripe cust
   assert.equal(parameters.cancel_url, "https://app.exam-cram.test/billing/canceled");
 });
 
+test("an existing open Checkout session can be recovered without creating another", async () => {
+  const { calls, stripe } = createFakeStripe();
+  const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
+  const session = await adapter.retrieveCheckoutSession({
+    sessionId: "cs_test_unit123"
+  });
+  assert.deepEqual(session, {
+    id: "cs_test_unit123",
+    url: "https://checkout.stripe.com/c/pay/cs_test_unit123",
+    status: "open",
+    expiresAt: "2026-07-29T12:00:00.000Z"
+  });
+  assert.deepEqual(calls.checkoutRetrieve, ["cs_test_unit123"]);
+  assert.equal(calls.checkout.length, 0);
+});
+
+test("a refunded Charge resolves its subscription through the signed invoice reference", async () => {
+  const { calls, stripe } = createFakeStripe();
+  const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
+  const subscriptionId = await adapter.resolveRefundSubscriptionId({
+    id: "ch_refunded123",
+    invoice: "in_refunded123"
+  });
+  assert.equal(subscriptionId, "sub_resolved123");
+  assert.deepEqual(calls.invoices, ["in_refunded123"]);
+});
+
 test("checkout fails closed when a configured Price has the wrong amount or interval", async () => {
   let checkoutCalled = false;
   const { stripe } = createFakeStripe({
@@ -208,6 +266,78 @@ test("checkout fails closed when a configured Price has the wrong amount or inte
     (error) => assertHostedError(error, "STRIPE_PRICE_CONFIGURATION_INVALID")
   );
   assert.equal(checkoutCalled, false);
+});
+
+test("a transient Stripe price outage does not permanently poison the catalog memo", async () => {
+  const { calls, stripe } = createFakeStripe();
+  const healthyRetrieve = stripe.prices.retrieve;
+  let stripeIsDown = true;
+  stripe.prices.retrieve = async (priceId) => {
+    if (stripeIsDown) throw new Error("stripe network blip");
+    return healthyRetrieve(priceId);
+  };
+  const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
+
+  await assert.rejects(
+    adapter.validatePriceCatalog(),
+    (error) => assertHostedError(error, "STRIPE_PRICE_CONFIGURATION_UNAVAILABLE")
+  );
+  await assert.rejects(
+    adapter.createCheckoutSession({
+      interval: "month",
+      idempotencyKey: "checkout:account-123:outage",
+      account: { id: "account-123" }
+    }),
+    (error) => assertHostedError(error, "STRIPE_PRICE_CONFIGURATION_UNAVAILABLE")
+  );
+  assert.equal(calls.checkout.length, 0);
+
+  stripeIsDown = false;
+  const catalog = await adapter.validatePriceCatalog();
+  assert.equal(catalog.month.id, "price_monthly123");
+  assert.equal(catalog.year.id, "price_annual123");
+
+  const result = await adapter.createCheckoutSession({
+    interval: "month",
+    idempotencyKey: "checkout:account-123:recovered",
+    account: { id: "account-123" }
+  });
+  assert.equal(result.id, "cs_test_unit123");
+  assert.equal(calls.checkout.length, 1);
+});
+
+test("a validated price catalog is retrieved once and reused across calls", async () => {
+  const { calls, stripe } = createFakeStripe();
+  const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
+
+  const [first, second] = await Promise.all([
+    adapter.validatePriceCatalog(),
+    adapter.validatePriceCatalog()
+  ]);
+  await adapter.validatePriceCatalog();
+
+  assert.equal(first, second);
+  assert.deepEqual(calls.prices, ["price_monthly123", "price_annual123"]);
+});
+
+test("the provisional founding offer cannot use the ordinary recurring checkout path", async () => {
+  const { stripe } = createFakeStripe();
+  const adapter = createStripeBillingAdapter(adapterConfig({
+    priceIds: {
+      month: "price_monthly123",
+      year: "price_annual123",
+      foundingYear: "price_founding123"
+    }
+  }), { stripe });
+
+  await assert.rejects(
+    adapter.createCheckoutSession({
+      interval: "founding_year",
+      idempotencyKey: "checkout:account-123:founding",
+      account: { id: "account-123" }
+    }),
+    (error) => assertHostedError(error, "BILLING_INTERVAL_INVALID")
+  );
 });
 
 test("checkout rejects unsupported intervals and missing idempotency before calling Stripe", async () => {

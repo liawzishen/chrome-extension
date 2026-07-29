@@ -2,6 +2,13 @@ const { assertDomain } = require("./domain/errors.js");
 
 const SUPPORTED_STRIPE_API_VERSION = "2026-06-24.dahlia";
 
+// Approved Student Pro unit amounts in cents. Changing launch prices requires a
+// reviewed code/policy-version change; environment variables cannot silently reprice.
+const DEFAULT_PRICE_AMOUNTS = Object.freeze({
+  month: 499,
+  year: 4999
+});
+
 function loadHostedConfig(env = process.env) {
   const billingEnabled = readBoolean(env.BILLING_ENABLED, false, "BILLING_ENABLED");
   const config = {
@@ -16,6 +23,8 @@ function loadHostedConfig(env = process.env) {
       year: String(env.STRIPE_PRICE_PRO_ANNUAL || "").trim(),
       foundingYear: String(env.STRIPE_PRICE_FOUNDING_ANNUAL || "").trim()
     },
+    priceAmounts: DEFAULT_PRICE_AMOUNTS,
+    usageRequestHmacKey: String(env.USAGE_REQUEST_HMAC_KEY || "").trim(),
     allowLiveBilling: readBoolean(env.ALLOW_LIVE_BILLING, false, "ALLOW_LIVE_BILLING"),
     automaticTax: readOptionalBoolean(env.STRIPE_AUTOMATIC_TAX, "STRIPE_AUTOMATIC_TAX"),
     refundRevokesAccess: readOptionalBoolean(env.REFUND_REVOKES_ACCESS, "REFUND_REVOKES_ACCESS"),
@@ -24,7 +33,8 @@ function loadHostedConfig(env = process.env) {
   validateHostedConfig(config);
   return Object.freeze({
     ...config,
-    priceIds: Object.freeze({ ...config.priceIds })
+    priceIds: Object.freeze({ ...config.priceIds }),
+    priceAmounts: DEFAULT_PRICE_AMOUNTS
   });
 }
 
@@ -43,6 +53,12 @@ function validateHostedConfig(config) {
   assertDomain(/^price_[A-Za-z0-9]+$/.test(config.priceIds.year), "STRIPE_ANNUAL_PRICE_MISSING", "The annual Stripe Price ID is required.", 500);
   if (config.priceIds.foundingYear) {
     assertDomain(/^price_[A-Za-z0-9]+$/.test(config.priceIds.foundingYear), "STRIPE_FOUNDING_PRICE_INVALID", "The founding annual Stripe Price ID is invalid.", 500);
+    assertDomain(
+      false,
+      "FOUNDING_OFFER_NOT_IMPLEMENTED",
+      "The first-term founding offer requires a reviewed renewal-price and eligibility workflow.",
+      500
+    );
   }
   assertDomain(Boolean(config.publicAppOrigin), "PUBLIC_APP_ORIGIN_MISSING", "A fixed HTTPS first-party app origin is required.", 500);
   assertDomain(typeof config.automaticTax === "boolean", "TAX_POLICY_REQUIRED", "STRIPE_AUTOMATIC_TAX must be explicitly true or false.", 500);
@@ -89,6 +105,7 @@ function readOptionalBoundedNumber(value, minimum, maximum, name) {
 }
 
 module.exports = {
+  DEFAULT_PRICE_AMOUNTS,
   SUPPORTED_STRIPE_API_VERSION,
   loadHostedConfig,
   normalizeHttpsOrigin,

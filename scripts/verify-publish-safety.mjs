@@ -27,7 +27,7 @@ for (const filename of candidates) {
     ["private key material", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
     ["Google API credential", /AIza[0-9A-Za-z_-]{35}/],
     ["OpenAI credential", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
-    ["Stripe secret credential", /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/],
+    ["Stripe credential", /\b(?:pk|sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b/],
     ["Stripe webhook secret", /\bwhsec_[A-Za-z0-9]{16,}\b/],
     ["GitHub credential", /\bgh[pousr]_[A-Za-z0-9]{20,}\b/],
     ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
@@ -68,11 +68,14 @@ async function collect(directory) {
       await collect(fullPath);
       continue;
     }
-    if (!entry.isFile() || excludedFiles.has(entry.name)) continue;
+    if (!entry.isFile()) continue;
+    // The credential check runs before excludedFiles so the exclusion list, which names
+    // .exam-cram-backend-token, cannot hide the very file this gate exists to catch.
     if (secretFilePattern.test(entry.name)) {
       findings.push(`${relative(projectRoot, fullPath).replaceAll("\\", "/")}: credential file is present in a publishable tree`);
       continue;
     }
+    if (excludedFiles.has(entry.name)) continue;
     const isEnvironmentTemplate =
       entry.name === ".env.example" ||
       (entry.name.startsWith(".env.") && entry.name.endsWith(".example"));

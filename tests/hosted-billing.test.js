@@ -73,7 +73,7 @@ function subscriptionObject(overrides = {}) {
   };
 }
 
-async function createBillingFixture(configOverrides = {}) {
+async function createBillingFixture(configOverrides = {}, serviceOverrides = {}) {
   let clock = NOW;
   const store = new MemoryHostedStore();
   await store.createAccount({
@@ -83,14 +83,22 @@ async function createBillingFixture(configOverrides = {}) {
     createdAt: new Date(NOW - DAY_MS).toISOString()
   });
   const config = billingConfig(configOverrides);
+  const logged = [];
   const billing = new BillingService({
     store,
     config,
-    now: () => clock
+    now: () => clock,
+    logger: {
+      error(...args) {
+        logged.push(args);
+      }
+    },
+    ...serviceOverrides
   });
   return {
     billing,
     config,
+    logged,
     get clock() {
       return clock;
     },
@@ -207,6 +215,55 @@ test("older subscription and invoice events are recorded but cannot overwrite ne
   assert.equal(fixture.store.state.processedBillingEvents.has("evt_invoice_older"), true);
 });
 
+test("a later delivery for an older subscription cannot replace the current subscription", async () => {
+  const fixture = await createBillingFixture();
+  await linkAndActivate(fixture, NOW_SECONDS);
+  fixture.clock = NOW + 60_000;
+  await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_new_subscription",
+    "customer.subscription.created",
+    NOW_SECONDS + 60,
+    subscriptionObject({
+      id: "sub_new_current",
+      start_date: NOW_SECONDS + 60,
+      current_period_start: NOW_SECONDS + 60,
+      current_period_end: NOW_SECONDS + 31 * 24 * 60 * 60
+    })
+  ));
+
+  const historical = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_old_subscription_deleted_late",
+    "customer.subscription.deleted",
+    NOW_SECONDS + 120,
+    subscriptionObject({
+      id: "sub_unit123",
+      status: "canceled",
+      start_date: NOW_SECONDS - 10 * 60,
+      current_period_start: NOW_SECONDS - 10 * 60,
+      current_period_end: NOW_SECONDS + 30 * 24 * 60 * 60
+    })
+  ));
+  assert.equal(historical.outcome, "historical_subscription_event");
+  assert.equal(
+    fixture.store.state.subscriptions.get("account-123").stripeSubscriptionId,
+    "sub_new_current"
+  );
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
+
+  const historicalInvoice = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_old_invoice_late",
+    "invoice.payment_failed",
+    NOW_SECONDS + 180,
+    {
+      id: "in_old_subscription",
+      customer: "cus_unit123",
+      subscription: "sub_unit123"
+    }
+  ));
+  assert.equal(historicalInvoice.outcome, "historical_invoice_event");
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "active");
+});
+
 test("failed payment grants a dated grace period and a later payment restores Pro", async () => {
   const fixture = await createBillingFixture({ graceDays: 3 });
   await linkAndActivate(fixture, NOW_SECONDS);
@@ -233,7 +290,7 @@ test("failed payment grants a dated grace period and a later payment restores Pr
     plan: "student_pro",
     policyVersion: "student-pro.v1",
     status: "grace",
-    effectiveStart: "2026-07-28T00:00:00.000Z",
+    effectiveStart: "2026-07-27T23:50:00.000Z",
     effectiveEnd: "2026-07-31T00:00:00.000Z",
     cancelAtPeriodEnd: false,
     source: "subscription"
@@ -270,6 +327,170 @@ test("failed payment grants a dated grace period and a later payment restores Pr
   assert.equal((await usage.getEntitlement("account-123")).plan, "student_pro");
 });
 
+test("a past_due status projected without any invoice event still gets a bounded grace deadline", async () => {
+  const fixture = await createBillingFixture({ graceDays: 3 });
+  await linkAndActivate(fixture, NOW_SECONDS);
+
+  const projected = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_subscription_past_due",
+    "customer.subscription.updated",
+    NOW_SECONDS + 5,
+    subscriptionObject({ status: "past_due" })
+  ));
+
+  assert.deepEqual(projected, {
+    duplicate: false,
+    outcome: "subscription_projected"
+  });
+  const subscription = fixture.store.state.subscriptions.get("account-123");
+  assert.equal(subscription.status, "past_due");
+  assert.equal(subscription.graceEndsAt, "2026-07-31T00:00:00.000Z");
+
+  const usage = new UsageService({
+    store: fixture.store,
+    now: () => fixture.clock,
+    graceMs: 3 * DAY_MS
+  });
+  const inGrace = await usage.getEntitlement("account-123");
+  assert.equal(inGrace.plan, "student_pro");
+  assert.equal(inGrace.status, "grace");
+  assert.equal(inGrace.effectiveEnd, "2026-07-31T00:00:00.000Z");
+
+  fixture.clock = NOW + 3 * DAY_MS;
+  const expired = await usage.getEntitlement("account-123");
+  assert.equal(expired.plan, "free");
+  assert.equal(expired.status, "past_due");
+});
+
+test("a repeated past_due projection cannot extend the grace deadline it already stamped", async () => {
+  const fixture = await createBillingFixture({ graceDays: 3 });
+  await linkAndActivate(fixture, NOW_SECONDS);
+  await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_past_due_first",
+    "customer.subscription.updated",
+    NOW_SECONDS + 5,
+    subscriptionObject({ status: "past_due" })
+  ));
+
+  fixture.clock = NOW + 2 * DAY_MS;
+  await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_past_due_second",
+    "customer.subscription.updated",
+    NOW_SECONDS + 6,
+    subscriptionObject({ status: "past_due" })
+  ));
+
+  assert.equal(
+    fixture.store.state.subscriptions.get("account-123").graceEndsAt,
+    "2026-07-31T00:00:00.000Z"
+  );
+  fixture.clock = NOW + 3 * DAY_MS;
+  const usage = new UsageService({
+    store: fixture.store,
+    now: () => fixture.clock,
+    graceMs: 3 * DAY_MS
+  });
+  assert.equal((await usage.getEntitlement("account-123")).plan, "free");
+});
+
+test("repeated failed-payment events cannot roll the original grace deadline forward", async () => {
+  const fixture = await createBillingFixture({ graceDays: 3 });
+  await linkAndActivate(fixture, NOW_SECONDS);
+  await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_invoice_failed_first",
+    "invoice.payment_failed",
+    NOW_SECONDS + 1,
+    {
+      id: "in_failed_first",
+      customer: "cus_unit123",
+      subscription: "sub_unit123"
+    }
+  ));
+  const originalDeadline = fixture.store.state.subscriptions.get("account-123").graceEndsAt;
+
+  fixture.clock = NOW + 2 * DAY_MS;
+  await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_invoice_failed_second",
+    "invoice.payment_failed",
+    NOW_SECONDS + 2 * 24 * 60 * 60,
+    {
+      id: "in_failed_second",
+      customer: "cus_unit123",
+      subscription: "sub_unit123"
+    }
+  ));
+
+  assert.equal(
+    fixture.store.state.subscriptions.get("account-123").graceEndsAt,
+    originalDeadline
+  );
+});
+
+test("an unconfigured Stripe price is recorded as permanently unprocessable instead of retried", async () => {
+  const fixture = await createBillingFixture();
+  const unknownPriceEvent = stripeEvent(
+    "evt_unknown_price",
+    "customer.subscription.created",
+    NOW_SECONDS,
+    subscriptionObject({
+      items: { data: [{ price: { id: "price_never_configured" } }] }
+    })
+  );
+
+  const result = await fixture.billing.processVerifiedEvent(unknownPriceEvent);
+  const replay = await fixture.billing.processVerifiedEvent(unknownPriceEvent);
+
+  assert.deepEqual(result, {
+    duplicate: false,
+    outcome: "unknown_price"
+  });
+  assert.deepEqual(replay, {
+    duplicate: true,
+    outcome: "already_processed"
+  });
+  assert.equal(fixture.store.state.processedBillingEvents.size, 1);
+  assert.equal(fixture.store.state.billingReceipts.get("evt_unknown_price").outcome, "unknown_price");
+  assert.equal(fixture.store.state.subscriptions.has("account-123"), false);
+  assert.equal(fixture.store.state.entitlements.has("account-123"), false);
+  assert.equal(fixture.logged.length, 1);
+});
+
+test("an event naming an unknown account is recorded, but an unlinked subscription stays retryable", async () => {
+  const fixture = await createBillingFixture();
+
+  const unknownAccount = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_checkout_unknown_account",
+    "checkout.session.completed",
+    NOW_SECONDS,
+    checkoutSession({
+      client_reference_id: "account-missing",
+      metadata: { account_id: "account-missing" }
+    })
+  ));
+
+  assert.deepEqual(unknownAccount, {
+    duplicate: false,
+    outcome: "unknown_account"
+  });
+  assert.equal(
+    fixture.store.state.billingReceipts.get("evt_checkout_unknown_account").outcome,
+    "unknown_account"
+  );
+  assert.equal(fixture.store.state.customerAccounts.size, 0);
+  assert.equal(fixture.logged.length, 1);
+
+  await assert.rejects(
+    fixture.billing.processVerifiedEvent(stripeEvent(
+      "evt_subscription_unlinked",
+      "customer.subscription.created",
+      NOW_SECONDS + 1,
+      subscriptionObject({ metadata: {} })
+    )),
+    /Subscription does not map to a known account/
+  );
+  assert.equal(fixture.store.state.processedBillingEvents.has("evt_subscription_unlinked"), false);
+});
+
 test("only a full refund revokes access when the configured policy requires it", async () => {
   const fixture = await createBillingFixture({
     refundRevokesAccess: true
@@ -304,7 +525,8 @@ test("only a full refund revokes access when the configured policy requires it",
       customer: "cus_unit123",
       amount: 499,
       amount_refunded: 499,
-      refunded: true
+      refunded: true,
+      metadata: { subscription_id: "sub_unit123" }
     }
   ));
   assert.deepEqual(full, {
@@ -334,7 +556,8 @@ test("refund events remain non-revoking when that policy is explicitly disabled"
       customer: "cus_unit123",
       amount: 499,
       amount_refunded: 499,
-      refunded: true
+      refunded: true,
+      metadata: { subscription_id: "sub_unit123" }
     }
   ));
 
@@ -360,7 +583,8 @@ test("a late invoice cannot revive revoked access, while a new subscription can"
       customer: "cus_unit123",
       amount: 499,
       amount_refunded: 499,
-      refunded: true
+      refunded: true,
+      metadata: { subscription_id: "sub_unit123" }
     }
   ));
 
@@ -378,6 +602,7 @@ test("a late invoice cannot revive revoked access, while a new subscription can"
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
   assert.equal(fixture.store.state.subscriptions.get("account-123").status, "revoked");
 
+  fixture.clock = NOW + 3_000;
   const resubscribed = await fixture.billing.processVerifiedEvent(stripeEvent(
     "evt_resubscribe123",
     "customer.subscription.created",
@@ -393,4 +618,78 @@ test("a late invoice cannot revive revoked access, while a new subscription can"
   assert.equal(fixture.store.state.subscriptions.get("account-123").stripeSubscriptionId, "sub_replacement123");
   assert.equal(fixture.store.state.subscriptions.get("account-123").revokedAt, null);
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
+});
+
+test("an unresolved refund stays retryable and never revokes newer access", async () => {
+  const fixture = await createBillingFixture({ refundRevokesAccess: true });
+  await linkAndActivate(fixture, NOW_SECONDS);
+
+  const unresolvedEvent = stripeEvent(
+    "evt_refund_unresolved",
+    "charge.refunded",
+    NOW_SECONDS + 1,
+    {
+      id: "ch_old_without_invoice",
+      customer: "cus_unit123",
+      amount: 499,
+      amount_refunded: 499,
+      refunded: true,
+      invoice: "in_needs_lookup"
+    }
+  );
+  await assert.rejects(
+    fixture.billing.processVerifiedEvent(unresolvedEvent),
+    (error) => error?.code === "REFUND_RECONCILIATION_REQUIRED"
+  );
+  assert.equal(fixture.store.state.processedBillingEvents.has("evt_refund_unresolved"), false);
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "active");
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
+
+  const historical = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_refund_historical",
+    "charge.refunded",
+    NOW_SECONDS + 2,
+    {
+      id: "ch_old_subscription",
+      customer: "cus_unit123",
+      amount: 499,
+      amount_refunded: 499,
+      refunded: true,
+      metadata: { subscription_id: "sub_previous123" }
+    }
+  ));
+  assert.equal(historical.outcome, "historical_refund_recorded");
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "active");
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
+});
+
+test("a verified invoice lookup can tie a bare refunded Charge to the current subscription", async () => {
+  const resolvedCharges = [];
+  const fixture = await createBillingFixture(
+    { refundRevokesAccess: true },
+    {
+      async resolveRefundSubscriptionId(charge) {
+        resolvedCharges.push(charge.id);
+        return "sub_unit123";
+      }
+    }
+  );
+  await linkAndActivate(fixture, NOW_SECONDS);
+  const result = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_refund_resolved",
+    "charge.refunded",
+    NOW_SECONDS + 1,
+    {
+      id: "ch_with_invoice",
+      customer: "cus_unit123",
+      invoice: "in_subscription_invoice",
+      amount: 499,
+      amount_refunded: 499,
+      refunded: true
+    }
+  ));
+  assert.equal(result.outcome, "entitlement_revoked");
+  assert.deepEqual(resolvedCharges, ["ch_with_invoice"]);
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "revoked");
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
 });

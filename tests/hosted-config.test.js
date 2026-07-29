@@ -46,7 +46,15 @@ test("hosted billing is disabled by default without requiring Stripe configurati
     foundingYear: ""
   });
   assert.equal(config.publicAppOrigin, "");
+  assert.equal(config.usageRequestHmacKey, "");
   assert.equal(config.allowLiveBilling, false);
+});
+
+test("hosted request HMAC material is loaded only for server-side generation assembly", () => {
+  const config = loadHostedConfig({
+    USAGE_REQUEST_HMAC_KEY: "server-only-test-hmac-material-0001"
+  });
+  assert.equal(config.usageRequestHmacKey, "server-only-test-hmac-material-0001");
 });
 
 test("enabled test-mode billing requires every security and policy decision", () => {
@@ -70,7 +78,6 @@ test("enabled test-mode billing requires every security and policy decision", ()
 
 test("test-mode billing loads fixed prices and freezes the resulting configuration", () => {
   const config = loadHostedConfig(validTestEnvironment({
-    STRIPE_PRICE_FOUNDING_ANNUAL: "price_founding123",
     STRIPE_AUTOMATIC_TAX: "true",
     REFUND_REVOKES_ACCESS: "false",
     BILLING_GRACE_DAYS: "7"
@@ -84,10 +91,26 @@ test("test-mode billing loads fixed prices and freezes the resulting configurati
   assert.deepEqual(config.priceIds, {
     month: "price_monthly123",
     year: "price_annual123",
-    foundingYear: "price_founding123"
+    foundingYear: ""
   });
   assert.equal(Object.isFrozen(config), true);
   assert.equal(Object.isFrozen(config.priceIds), true);
+});
+
+test("approved unit amounts are fixed to the published launch catalog", () => {
+  const config = loadHostedConfig(validTestEnvironment({
+    STRIPE_PRICE_PRO_MONTHLY_AMOUNT: "599",
+    STRIPE_PRICE_PRO_ANNUAL_AMOUNT: "5999"
+  }));
+  assert.deepEqual(config.priceAmounts, {
+    month: 499,
+    year: 4999
+  });
+  assert.equal(Object.isFrozen(config.priceAmounts), true);
+  assertConfigError(
+    validTestEnvironment({ STRIPE_PRICE_FOUNDING_ANNUAL: "price_founding123" }),
+    "FOUNDING_OFFER_NOT_IMPLEMENTED"
+  );
 });
 
 test("live Stripe keys stay fail-closed until live billing is explicitly unlocked", () => {
