@@ -12245,10 +12245,25 @@ async function requestBackendAction({
     // A lost response must retry with the exact same server-scoped operation key.
     response = await send();
   }
-  const rawPayload = await response.json().catch(() => ({}));
   if (hosted && response.status === 401) {
+    // A 401 is usually recoverable: the access token lapsed, or the server was
+    // restarted with a rotated signing key, while the refresh token in local
+    // storage is still good. Recover once instead of failing the learner's
+    // action. The idempotency key is deliberately reused, so if the first attempt
+    // did reach the server this replay returns the same result rather than
+    // charging a second time.
     await clearHostedAccessToken();
+    const reauthenticated = await resendWithFreshHostedToken({
+      settings,
+      requestEndpoint,
+      action,
+      units,
+      body,
+      idempotencyKey: headers["Idempotency-Key"]
+    });
+    if (reauthenticated) response = reauthenticated;
   }
+  const rawPayload = await response.json().catch(() => ({}));
   if (hosted && response.ok) {
     await applyHostedUsageResponse(rawPayload.usage);
   }
@@ -12256,6 +12271,31 @@ async function requestBackendAction({
     response,
     payload: hosted && response.ok ? rawPayload.result ?? {} : rawPayload
   };
+}
+
+// Returns a fresh response, or null when nothing is recoverable — in which case
+// the caller keeps the original 401 so the learner sees an authentication failure
+// rather than a confusing secondary error from the recovery attempt itself.
+async function resendWithFreshHostedToken({
+  settings,
+  requestEndpoint,
+  action,
+  units,
+  body,
+  idempotencyKey
+}) {
+  try {
+    const headers = await getMeteredBackendHeaders(settings, requestEndpoint, action, units);
+    headers["Idempotency-Key"] = idempotencyKey;
+    return await fetch(requestEndpoint, {
+      method: "POST",
+      headers,
+      body,
+      cache: "no-store"
+    });
+  } catch {
+    return null;
+  }
 }
 
 function normalizeHostedOperation(value) {

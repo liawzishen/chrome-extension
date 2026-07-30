@@ -45,6 +45,13 @@ class BillingService {
   // The synthesized event is stamped with the current time so it always wins over
   // stale projections, and it is not recorded in processedBillingEvents because
   // it is not a delivery.
+  //
+  // It must NOT advance lastStripeEventCreated. That watermark is shared by the
+  // charge, invoice, and dispute handlers, so moving it to "now" would make every
+  // genuinely older webhook still queued at Stripe look stale — and those are
+  // acknowledged 200 rather than retried, so the event would be lost for good.
+  // Re-reading the subscription cannot recover a dispute, because a dispute does
+  // not change subscription.status.
   async reconcileSubscription(subscription) {
     assertDomain(
       subscription && typeof subscription === "object",
@@ -60,7 +67,11 @@ class BillingService {
     };
     return this.store.transaction((state) => {
       try {
-        return { outcome: this.applySubscription(state, syntheticEvent, subscription) };
+        return {
+          outcome: this.applySubscription(state, syntheticEvent, subscription, {
+            preserveEventWatermark: true
+          })
+        };
       } catch (error) {
         const permanent = classifyPermanentFailure(error);
         if (!permanent) throw error;
@@ -229,7 +240,7 @@ class BillingService {
     return "checkout_linked";
   }
 
-  applySubscription(state, event, subscription) {
+  applySubscription(state, event, subscription, options = {}) {
     const subscriptionId = requireStripeId(subscription.id, "subscription id");
     const customerId = requireStripeId(subscription.customer, "customer");
     const namedAccountId = getMetadataAccountId(subscription);
@@ -324,7 +335,12 @@ class BillingService {
       revokedAt: isDeleted
         ? (isSameSubscription && existing.revokedAt) || nowIso
         : isSameSubscription ? existing.revokedAt || null : null,
-      lastStripeEventCreated: event.created,
+      // A reconciliation pass keeps whatever watermark real deliveries have set.
+      // It is authoritative about the subscription's fields, but it is not a
+      // delivery, so it must not let itself out-rank a webhook still in flight.
+      lastStripeEventCreated: options.preserveEventWatermark && Number.isFinite(existing?.lastStripeEventCreated)
+        ? existing.lastStripeEventCreated
+        : event.created,
       updatedAt: nowIso
     };
 

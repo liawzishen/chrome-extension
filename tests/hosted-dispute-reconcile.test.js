@@ -221,6 +221,37 @@ test("one unreadable subscription does not abort the reconciliation pass", async
   assert.equal(recovered, "active");
 });
 
+test("a dispute queued behind an outage still revokes after reconciliation runs", async () => {
+  // The order that loses money: the service is unreachable, Stripe queues the
+  // dispute, the reconciler runs first on recovery, and only then does the older
+  // dispute arrive. A reconciliation pass must not make that delivery look stale,
+  // because a stale outcome is acknowledged 200 and never retried, and re-reading
+  // the subscription cannot recover it: a dispute leaves status "active".
+  const store = await seedPaidAccount();
+  const service = billingService(store);
+  const disputeCreatedBeforeOutageEnded = Math.floor(NOW / 1000) - 3600;
+
+  await service.reconcileSubscription({
+    id: "sub_1",
+    customer: "cus_1",
+    status: "active",
+    cancel_at_period_end: false,
+    start_date: Math.floor(Date.parse("2026-07-01T00:00:00.000Z") / 1000),
+    current_period_start: Math.floor(Date.parse("2026-07-01T00:00:00.000Z") / 1000),
+    current_period_end: Math.floor(Date.parse("2026-08-01T00:00:00.000Z") / 1000),
+    items: { data: [{ price: { id: "price_month" } }] }
+  });
+
+  const queued = disputeEvent("charge.dispute.created", "evt_queued", "needs_response");
+  queued.created = disputeCreatedBeforeOutageEnded;
+  const result = await service.processVerifiedEvent(queued);
+
+  assert.equal(result.outcome, "entitlement_revoked_for_dispute", "the queued dispute must not be discarded as stale");
+  const entitlement = await entitlementFor(store);
+  assert.equal(entitlement.plan, "free");
+  assert.equal(entitlement.status, "disputed");
+});
+
 test("reconciliation is not recorded as a webhook delivery", async () => {
   const store = await seedPaidAccount({ status: "past_due" });
   const service = billingService(store);
