@@ -57,6 +57,7 @@ test("cost telemetry emits a content-free successful action record", async () =>
       provider: "openai",
       model: "test-model",
       operation: "notes_generation",
+      inputModality: "text",
       calls: 1,
       retries: 0,
       transportFailures: 0,
@@ -225,6 +226,56 @@ test("Gemini video cost is priced independently from the main provider", async (
   assert.equal(event.estimatedCostUsd, 0.00025);
   assert.equal(event.providerUsage[0].provider, "gemini");
   assert.equal(event.mediaDurationMs, 120_000);
+});
+
+test("Gemini tab audio uses its distinct audio-input rate", async () => {
+  const lines = [];
+  const telemetry = createCostTelemetry({
+    outputPath: "unused-in-test",
+    writeLine: (line) => lines.push(line),
+    prices: {
+      "gemini.media-model:input": 0.25,
+      "gemini.media-model:audio_input": 0.5,
+      "gemini.media-model:output": 1.5
+    }
+  });
+
+  await telemetry.runAction("transcript_chunk", {
+    chunk: { capturedDurationMs: 30_000 }
+  }, async () => {
+    telemetry.recordProviderResult("gemini", "media-model", "audio_transcription", {
+      usageMetadata: { promptTokenCount: 1_000_000, candidatesTokenCount: 100_000 }
+    });
+  });
+  await telemetry.flush();
+
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.costStatus, "configured");
+  assert.equal(event.estimatedCostUsd, 0.65);
+  assert.equal(event.providerUsage[0].operation, "audio_transcription");
+  assert.equal(event.providerUsage[0].inputModality, "audio");
+});
+
+test("audio cost is marked incomplete when only the text/video input rate is configured", async () => {
+  const lines = [];
+  const telemetry = createCostTelemetry({
+    outputPath: "unused-in-test",
+    writeLine: (line) => lines.push(line),
+    prices: {
+      "gemini.media-model:input": 0.25,
+      "gemini.media-model:output": 1.5
+    }
+  });
+  await telemetry.runAction("transcript_chunk", {}, async () => {
+    telemetry.recordProviderResult("gemini", "media-model", "audio_transcription", {
+      usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 100 }
+    });
+  });
+  await telemetry.flush();
+
+  const event = JSON.parse(lines[0]);
+  assert.equal(event.costStatus, "incomplete");
+  assert.equal(event.providerUsage[0].costStatus, "incomplete");
 });
 
 test("configured rates still apply to model ids that need sanitizing for usage labels", async () => {

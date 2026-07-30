@@ -147,12 +147,24 @@ test("the quiz service boundary rejects partial and ungrounded responses", async
     }),
     startSimulatedProgress: () => () => {},
     updateGenerationProgress: () => {},
-    HostedAccount: { ACTIONS: { QUIZ_BUILD: "quiz_build" } },
-    getMeteredBackendHeaders: async () => ({})
+    HostedAccount: { ACTIONS: { QUIZ_BUILD: "quiz_build" }, isHostedMode: () => false },
+    getMeteredBackendHeaders: async () => ({}),
+    // Local mode: hosted branches inside requestBackendAction stay unreached, but
+    // these have to exist because it reads them before deciding.
+    isHostedBackendRequested: () => false,
+    HOSTED_ACCOUNT_CONFIG: { enabled: false },
+    createHostedAccessError: (decision) => Object.assign(new Error(decision.code), decision),
+    queueHostedAccessDialog: () => {}
   };
   const harness = vm.runInNewContext(`(() => {
     ${sourceBetween("const STOP_WORDS = new Set([", "const state = {")}
     ${sourceBetween("function assertExactQuizQuestionCount(", "function generateLocalQuizArtifact(")}
+    ${/*
+        The real transport, not a stub. generateQuizWithBackend now delegates to
+        requestBackendAction, so stubbing it would leave the quiz boundary asserting
+        against a fake and silently stop covering the path it is named for.
+      */ ""}
+    ${sourceBetween("async function requestBackendAction({", "async function applyHostedUsageResponse(")}
     return { generateQuizWithBackend };
   })()`, context);
   const input = {

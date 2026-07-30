@@ -15,7 +15,16 @@ function createTemporaryDatabasePath() {
   const directory = mkdtempSync(join(tmpdir(), "neatmind-store-"));
   return {
     path: join(directory, "hosted.sqlite"),
-    cleanup: () => rmSync(directory, { recursive: true, force: true })
+    // Tolerant on purpose: if a test throws before closing its store, Windows keeps
+    // the database file locked and rmSync raises EPERM from the finally block,
+    // replacing the assertion error that actually explains the failure.
+    cleanup: () => {
+      try {
+        rmSync(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      } catch {
+        // A leaked temp directory is noise; a hidden failure cause is not.
+      }
+    }
   };
 }
 
@@ -132,6 +141,10 @@ test("a processed Stripe event stays deduplicated across a restart", async () =>
   const { path, cleanup } = createTemporaryDatabasePath();
   try {
     const config = { graceDays: 3, refundRevokesAccess: true, priceIds: { month: "price_m", year: "price_y" } };
+    // A real checkout.session.completed always has a persisted attempt behind it,
+    // because CheckoutService writes one before it ever calls Stripe. The projector
+    // now refuses a session it cannot match to that attempt, so seeding it is not
+    // test scaffolding — it is the contract.
     const event = {
       id: "evt_restart_1",
       type: "checkout.session.completed",
@@ -141,13 +154,33 @@ test("a processed Stripe event stays deduplicated across a restart", async () =>
           id: "cs_test_restart",
           client_reference_id: "account_events",
           customer: "cus_events",
-          subscription: "sub_events"
+          subscription: "sub_events",
+          metadata: {
+            checkout_attempt_id: "attempt_restart_1",
+            interval: "month",
+            price_id: "price_m"
+          }
         }
       }
     };
 
     const first = openStore(path);
     await first.createAccount({ id: "account_events" });
+    await first.transaction((state) => {
+      state.checkoutAttempts.set("attempt_restart_1", {
+        id: "attempt_restart_1",
+        accountId: "account_events",
+        idempotencyKey: "restart-checkout-key-0001",
+        interval: "month",
+        providerPriceId: "price_m",
+        providerSessionId: "cs_test_restart",
+        status: "open",
+        createdAt: new Date(NOW).toISOString(),
+        updatedAt: new Date(NOW).toISOString()
+      });
+      state.checkoutSessions.set("cs_test_restart", "attempt_restart_1");
+      state.activeCheckoutAccounts.set("account_events", "attempt_restart_1");
+    });
     const firstResult = await new BillingService({ store: first, config, now: () => NOW })
       .processVerifiedEvent(event);
     assert.equal(firstResult.duplicate, false);

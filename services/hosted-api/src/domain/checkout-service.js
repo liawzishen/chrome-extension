@@ -156,6 +156,7 @@ class CheckoutService {
     // a different key stays blocked for the provider idempotency window.
     const session = await this.billingAdapter.createCheckoutSession({
       account,
+      attemptId: attempt.id,
       interval: attempt.interval,
       idempotencyKey: attempt.providerIdempotencyKey
     });
@@ -164,11 +165,26 @@ class CheckoutService {
       requireCheckoutState(state);
       const current = state.checkoutAttempts.get(attempt.id);
       if (!current) return;
+      assertDomain(
+        !current.providerSessionId || current.providerSessionId === normalized.id,
+        "CHECKOUT_SESSION_MISMATCH",
+        "Stripe returned a different Checkout session for this persisted attempt.",
+        409
+      );
       current.providerSessionId = normalized.id;
+      state.checkoutSessions.set(normalized.id, current.id);
+      // A signed webhook can complete the persisted attempt while Stripe's
+      // create-session response is still in flight. Never let that older open
+      // response move the terminal state backwards.
+      if (current.status === "completed") {
+        if (state.activeCheckoutAccounts.get(current.accountId) === current.id) {
+          state.activeCheckoutAccounts.delete(current.accountId);
+        }
+        return;
+      }
       current.status = normalized.status === "complete" ? "completed" : "open";
       current.expiresAt = normalized.expiresAt;
       current.updatedAt = new Date(this.now()).toISOString();
-      state.checkoutSessions.set(normalized.id, current.id);
       if (
         current.status !== "open" &&
         state.activeCheckoutAccounts.get(current.accountId) === current.id

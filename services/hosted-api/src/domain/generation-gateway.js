@@ -32,7 +32,13 @@ class HostedGenerationGateway {
 
     try {
       const result = await input.validateResult(await input.run());
-      const committed = await this.usageService.commit(reservation.id, "OK");
+      // The reservation ID is the default opaque artifact/result-store key. A
+      // durable adapter may supply another bounded reference when committing.
+      const committed = await this.usageService.commit(
+        reservation.id,
+        "OK",
+        input.resultReference || reservation.id
+      );
       const usage = await this.usageService.getUsage(input.accountId);
       return {
         result,
@@ -50,7 +56,10 @@ class HostedGenerationGateway {
 
   async replayExisting(input, reservation) {
     if (reservation.state === "committed" && typeof input.loadCommittedResult === "function") {
-      const loaded = await input.loadCommittedResult(reservation.id);
+      const loaded = await input.loadCommittedResult(
+        reservation.resultReference || reservation.id,
+        reservation
+      );
       assertDomain(
         loaded !== undefined,
         "IDEMPOTENT_RESULT_UNAVAILABLE",

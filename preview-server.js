@@ -2,7 +2,7 @@ const http = require("http");
 const { createReadStream } = require("fs");
 const { extname, join } = require("path");
 
-const PORT = Number(process.env.PREVIEW_PORT || 8788);
+const PORT = readPreviewPort(process.env.PREVIEW_PORT);
 const ROOT = __dirname;
 const FILES = new Map([
   ["/", "popup.html"],
@@ -119,4 +119,13 @@ function setPreviewSecurityHeaders(response) {
     "Content-Security-Policy",
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' http://127.0.0.1:* http://localhost:* https:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
   );
+}
+
+function readPreviewPort(value) {
+  if (value === undefined || String(value).trim() === "") return 8788;
+  const port = Number(value);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error("PREVIEW_PORT must be an integer between 1 and 65535.");
+  }
+  return port;
 }

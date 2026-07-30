@@ -78,7 +78,9 @@ test("an opened dispute revokes Pro even when refunds are configured not to", as
 
   const after = await entitlementFor(store);
   assert.equal(after.plan, "free");
-  assert.equal(after.status, "billing_revoked");
+  // The specific terminal reason survives into the entitlement rather than
+  // collapsing to a generic revocation, so the UI can say why access stopped.
+  assert.equal(after.status, "disputed");
 });
 
 test("winning a dispute restores the access it revoked", async () => {

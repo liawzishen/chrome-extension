@@ -32,6 +32,7 @@ function createStripeBillingAdapter(config, dependencies = {}) {
     const interval = normalizeInterval(input?.interval);
     const account = input?.account;
     assertDomain(account?.id, "ACCOUNT_REQUIRED", "An authenticated account is required.", 401);
+    const attemptId = normalizeCheckoutAttemptId(input?.attemptId);
     await validatePriceCatalog();
     const priceId = config.priceIds[interval];
     const parameters = {
@@ -44,8 +45,10 @@ function createStripeBillingAdapter(config, dependencies = {}) {
       automatic_tax: { enabled: config.automaticTax },
       metadata: {
         account_id: account.id,
+        checkout_attempt_id: attemptId,
         plan: "student_pro",
-        interval
+        interval,
+        price_id: priceId
       },
       subscription_data: {
         metadata: {
@@ -193,6 +196,17 @@ function normalizeCheckoutSession(session) {
     status,
     expiresAt
   };
+}
+
+function normalizeCheckoutAttemptId(value) {
+  const attemptId = String(value || "").trim();
+  assertDomain(
+    /^[A-Za-z0-9_-]{8,160}$/.test(attemptId),
+    "CHECKOUT_ATTEMPT_REQUIRED",
+    "A persisted Checkout attempt is required before creating a Stripe session.",
+    500
+  );
+  return attemptId;
 }
 
 function extractInvoiceSubscriptionId(invoice) {

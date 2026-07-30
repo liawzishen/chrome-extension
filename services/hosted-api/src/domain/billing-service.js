@@ -189,7 +189,17 @@ class BillingService {
 
   applyCheckoutCompleted(state, session) {
     const sessionId = requireStripeId(session.id, "checkout session id");
-    const accountId = session.client_reference_id || getMetadataAccountId(session);
+    const referencedAccountId = typeof session.client_reference_id === "string"
+      ? session.client_reference_id.trim()
+      : "";
+    const metadataAccountId = getMetadataAccountId(session);
+    assertDomain(
+      !referencedAccountId || !metadataAccountId || referencedAccountId === metadataAccountId,
+      "CHECKOUT_ASSOCIATION_MISMATCH",
+      "Checkout session account references do not match.",
+      409
+    );
+    const accountId = referencedAccountId || metadataAccountId;
     assertDomain(
       typeof accountId === "string" && state.accounts.has(accountId),
       "UNKNOWN_BILLING_ACCOUNT",
@@ -198,6 +208,12 @@ class BillingService {
       // A checkout session carries its account reference inline, so a bad or
       // absent one will never resolve on a retry.
       { permanent: true }
+    );
+    const attempt = resolveCheckoutAttempt(
+      state,
+      session,
+      sessionId,
+      accountId
     );
 
     const customerId = requireStripeId(session.customer, "customer");
@@ -209,7 +225,7 @@ class BillingService {
     if (typeof session.subscription === "string" && session.subscription) {
       state.subscriptionAccounts.set(session.subscription, accountId);
     }
-    completeCheckoutAttempt(state, sessionId, accountId, this.now());
+    completeCheckoutAttempt(state, attempt, sessionId, this.now());
     return "checkout_linked";
   }
 
@@ -249,13 +265,16 @@ class BillingService {
     const period = getSubscriptionPeriod(subscription, nowIso);
     const isDeleted = event.type === "customer.subscription.deleted";
     const isSameSubscription = existing?.stripeSubscriptionId === subscriptionId;
+    const cancelAtPeriodEnd = Boolean(subscription.cancel_at_period_end);
+    const providerStatus = isDeleted
+      ? "canceled"
+      : String(subscription.status || "").toLowerCase();
     const suppliedStart = subscription.start_date ?? subscription.created;
     assertDomain(
       isSameSubscription || (Number.isFinite(suppliedStart) && suppliedStart > 0),
       "INVALID_STRIPE_EVENT",
       "A new Stripe subscription is missing its start timestamp."
     );
-    const status = isDeleted ? "canceled" : String(subscription.status || "");
     const createdAt = asIsoFromUnix(
       suppliedStart,
       existing?.allowanceAnchorAt || nowIso
@@ -276,8 +295,14 @@ class BillingService {
       stripePriceId: priceId,
       plan: "student_pro",
       billingInterval,
-      status,
-      cancelAtPeriodEnd: Boolean(subscription.cancel_at_period_end),
+      providerStatus,
+      status: isSameSubscription && isTerminalSubscriptionStatus(existing.status)
+        ? existing.status
+        : projectSubscriptionStatus(providerStatus, {
+            cancelAtPeriodEnd,
+            isDeleted
+          }),
+      cancelAtPeriodEnd,
       currentPeriodStart: period.currentPeriodStart,
       currentPeriodEnd: period.currentPeriodEnd,
       effectiveStartAt: isSameSubscription
@@ -290,14 +315,14 @@ class BillingService {
       // invoice.payment_failed to open the window. Stamp a dated deadline here
       // so the grace period is real and bounded, and never extend one already
       // stamped for this same subscription.
-      graceEndsAt: !isDeleted && status.toLowerCase() === "past_due"
+      graceEndsAt: !isDeleted && providerStatus === "past_due"
         ? (
             (isSameSubscription && existing.graceEndsAt) ||
             this.graceDeadlineIso(Math.min(now, event.created * 1000))
           )
         : null,
       revokedAt: isDeleted
-        ? nowIso
+        ? (isSameSubscription && existing.revokedAt) || nowIso
         : isSameSubscription ? existing.revokedAt || null : null,
       lastStripeEventCreated: event.created,
       updatedAt: nowIso
@@ -347,26 +372,31 @@ class BillingService {
     const now = this.now();
     existing.lastStripeEventCreated = event.created;
     existing.updatedAt = new Date(now).toISOString();
-    if (["canceled", "expired", "refunded", "revoked", "disputed"].includes(existing.status)) {
+    if (isTerminalSubscriptionStatus(existing.status)) {
       this.refreshEntitlement(state, accountId, existing);
       return "terminal_subscription_unchanged";
     }
     if (failed) {
+      existing.providerStatus = "past_due";
       existing.status = "past_due";
       existing.graceEndsAt = existing.graceEndsAt ||
         this.graceDeadlineIso(Math.min(now, event.created * 1000));
       this.refreshEntitlement(state, accountId, existing);
       return "payment_grace_started";
     }
-    if (["past_due", "unpaid", "incomplete"].includes(existing.status)) {
-      existing.status = "active";
+    const periodAdvanced = reconcilePaidInvoicePeriod(existing, invoice, subscriptionId);
+    if (["past_due", "unpaid", "incomplete", "grace_period"].includes(existing.status)) {
+      existing.providerStatus = "active";
+      existing.status = existing.cancelAtPeriodEnd
+        ? "canceled_at_period_end"
+        : "active";
       existing.graceEndsAt = null;
       existing.revokedAt = null;
       this.refreshEntitlement(state, accountId, existing);
       return "payment_restored";
     }
     this.refreshEntitlement(state, accountId, existing);
-    return "payment_confirmed";
+    return periodAdvanced ? "renewal_period_advanced" : "payment_confirmed";
   }
 
   applyRefund(state, event, charge, resolvedSubscriptionId) {
@@ -399,13 +429,13 @@ class BillingService {
     }
 
     const nowIso = new Date(this.now()).toISOString();
-    existing.status = "revoked";
+    existing.status = "refunded";
     existing.revokedAt = nowIso;
     existing.graceEndsAt = null;
     existing.lastStripeEventCreated = event.created;
     existing.updatedAt = nowIso;
     this.refreshEntitlement(state, accountId, existing);
-    return "entitlement_revoked";
+    return "entitlement_refunded";
   }
 
   // A dispute withdraws the funds immediately, so unlike a refund this is not
@@ -516,6 +546,11 @@ function getMetadataAccountId(object) {
   return typeof accountId === "string" && accountId.trim() ? accountId.trim() : null;
 }
 
+function getMetadataCheckoutAttemptId(object) {
+  const attemptId = object?.metadata?.checkout_attempt_id;
+  return typeof attemptId === "string" && attemptId.trim() ? attemptId.trim() : null;
+}
+
 function getSubscriptionPeriod(subscription, fallback) {
   const firstItem = subscription?.items?.data?.[0] || null;
   const start = subscription?.current_period_start ?? firstItem?.current_period_start;
@@ -524,6 +559,96 @@ function getSubscriptionPeriod(subscription, fallback) {
     currentPeriodStart: asIsoFromUnix(start, fallback),
     currentPeriodEnd: asIsoFromUnix(end, null)
   };
+}
+
+function projectSubscriptionStatus(providerStatus, options = {}) {
+  if (
+    options.isDeleted ||
+    providerStatus === "canceled" ||
+    providerStatus === "incomplete_expired"
+  ) {
+    return "expired";
+  }
+  if (
+    options.cancelAtPeriodEnd &&
+    (providerStatus === "active" || providerStatus === "trialing")
+  ) {
+    return "canceled_at_period_end";
+  }
+  return providerStatus || "incomplete";
+}
+
+function isTerminalSubscriptionStatus(status) {
+  return [
+    "canceled",
+    "expired",
+    "incomplete_expired",
+    "refunded",
+    "revoked",
+    "disputed"
+  ].includes(String(status || "").toLowerCase());
+}
+
+function reconcilePaidInvoicePeriod(subscription, invoice, subscriptionId) {
+  const candidate = getInvoiceSubscriptionPeriod(invoice, subscriptionId);
+  if (!candidate) return false;
+
+  const currentEnd = Date.parse(subscription.currentPeriodEnd || "");
+  const candidateEnd = Date.parse(candidate.currentPeriodEnd);
+  if (Number.isFinite(currentEnd) && candidateEnd <= currentEnd) return false;
+
+  subscription.currentPeriodStart = candidate.currentPeriodStart;
+  subscription.currentPeriodEnd = candidate.currentPeriodEnd;
+  return true;
+}
+
+function getInvoiceSubscriptionPeriod(invoice, subscriptionId) {
+  const candidates = [];
+  addUnixPeriodCandidate(candidates, invoice?.period_start, invoice?.period_end);
+
+  const lines = Array.isArray(invoice?.lines?.data) ? invoice.lines.data : [];
+  for (const line of lines) {
+    const lineSubscriptionId = getInvoiceLineSubscriptionId(line);
+    if (lineSubscriptionId && lineSubscriptionId !== subscriptionId) continue;
+    addUnixPeriodCandidate(candidates, line?.period?.start, line?.period?.end);
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((left, right) => right.end - left.end);
+  const selected = candidates[0];
+  return {
+    currentPeriodStart: new Date(selected.start * 1000).toISOString(),
+    currentPeriodEnd: new Date(selected.end * 1000).toISOString()
+  };
+}
+
+function addUnixPeriodCandidate(candidates, startValue, endValue) {
+  const start = Number(startValue);
+  const end = Number(endValue);
+  if (
+    Number.isFinite(start) &&
+    start > 0 &&
+    Number.isFinite(end) &&
+    end > start
+  ) {
+    candidates.push({ start, end });
+  }
+}
+
+function getInvoiceLineSubscriptionId(line) {
+  const candidates = [
+    line?.subscription,
+    line?.parent?.subscription_item_details?.subscription,
+    line?.parent?.subscription_details?.subscription,
+    line?.metadata?.subscription_id
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+    if (candidate && typeof candidate === "object" && typeof candidate.id === "string") {
+      return candidate.id.trim();
+    }
+  }
+  return null;
 }
 
 function subscriptionAnchorTimestamp(subscription) {
@@ -579,20 +704,69 @@ function getDisputeSubscriptionId(dispute) {
   return null;
 }
 
-function completeCheckoutAttempt(state, sessionId, accountId, now) {
-  if (
-    !(state.checkoutSessions instanceof Map) ||
-    !(state.checkoutAttempts instanceof Map)
-  ) {
-    return;
+function resolveCheckoutAttempt(state, session, sessionId, accountId) {
+  assertDomain(
+    state.checkoutSessions instanceof Map &&
+      state.checkoutAttempts instanceof Map &&
+      state.activeCheckoutAccounts instanceof Map,
+    "CHECKOUT_STORE_UNAVAILABLE",
+    "The hosted Checkout association store is not configured.",
+    500
+  );
+  const mappedAttemptId = state.checkoutSessions.get(sessionId) || null;
+  const metadataAttemptId = getMetadataCheckoutAttemptId(session);
+  assertDomain(
+    mappedAttemptId || metadataAttemptId,
+    "CHECKOUT_ATTEMPT_UNMATCHED",
+    "Checkout session does not match a persisted Checkout attempt.",
+    409
+  );
+  assertDomain(
+    !mappedAttemptId || !metadataAttemptId || mappedAttemptId === metadataAttemptId,
+    "CHECKOUT_ASSOCIATION_MISMATCH",
+    "Checkout session associations do not match.",
+    409
+  );
+  const attemptId = mappedAttemptId || metadataAttemptId;
+  const attempt = state.checkoutAttempts.get(attemptId);
+  assertDomain(
+    attempt && attempt.accountId === accountId,
+    "CHECKOUT_ASSOCIATION_MISMATCH",
+    "Checkout session does not match the persisted account attempt.",
+    409
+  );
+  assertDomain(
+    !attempt.providerSessionId || attempt.providerSessionId === sessionId,
+    "CHECKOUT_ASSOCIATION_MISMATCH",
+    "Checkout session does not match the provider session on the persisted attempt.",
+    409
+  );
+  const interval = String(session?.metadata?.interval || "").trim().toLowerCase();
+  const priceId = String(session?.metadata?.price_id || "").trim();
+  assertDomain(
+    interval === attempt.interval &&
+      priceId === attempt.providerPriceId,
+    "CHECKOUT_ASSOCIATION_MISMATCH",
+    "Checkout session does not match the persisted billing interval.",
+    409
+  );
+  assertDomain(
+    ["creating", "open", "completed"].includes(attempt.status),
+    "CHECKOUT_ATTEMPT_STALE",
+    "Checkout session references an attempt that is no longer pending.",
+    409
+  );
+  return attempt;
+}
+
+function completeCheckoutAttempt(state, attempt, sessionId, now) {
+  attempt.providerSessionId = sessionId;
+  attempt.status = "completed";
+  attempt.updatedAt = new Date(now).toISOString();
+  state.checkoutSessions.set(sessionId, attempt.id);
+  if (state.activeCheckoutAccounts.get(attempt.accountId) === attempt.id) {
+    state.activeCheckoutAccounts.delete(attempt.accountId);
   }
-  const attemptId = state.checkoutSessions.get(String(sessionId || ""));
-  const attempt = attemptId ? state.checkoutAttempts.get(attemptId) : null;
-  if (attempt && attempt.accountId === accountId) {
-    attempt.status = "completed";
-    attempt.updatedAt = new Date(now).toISOString();
-  }
-  clearActiveCheckout(state, accountId, new Date(now).toISOString());
 }
 
 function clearActiveCheckout(state, accountId, nowIso) {

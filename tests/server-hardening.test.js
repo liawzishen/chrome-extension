@@ -15,6 +15,7 @@ function functionSource(startMarker, endMarker) {
 
 process.env.BACKEND_ACCESS_TOKEN = "test-token-that-is-long-enough-123456";
 process.env.ALLOWED_EXTENSION_ORIGINS = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+process.env.ALLOW_TOKENLESS_EXTENSION = "true";
 
 const {
   assertAuthorizedRequest,

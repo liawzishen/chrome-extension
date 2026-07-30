@@ -130,6 +130,7 @@ test("refreshing the hosted account reads the entitlement from the usage respons
       buildApiUrl: (_config, pathname) => `https://api.example.test${pathname}`,
       normalizeSnapshot: (snapshot) => snapshot
     },
+    isHostedBackendRequested: (settings) => settings?.backendMode === "hosted",
     state: { hostedAccountSnapshot: null, hostedAccountRefresh: null, hostedAccessToken: "" },
     createHostedAccessError: (decision) => Object.assign(new Error(decision.code), decision),
     backendRequestError: (_response, _payload, fallback) => new Error(fallback),
@@ -194,21 +195,232 @@ test("the journey summary batches its three independent storage reads", () => {
   );
 });
 
-test("quiz generation calls the metered header helper directly like its six siblings", () => {
+test("all seven hosted-capable generation paths use the versioned transport adapter", () => {
+  const adapterCalls = source
+    .slice(0, source.indexOf("async function requestBackendAction("))
+    .match(/requestBackendAction\(\{/g) || [];
+  assert.equal(adapterCalls.length, 7);
   const quizBackend = sourceBetween("async function generateQuizWithBackend(", "function generateLocalQuizArtifact(");
-  assert.doesNotMatch(quizBackend, /typeof getMeteredBackendHeaders/);
-  assert.doesNotMatch(quizBackend, /typeof HostedAccount/);
-  assert.doesNotMatch(
-    quizBackend,
-    /getBackendHeaders\(settings, endpoint\)/,
-    "the dead fallback would send an unmetered, unauthenticated request"
-  );
   assert.match(
     quizBackend,
-    /headers: await getMeteredBackendHeaders\(\s*settings,\s*endpoint,\s*HostedAccount\?\.ACTIONS\.QUIZ_BUILD\s*\),/
+    /requestBackendAction\(\{[\s\S]*?routeName,[\s\S]*?action: HostedAccount\?\.ACTIONS\.QUIZ_BUILD/
   );
 });
 
+test("persisted hosted mode never rolls back to a custom endpoint when the feature is unavailable", () => {
+  const harness = vm.runInNewContext(`(() => {
+    ${sourceBetween("function getConfiguredApiEndpoint(settings)", "function getConfiguredCustomApiEndpoint(settings)")}
+    return { getConfiguredApiEndpoint };
+  })()`, {
+    HostedAccount: {
+      isHostedRequested: (settings) => settings?.backendMode === "hosted",
+      buildApiUrl: () => "https://api.example.test/v1/generate"
+    },
+    hostedAccountConfig: { active: false },
+    HOSTED_ACCOUNT_CONFIG: { enabled: false },
+    getConfiguredCustomApiEndpoint: () => "https://custom.example.test/api/study-session"
+  });
+
+  assert.equal(harness.getConfiguredApiEndpoint({ backendMode: "hosted" }), "");
+  assert.equal(
+    harness.getConfiguredApiEndpoint({ backendMode: "custom" }),
+    "https://custom.example.test/api/study-session"
+  );
+});
+
+test("hosted transport wraps v1 generation, retries with one key, unwraps the result, and applies usage", async () => {
+  const requests = [];
+  let attempts = 0;
+  const state = {
+    hostedAccountSnapshot: {
+      account: { id: "account-1", email: "learner@example.test" },
+      entitlement: { plan: "free" },
+      allowances: []
+    },
+    hostedAccessToken: "hosted-access-token"
+  };
+  const usage = {
+    entitlement: { plan: "free", status: "free" },
+    policyVersion: "free.v1",
+    allowances: [{ action: "quiz_build", limit: 5, remaining: 4 }]
+  };
+  const context = {
+    HOSTED_ACCOUNT_CONFIG: { enabled: true },
+    HOSTED_SESSION_STORAGE_KEY: "hosted-session",
+    STORAGE_KEYS: { settings: "settings" },
+    HostedAccount: {
+      isHostedRequested: (settings) => settings?.backendMode === "hosted",
+      isHostedMode: (settings) => settings?.backendMode === "hosted",
+      buildApiUrl: (_config, pathname) => `https://api.example.test${pathname}`,
+      normalizeSnapshot: (snapshot) => snapshot
+    },
+    isHostedBackendRequested: (settings) => settings?.backendMode === "hosted",
+    state,
+    crypto: { randomUUID: () => "00000000-0000-4000-8000-000000000001" },
+    fetch: async (url, options) => {
+      requests.push({ url, options });
+      attempts += 1;
+      if (attempts === 1) throw new Error("response lost");
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ result: { quizId: "quiz-1" }, usage })
+      };
+    },
+    getMeteredBackendHeaders: async () => ({
+      "Content-Type": "application/json",
+      Authorization: "Bearer hosted-access-token"
+    }),
+    createHostedAccessError: (decision) => Object.assign(new Error(decision.code), decision),
+    queueHostedAccessDialog: () => {},
+    getStorage: async () => ({ backendMode: "hosted" }),
+    renderHostedAccountUi: () => {},
+    chrome: { storage: { session: { remove: (_key, callback) => callback() } } },
+    Date,
+    Math
+  };
+  const harness = vm.runInNewContext(`(() => {
+    ${sourceBetween("async function requestBackendAction(", "async function getMeteredBackendHeaders(")}
+    return { requestBackendAction };
+  })()`, context);
+
+  const outcome = await harness.requestBackendAction({
+    settings: { backendMode: "hosted" },
+    endpoint: "https://custom.example.test/api/recovery-quiz",
+    routeName: "recovery-quiz",
+    action: "quiz_build",
+    input: { noteId: "note-1" }
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].url, "https://api.example.test/v1/generate");
+  assert.equal(requests[0].options.headers["Idempotency-Key"], requests[1].options.headers["Idempotency-Key"]);
+  assert.deepEqual(
+    JSON.parse(requests[0].options.body),
+    { operation: "recovery_quiz", input: { noteId: "note-1" } }
+  );
+  assert.equal(outcome.payload.quizId, "quiz-1");
+  assert.equal(state.hostedAccountSnapshot.policyVersion, "free.v1");
+  assert.equal(state.hostedAccountSnapshot.allowances[0].remaining, 4);
+});
+
+test("hosted access tokens require a finite future expiry", () => {
+  const harness = vm.runInNewContext(`(() => {
+    ${sourceBetween("function normalizeHostedAccessToken(value, expiresAt)", "async function requestBackendAction(")}
+    return { normalizeHostedAccessToken };
+  })()`, { Date });
+  const token = "hosted-session-access-token";
+  assert.equal(harness.normalizeHostedAccessToken(token), "");
+  assert.equal(harness.normalizeHostedAccessToken(token, "not-a-date"), "");
+  assert.equal(
+    harness.normalizeHostedAccessToken(token, new Date(Date.now() + 10_000).toISOString()),
+    ""
+  );
+  assert.equal(
+    harness.normalizeHostedAccessToken(token, new Date(Date.now() + 3_600_000).toISOString()),
+    token
+  );
+});
+
+test("hosted dialog chooses sign-in, upgrade, retry, or BYOB-only actions by account state", () => {
+  const button = {
+    dataset: {},
+    textContent: "",
+    hidden: false,
+    classList: {
+      toggle(_name, hidden) {
+        button.hidden = hidden;
+      }
+    }
+  };
+  const elements = {
+    hostedAllowanceDialog: {
+      open: false,
+      showModal() {
+        this.open = true;
+      }
+    },
+    hostedAllowanceDialogTitle: { textContent: "" },
+    hostedAllowanceDialogMessage: { textContent: "" },
+    hostedAllowanceDialogReset: {
+      textContent: "",
+      classList: { toggle() {} }
+    },
+    hostedUpgradeButton: button
+  };
+  const context = {
+    hostedAccountConfig: { active: true },
+    elements,
+    state: { hostedAccountSnapshot: null },
+    HostedAccount: {
+      ACTION_LABELS: { quiz_build: "quiz builds" },
+      resetLabel: () => "",
+      planLabel: (snapshot) => snapshot?.entitlement?.plan === "student_pro" ? "Student Pro" : "Free"
+    },
+    safeHostedAccountMessage: (error) => error.message
+  };
+  const harness = vm.runInNewContext(`(() => {
+    ${sourceBetween("function showHostedAccessDialog(error)", "async function handleHostedDialogPrimaryAction(")}
+    return { showHostedAccessDialog };
+  })()`, context);
+
+  harness.showHostedAccessDialog({ code: "HOSTED_AUTH_REQUIRED", message: "Sign in." });
+  assert.equal(button.dataset.hostedAction, "account");
+  assert.equal(button.textContent, "Sign in");
+  assert.equal(button.hidden, false);
+
+  context.state.hostedAccountSnapshot = { entitlement: { plan: "free" } };
+  harness.showHostedAccessDialog({
+    code: "ALLOWANCE_EXHAUSTED",
+    action: "quiz_build",
+    message: "No quiz builds remain."
+  });
+  assert.equal(button.dataset.hostedAction, "pricing");
+  // The button starts a purchase now rather than opening a page, so it must state
+  // the exact charge next to the action.
+  assert.equal(button.textContent, "Student Pro — $4.99 per month");
+  assert.equal(button.hidden, false);
+
+  context.state.hostedAccountSnapshot = { entitlement: { plan: "student_pro" } };
+  harness.showHostedAccessDialog({
+    code: "ALLOWANCE_EXHAUSTED",
+    action: "quiz_build",
+    message: "No quiz builds remain."
+  });
+  assert.equal(button.dataset.hostedAction, "");
+  assert.equal(button.hidden, true, "an exhausted Pro account must not be upsold to the same plan");
+
+  harness.showHostedAccessDialog({
+    code: "HOSTED_ENTITLEMENT_UNAVAILABLE",
+    message: "Usage could not be refreshed."
+  });
+  assert.equal(button.dataset.hostedAction, "retry");
+  assert.equal(button.textContent, "Retry usage check");
+  assert.equal(button.hidden, false);
+});
+
+test("allowance copy covers classification, Visual Tutor, multi-source, and requested video time", () => {
+  const html = fs.readFileSync(path.join(root, "popup.html"), "utf8");
+  assert.match(html, /id="classificationHostedAllowanceNotice"/);
+  assert.match(source, /classificationHostedAllowanceNotice,\s*HostedAccount\?\.ACTIONS\.CLASSIFICATION_BATCH/);
+  assert.match(source, /createHostedActionNotice\(HostedAccount\?\.ACTIONS\.VISUAL_FOLLOWUP\)/);
+  assert.match(source, /multiSourceMeteringAction\(state\.hostedAccountSnapshot\)/);
+  assert.match(source, /renderHostedVideoAllowanceNotice\(requestedMs\)/);
+});
+
+test("downgrade cannot gate existing artifacts, Journey evidence, or standard export", () => {
+  const readPaths = [
+    sourceBetween("function openPinnedArtifact()", "function updatePinnedArtifactControl()"),
+    sourceBetween("async function openJourneyArtifact(", "async function handleBuildChapterLesson("),
+    sourceBetween("async function handleOpenExport()", "function handleExportDocument()")
+  ];
+  for (const pathSource of readPaths) {
+    assert.doesNotMatch(pathSource, /HostedAccount|hostedAccount|entitlement|allowance/i);
+  }
+});
+
+// Replaces the old "nothing writes this key yet" assertion: a writer now exists,
+// so the contract worth pinning is which store each credential lands in.
 test("the hosted session writer splits credential lifetimes between session and disk", () => {
   const declaration = sourceBetween("const DEFAULT_API_ENDPOINT =", "const HOSTED_ACCOUNT_CONFIG =");
   assert.match(declaration, /HOSTED_SESSION_STORAGE_KEY/);

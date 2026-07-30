@@ -1,9 +1,15 @@
 const { createHash, randomUUID } = require("crypto");
 const { assertDomain, HostedDomainError } = require("./errors.js");
 const {
+  createCommittedTombstone,
+  idempotencyIndex
+} = require("./idempotency.js");
+const {
   ACTIONS,
   getAllowanceWindow,
   getPolicyForEntitlement,
+  isValidUsageUnits,
+  resolveAllowance,
   resolveEntitlement
 } = require("./policy.js");
 
@@ -60,10 +66,11 @@ class UsageService {
       const subscription = state.subscriptions.get(account.id) || null;
       const entitlement = resolveEntitlement(subscription, now, { graceMs: this.graceMs });
       const policy = getPolicyForEntitlement(entitlement);
-      const allowances = Object.entries(policy.allowances).map(([action, definition]) => {
+      const allowances = Object.keys(policy.allowances).map((action) => {
+        const { bucketAction, definition } = resolveAllowance(policy, action);
         const period = getAllowanceWindow(policy, action, now, subscription);
-        const totals = countUsage(state, account.id, action, period.key);
-        return formatAllowance(action, definition, period, totals);
+        const totals = countUsage(state, account.id, bucketAction, period.key);
+        return formatAllowance(action, definition, period, totals, bucketAction);
       });
       return { plan: policy.plan, policyVersion: policy.version, entitlement, allowances };
     });
@@ -79,8 +86,13 @@ class UsageService {
       const account = requireActiveAccount(state, accountId);
       const now = this.now();
       this.maintain(state, account.id, now);
-      const idempotencyIndex = `${account.id}:${idempotencyKey}`;
-      const existingId = state.idempotency.get(idempotencyIndex);
+      const indexKey = idempotencyIndex(account.id, idempotencyKey);
+      const committed = state.committedIdempotency.get(indexKey);
+      if (committed) {
+        assertDomain(committed.requestDigest === digest, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for different work.", 409);
+        return { ...structuredClone(committed), idempotentReplay: true };
+      }
+      const existingId = state.idempotency.get(indexKey);
       const existing = existingId ? state.reservations.get(existingId) : undefined;
       if (existing) {
         assertDomain(existing.requestDigest === digest, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used for different work.", 409);
@@ -90,20 +102,25 @@ class UsageService {
           return { ...structuredClone(existing), idempotentReplay: true };
         }
       } else if (existingId) {
-        state.idempotency.delete(idempotencyIndex);
+        state.idempotency.delete(indexKey);
       }
 
       const subscription = state.subscriptions.get(account.id) || null;
       const entitlement = resolveEntitlement(subscription, now, { graceMs: this.graceMs });
       const policy = getPolicyForEntitlement(entitlement);
+      const requestedByBucket = new Map();
       const reservedItems = items.map((item) => {
-        const definition = policy.allowances[item.action];
-        assertDomain(definition, "UNKNOWN_ACTION", "The requested hosted action is not recognized.", 400);
+        const { bucketAction, definition } = resolveAllowance(policy, item.action);
         const period = getAllowanceWindow(policy, item.action, now, subscription);
-        const totals = countUsage(state, account.id, item.action, period.key);
+        const totals = countUsage(state, account.id, bucketAction, period.key);
+        const requestBucketKey = bucketKey(bucketAction, period.key);
+        const requestedInReservation = requestedByBucket.get(requestBucketKey) || 0;
         const remaining = definition.limit === null
           ? null
-          : Math.max(0, definition.limit - totals.reserved - totals.committed);
+          : Math.max(
+            0,
+            definition.limit - totals.reserved - totals.committed - requestedInReservation
+          );
         if (remaining !== null && item.units > remaining) {
           throw new HostedDomainError(
             "ALLOWANCE_EXHAUSTED",
@@ -117,8 +134,10 @@ class UsageService {
             }
           );
         }
+        requestedByBucket.set(requestBucketKey, requestedInReservation + item.units);
         return {
           action: item.action,
+          bucketAction,
           unit: definition.unit,
           units: item.units,
           limit: definition.limit,
@@ -141,30 +160,34 @@ class UsageService {
         expiresAt: new Date(now + this.reservationTtlMs).toISOString(),
         committedAt: null,
         releasedAt: null,
-        resultCode: null
+        resultCode: null,
+        resultReference: null
       };
       state.reservations.set(reservation.id, reservation);
-      state.idempotency.set(idempotencyIndex, reservation.id);
+      state.idempotency.set(indexKey, reservation.id);
       state.activeReservations.set(reservation.id, now + this.reservationTtlMs);
       applyTotals(state, reservation, "reserved", 1);
       return { ...structuredClone(reservation), idempotentReplay: false };
     });
   }
 
-  async commit(reservationId, resultCode = "OK") {
-    return this.transition(reservationId, "committed", resultCode);
+  async commit(reservationId, resultCode = "OK", resultReference = null) {
+    return this.transition(reservationId, "committed", resultCode, resultReference);
   }
 
   async release(reservationId, resultCode = "ACTION_FAILED") {
     return this.transition(reservationId, "released", resultCode);
   }
 
-  async transition(reservationId, targetState, resultCode) {
+  async transition(reservationId, targetState, resultCode, resultReference = null) {
     const result = await this.store.transaction((state) => {
       ensureIndexes(state);
       const reservation = state.reservations.get(String(reservationId || ""));
       assertDomain(reservation, "RESERVATION_NOT_FOUND", "The usage reservation was not found.", 404);
-      if (reservation.state === targetState) return { ...structuredClone(reservation), idempotentReplay: true };
+      if (reservation.state === targetState) {
+        if (targetState === "committed") rememberCommittedReservation(state, reservation);
+        return { ...structuredClone(reservation), idempotentReplay: true };
+      }
       assertDomain(reservation.state === "reserved", "RESERVATION_FINALIZED", "The usage reservation has already been finalized.", 409);
       const now = this.now();
       if (Date.parse(reservation.expiresAt) <= now && targetState === "committed") {
@@ -176,8 +199,12 @@ class UsageService {
       }
       reservation.state = targetState;
       reservation.resultCode = normalizeResultCode(resultCode);
-      if (targetState === "committed") reservation.committedAt = new Date(now).toISOString();
-      else reservation.releasedAt = new Date(now).toISOString();
+      if (targetState === "committed") {
+        reservation.committedAt = new Date(now).toISOString();
+        reservation.resultReference = normalizeResultReference(resultReference, reservation.id);
+      } else {
+        reservation.releasedAt = new Date(now).toISOString();
+      }
       finalizeIndexes(state, reservation, now);
       return { ...structuredClone(reservation), idempotentReplay: false };
     });
@@ -199,12 +226,14 @@ function normalizeItems(value) {
     const action = String(rawItem?.action || "").toLowerCase();
     assertDomain(ALLOWED_ACTIONS.has(action), "UNKNOWN_ACTION", "The requested hosted action is not recognized.", 400);
     const units = Number(rawItem?.units);
-    assertDomain(Number.isSafeInteger(units) && units > 0 && units <= 12 * 60 * 60 * 1000, "INVALID_USAGE_UNITS", "Usage units must be a positive bounded integer.", 400);
+    assertValidUsageUnits(action, units);
     combined.set(action, (combined.get(action) || 0) + units);
   }
-  return [...combined.entries()]
+  const normalized = [...combined.entries()]
     .map(([action, units]) => ({ action, units }))
     .sort((left, right) => left.action.localeCompare(right.action));
+  for (const item of normalized) assertValidUsageUnits(item.action, item.units);
+  return normalized;
 }
 
 function normalizeIdempotencyKey(value) {
@@ -245,26 +274,35 @@ function requireActiveAccount(state, accountId) {
 function ensureIndexes(state) {
   if (state.usageTotals instanceof Map
     && state.activeReservations instanceof Map
-    && state.finalizedReservations instanceof Map) {
+    && state.finalizedReservations instanceof Map
+    && state.committedIdempotency instanceof Map) {
     return;
   }
   state.usageTotals = new Map();
   state.activeReservations = new Map();
   state.finalizedReservations = new Map();
+  // Never discard a compact committed authority merely because another
+  // derived index needs rebuilding.
+  state.committedIdempotency = state.committedIdempotency instanceof Map
+    ? state.committedIdempotency
+    : new Map();
   for (const reservation of state.reservations.values()) {
     if (reservation.state === "reserved") {
       state.activeReservations.set(reservation.id, Date.parse(reservation.expiresAt));
       applyTotals(state, reservation, "reserved", 1);
       continue;
     }
-    if (reservation.state === "committed") applyTotals(state, reservation, "committed", 1);
+    if (reservation.state === "committed") {
+      applyTotals(state, reservation, "committed", 1);
+      rememberCommittedReservation(state, reservation);
+    }
     const finalizedAt = Date.parse(reservation.committedAt || reservation.releasedAt || reservation.createdAt);
     state.finalizedReservations.set(reservation.id, Number.isFinite(finalizedAt) ? finalizedAt : 0);
   }
 }
 
 function bucketKey(action, periodKey) {
-  return `${action} ${periodKey}`;
+  return `${action}\u0000${periodKey}`;
 }
 
 function applyTotals(state, reservation, field, sign) {
@@ -275,7 +313,7 @@ function applyTotals(state, reservation, field, sign) {
     state.usageTotals.set(reservation.accountId, buckets);
   }
   for (const item of reservation.items) {
-    const key = bucketKey(item.action, item.periodKey);
+    const key = bucketKey(item.bucketAction || item.action, item.periodKey);
     let bucket = buckets.get(key);
     if (!bucket) {
       if (sign < 0) continue;
@@ -291,7 +329,10 @@ function applyTotals(state, reservation, field, sign) {
 function finalizeIndexes(state, reservation, now) {
   state.activeReservations.delete(reservation.id);
   applyTotals(state, reservation, "reserved", -1);
-  if (reservation.state === "committed") applyTotals(state, reservation, "committed", 1);
+  if (reservation.state === "committed") {
+    applyTotals(state, reservation, "committed", 1);
+    rememberCommittedReservation(state, reservation);
+  }
   state.finalizedReservations.set(reservation.id, now);
 }
 
@@ -310,8 +351,8 @@ function expireReservations(state, now) {
   }
 }
 
-// Finalized reservations only exist to answer idempotent replays; their units already live in
-// usageTotals, so dropping them past the retention window cannot lose accounted usage.
+// Detailed finalized reservations are bounded, while compact committed tombstones survive
+// pruning so a delayed retry can never run provider work or consume usage twice.
 function pruneFinalizedReservations(state, now, retentionMs, maxRetained) {
   for (const [reservationId, finalizedAt] of state.finalizedReservations) {
     if (state.finalizedReservations.size <= maxRetained && finalizedAt + retentionMs > now) break;
@@ -319,8 +360,8 @@ function pruneFinalizedReservations(state, now, retentionMs, maxRetained) {
     const reservation = state.reservations.get(reservationId);
     state.reservations.delete(reservationId);
     if (!reservation) continue;
-    const idempotencyIndex = `${reservation.accountId}:${reservation.idempotencyKey}`;
-    if (state.idempotency.get(idempotencyIndex) === reservationId) state.idempotency.delete(idempotencyIndex);
+    const indexKey = idempotencyIndex(reservation.accountId, reservation.idempotencyKey);
+    if (state.idempotency.get(indexKey) === reservationId) state.idempotency.delete(indexKey);
   }
 }
 
@@ -341,8 +382,8 @@ function countUsage(state, accountId, action, periodKey) {
   };
 }
 
-function formatAllowance(action, definition, period, totals) {
-  return {
+function formatAllowance(action, definition, period, totals, bucketAction = action) {
+  const formatted = {
     action,
     unit: definition.unit,
     limit: definition.limit,
@@ -357,6 +398,8 @@ function formatAllowance(action, definition, period, totals) {
       end: period.end
     }
   };
+  if (bucketAction !== action) formatted.sharedWith = bucketAction;
+  return formatted;
 }
 
 function allowanceExhaustedMessage(action) {
@@ -374,6 +417,35 @@ function allowanceExhaustedMessage(action) {
 
 function normalizeResultCode(value) {
   return String(value || "ACTION_FAILED").toUpperCase().replace(/[^A-Z0-9_]/g, "_").slice(0, 80);
+}
+
+function assertValidUsageUnits(action, units) {
+  assertDomain(
+    isValidUsageUnits(action, units),
+    "INVALID_USAGE_UNITS",
+    action === ACTIONS.VIDEO_PROCESSING
+      ? "Video usage must be a positive bounded millisecond count."
+      : "Action and batch usage must contain exactly one unit.",
+    400
+  );
+}
+
+function normalizeResultReference(value, fallback) {
+  const reference = String(value || fallback || "").trim();
+  assertDomain(
+    /^[A-Za-z0-9._:-]{1,255}$/.test(reference),
+    "RESULT_REFERENCE_INVALID",
+    "A committed hosted result requires a bounded opaque reference.",
+    500
+  );
+  return reference;
+}
+
+function rememberCommittedReservation(state, reservation) {
+  state.committedIdempotency.set(
+    idempotencyIndex(reservation.accountId, reservation.idempotencyKey),
+    createCommittedTombstone(reservation)
+  );
 }
 
 function clampInteger(value, minimum, maximum, fallback) {

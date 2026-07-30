@@ -4,15 +4,19 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const excludedDirectories = new Set([
-  ".git", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
+  ".git", ".claude", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
 ]);
-const excludedFiles = new Set([".env", ".env.hosted", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
+// No .env entry here on purpose: collect() routes every .env* through
+// environmentFilePattern instead, which both skips the root ones and fails a
+// nested one. Naming them here would let a nested copy slip past that check.
+const excludedFiles = new Set([".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml"]);
 // Credential files carry no useful extension, so extname-based scanning skips them entirely.
 // Match them by name instead: a rename is what let a committed backend token pass this gate once.
 const secretFilePattern = /(?:^|[.\-])backend-token$/;
+const environmentFilePattern = /^\.env(?:\.|$)/;
 const requiredIgnoreEntries = [
-  ".env", ".env.*", "*-backend-token", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
+  ".env", ".env.*", "*-backend-token", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl", ".claude/", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
 ];
 
 const findings = [];
@@ -24,6 +28,7 @@ for (const filename of candidates) {
   const content = await readFile(filename, "utf8");
   const displayName = relative(projectRoot, filename).replaceAll("\\", "/");
   const checks = [
+    ["raw NUL byte", /\0/],
     ["private key material", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
     ["Google API credential", /AIza[0-9A-Za-z_-]{35}/],
     ["OpenAI credential", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
@@ -70,16 +75,25 @@ async function collect(directory) {
       continue;
     }
     if (!entry.isFile()) continue;
-    // The credential check runs before excludedFiles so the exclusion list, which names
-    // .exam-cram-backend-token, cannot hide the very file this gate exists to catch.
-    if (secretFilePattern.test(entry.name)) {
-      findings.push(`${relative(projectRoot, fullPath).replaceAll("\\", "/")}: credential file is present in a publishable tree`);
-      continue;
-    }
-    if (excludedFiles.has(entry.name)) continue;
+    const displayName = relative(projectRoot, fullPath).replaceAll("\\", "/");
     const isEnvironmentTemplate =
       entry.name === ".env.example" ||
       (entry.name.startsWith(".env.") && entry.name.endsWith(".example"));
+    if (environmentFilePattern.test(entry.name) && !isEnvironmentTemplate) {
+      // Root environment files are the local secret source against which publishable
+      // files are checked. A nested one is publishable-tree residue and must fail.
+      if (dirname(fullPath) !== projectRoot) {
+        findings.push(`${displayName}: environment file is present in a publishable tree`);
+      }
+      continue;
+    }
+    // The credential check runs before excludedFiles so the exclusion list, which names
+    // .exam-cram-backend-token, cannot hide the very file this gate exists to catch.
+    if (secretFilePattern.test(entry.name)) {
+      findings.push(`${displayName}: credential file is present in a publishable tree`);
+      continue;
+    }
+    if (excludedFiles.has(entry.name)) continue;
     if (textExtensions.has(extname(entry.name).toLowerCase()) || entry.name === ".gitignore" || isEnvironmentTemplate) {
       candidates.push(fullPath);
     }
@@ -88,22 +102,34 @@ async function collect(directory) {
 
 async function loadLocalSecrets() {
   const secrets = [];
-  // .env.hosted holds the Stripe secret key, webhook signing secret, Google OAuth
-  // client secret, and session signing key. Those are the highest-value secrets in
-  // the project, so a copy of one leaking into a publishable file has to be caught
-  // by value, not only by the format patterns above: a client secret or a signing
-  // key has no recognisable shape.
-  for (const envFile of [".env", ".env.hosted"]) {
-    const env = await readFile(resolve(projectRoot, envFile), "utf8").catch(() => "");
+  // Every root environment file is a secret source, enumerated rather than named,
+  // so adding one does not silently go unchecked. This matters most for
+  // .env.hosted, which holds the Stripe secret key, webhook signing secret, Google
+  // OAuth client secret, and session signing key: a copy of one leaking into a
+  // publishable file has to be caught by value, because a client secret or a
+  // signing key has no recognisable format to pattern-match on.
+  const rootEntries = await readdir(projectRoot, { withFileTypes: true });
+  const environmentFiles = rootEntries
+    .filter((entry) => (
+      entry.isFile() &&
+      environmentFilePattern.test(entry.name) &&
+      entry.name !== ".env.example" &&
+      !entry.name.endsWith(".example")
+    ))
+    .map((entry) => entry.name);
+  for (const name of environmentFiles) {
+    const env = await readFile(resolve(projectRoot, name), "utf8").catch(() => "");
     env.split(/\r?\n/).forEach((line) => {
       const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
       const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
       const sensitiveName = /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|ALLOWED_EXTENSION_ORIGINS)/.test(match?.[1] || "");
-      // CLIENT_ID is deliberately not treated as a secret: an OAuth client id is
-      // public by design and appears in client-side code.
-      const publicByDesign = /CLIENT_ID$/.test(match?.[1] || "");
-      if (match && sensitiveName && !publicByDesign && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
-        secrets.push({ name: match[1], value });
+      // An OAuth client id stays out of this set for free: GOOGLE_OAUTH_CLIENT_ID
+      // matches none of the sensitive-name substrings above, which is correct
+      // because a client id is public by design and appears in client-side code.
+      // verify-publish-safety-script.test.js pins that, so adding CLIENT or ID to
+      // the pattern above would fail loudly rather than start crying wolf.
+      if (match && sensitiveName && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
+        secrets.push({ name: `${name}:${match[1]}`, value });
       }
     });
   }

@@ -154,6 +154,64 @@ test("allowance copy is bounded and never calls a finite plan unlimited", () => 
   }), "multi-source previews: included");
 });
 
+test("finite allowances fail closed when remaining is null or missing", () => {
+  const explicitNull = Hosted.normalizeAllowance({
+    action: Hosted.ACTIONS.STUDY_BUILD,
+    unit: "action",
+    limit: 3,
+    remaining: null,
+    period: {}
+  });
+  const missing = Hosted.normalizeAllowance({
+    action: Hosted.ACTIONS.QUIZ_BUILD,
+    unit: "action",
+    limit: 5,
+    period: {}
+  });
+
+  assert.equal(explicitNull.remaining, 0);
+  assert.equal(Hosted.allowanceLabel(explicitNull), "study builds: 0 remaining");
+  assert.equal(missing.remaining, 0);
+  assert.equal(Hosted.allowanceLabel(missing), "quiz builds: 0 remaining");
+  assert.equal(Hosted.decideAction({
+    settings: { backendMode: "hosted" },
+    config: activeConfig,
+    snapshot: snapshot({ allowances: [explicitNull] }),
+    action: Hosted.ACTIONS.STUDY_BUILD
+  }).code, "ALLOWANCE_EXHAUSTED");
+});
+
+test("lifetime allowance copy explicitly says that it does not reset", () => {
+  assert.equal(Hosted.resetLabel({
+    action: Hosted.ACTIONS.MULTI_SOURCE_PREVIEW,
+    unit: "action",
+    limit: 1,
+    remaining: 1,
+    period: {
+      kind: "lifetime",
+      start: "1970-01-01T00:00:00.000Z",
+      end: null
+    }
+  }), "Lifetime allowance · does not reset");
+});
+
+test("multi-source metering uses the Free preview and the Student Pro study allowance", () => {
+  assert.equal(
+    Hosted.multiSourceMeteringAction(snapshot()),
+    Hosted.ACTIONS.MULTI_SOURCE_PREVIEW
+  );
+  assert.equal(
+    Hosted.multiSourceMeteringAction(snapshot({
+      entitlement: { plan: "student_pro", status: "active" }
+    })),
+    Hosted.ACTIONS.STUDY_BUILD
+  );
+  assert.equal(
+    Hosted.multiSourceMeteringAction(null),
+    Hosted.ACTIONS.MULTI_SOURCE_PREVIEW
+  );
+});
+
 test("dormant account UI and helper stay packaged behind the explicit disabled flag", () => {
   assert.match(popupHtml, /id="hostedAccountSection"[^>]*class="[^"]*hidden/);
   assert.match(popupHtml, /<script src="hosted-account-utils\.js"><\/script>[\s\S]*<script src="popup\.js"><\/script>/);

@@ -9,6 +9,7 @@ const ACTIONS = Object.freeze({
   VIDEO_PROCESSING: "video_processing",
   MULTI_SOURCE_PREVIEW: "multi_source_preview"
 });
+const MAX_USAGE_UNITS = 12 * 60 * 60 * 1000;
 
 const POLICIES = Object.freeze({
   free: freezePolicy({
@@ -46,13 +47,19 @@ const POLICIES = Object.freeze({
       [ACTIONS.JOURNEY_SUMMARY]: allowance("action", 10, "subscription_month"),
       [ACTIONS.CLASSIFICATION_BATCH]: allowance("batch", 10, "subscription_month"),
       [ACTIONS.VIDEO_PROCESSING]: allowance("millisecond", 120 * 60 * 1000, "subscription_month"),
-      [ACTIONS.MULTI_SOURCE_PREVIEW]: allowance("action", null, "subscription_month")
+      // Student Pro multi-source lessons are included, but they consume the same
+      // study-build allowance rather than receiving an independent unlimited bucket.
+      [ACTIONS.MULTI_SOURCE_PREVIEW]: sharedAllowance(ACTIONS.STUDY_BUILD)
     }
   })
 });
 
 function allowance(unit, limit, periodKind) {
   return Object.freeze({ unit, limit, periodKind });
+}
+
+function sharedAllowance(bucketAction) {
+  return Object.freeze({ bucketAction });
 }
 
 function freezePolicy(policy) {
@@ -78,27 +85,49 @@ function resolveEntitlement(subscription, nowValue = Date.now(), options = {}) {
   const started = effectiveStart === null || effectiveStart <= now;
   // Fail closed: an absent period end is missing data, not an unlimited licence.
   const inPaidPeriod = periodEnd !== null && now < periodEnd;
-  const paidStatus = status === "active" || status === "trialing";
+  const cancelAtPeriodEnd =
+    Boolean(subscription.cancelAtPeriodEnd) ||
+    status === "canceled_at_period_end";
+  const paidStatus =
+    status === "active" ||
+    status === "trialing" ||
+    status === "canceled_at_period_end";
   const inGrace = status === "past_due" && graceEndsAt !== null && now < graceEndsAt;
 
   if (subscription.revokedAt && toTimestamp(subscription.revokedAt) <= now) {
-    return freeEntitlement(now, "billing_revoked");
+    return freeEntitlement(now, terminalEntitlementStatus(status));
   }
   if (started && ((paidStatus && inPaidPeriod) || inGrace)) {
     return {
       plan: "student_pro",
       policyVersion: POLICIES.student_pro.version,
-      status: inGrace ? "grace" : status,
+      status: inGrace
+        ? "grace_period"
+        : cancelAtPeriodEnd ? "canceled_at_period_end" : status,
       effectiveStart: toIso(effectiveStart ?? now),
       effectiveEnd: toIso(inGrace ? graceEndsAt : periodEnd),
-      cancelAtPeriodEnd: Boolean(subscription.cancelAtPeriodEnd),
+      cancelAtPeriodEnd,
       source: "subscription"
     };
   }
   if (started && paidStatus && periodEnd === null) {
     return freeEntitlement(now, "missing_period_end");
   }
+  if (started && paidStatus && !inPaidPeriod) {
+    return freeEntitlement(now, "expired");
+  }
+  if (["canceled", "expired", "incomplete_expired"].includes(status)) {
+    return freeEntitlement(now, "expired");
+  }
   return freeEntitlement(now, status || "inactive_subscription");
+}
+
+function terminalEntitlementStatus(status) {
+  if (["refunded", "disputed"].includes(status)) return status;
+  if (["canceled", "canceled_at_period_end", "expired", "incomplete_expired"].includes(status)) {
+    return "expired";
+  }
+  return status === "revoked" ? "revoked" : "billing_revoked";
 }
 
 function freeEntitlement(now, status) {
@@ -117,14 +146,34 @@ function getPolicyForEntitlement(entitlement) {
   return entitlement?.plan === "student_pro" ? POLICIES.student_pro : POLICIES.free;
 }
 
+function resolveAllowance(policy, action) {
+  const requested = policy?.allowances?.[action];
+  assertDomain(requested, "UNKNOWN_ACTION", "The requested hosted action is not recognized.", 400);
+  const bucketAction = requested.bucketAction || action;
+  const definition = policy?.allowances?.[bucketAction];
+  assertDomain(
+    definition && !definition.bucketAction,
+    "ALLOWANCE_POLICY_INVALID",
+    "The hosted allowance policy contains an invalid shared bucket.",
+    500
+  );
+  return { bucketAction, definition };
+}
+
+function isValidUsageUnits(action, units) {
+  return Number.isSafeInteger(units) &&
+    units > 0 &&
+    units <= MAX_USAGE_UNITS &&
+    (action === ACTIONS.VIDEO_PROCESSING || units === 1);
+}
+
 function getAllowanceWindow(policy, action, nowValue = Date.now(), subscription = null) {
-  const definition = policy?.allowances?.[action];
-  assertDomain(definition, "UNKNOWN_ACTION", "The requested hosted action is not recognized.", 400);
+  const { bucketAction, definition } = resolveAllowance(policy, action);
   const now = toTimestamp(nowValue);
   if (definition.periodKind === "lifetime") {
     return {
       kind: "lifetime",
-      key: `${policy.version}:${action}:lifetime`,
+      key: `${policy.version}:${bucketAction}:lifetime`,
       start: "1970-01-01T00:00:00.000Z",
       end: null
     };
@@ -135,7 +184,7 @@ function getAllowanceWindow(policy, action, nowValue = Date.now(), subscription 
     const end = Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1);
     return {
       kind: definition.periodKind,
-      key: `${policy.version}:${action}:${new Date(start).toISOString()}`,
+      key: `${policy.version}:${bucketAction}:${new Date(start).toISOString()}`,
       start: toIso(start),
       end: toIso(end)
     };
@@ -146,7 +195,7 @@ function getAllowanceWindow(policy, action, nowValue = Date.now(), subscription 
   const { start, end } = getAnchoredMonthWindow(anchor, now);
   return {
     kind: "subscription_month",
-    key: `${policy.version}:${action}:${toIso(start)}`,
+    key: `${policy.version}:${bucketAction}:${toIso(start)}`,
     start: toIso(start),
     end: toIso(end)
   };
@@ -216,5 +265,7 @@ module.exports = {
   getAllowanceWindow,
   getAnchoredMonthWindow,
   getPolicyForEntitlement,
+  isValidUsageUnits,
+  resolveAllowance,
   resolveEntitlement
 };

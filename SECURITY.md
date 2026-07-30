@@ -17,7 +17,7 @@ If a credential is exposed, revoke or rotate it at the provider first. Removing 
 ## Local security model
 
 - Provider API keys belong only in the backend `.env`; they must never be entered in the extension or committed.
-- The bundled backend listens on `127.0.0.1`, validates allowed origins, bounds request size/rate/concurrency, and keeps provider destinations fixed.
+- The bundled backend listens on `127.0.0.1`, validates allowed origins, requires its bearer token by default, bounds request size/rate/concurrency, and keeps provider destinations fixed. Optional tokenless extension access trusts the local-process boundary because a non-browser local client can forge `Origin`.
 - A custom remote backend receives the page text, notes, or tab-audio chunks the learner explicitly submits. Use HTTPS and a backend you control.
 - Chrome extension local storage is not a password vault. Anyone with sufficient access to the operating-system account or browser profile may be able to read it.
 - Build distributable extension folders with `npm run package:extension`; never load, zip, or publish the project root.

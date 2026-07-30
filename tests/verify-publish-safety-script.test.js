@@ -43,7 +43,9 @@ test("publish safety scan catches a hosted secret copied into a publishable file
   try {
     const result = runScan(root);
     assert.equal(result.status, 1, `expected a failing scan, got:\n${result.stdout}${result.stderr}`);
-    assert.match(result.stderr, /leaked\.js: matches local secret HOSTED_SESSION_SIGNING_KEY/);
+    // The finding is namespaced by source file, so an operator reading the failure
+    // knows which environment file to rotate rather than having to guess.
+    assert.match(result.stderr, /leaked\.js: matches local secret \.env\.hosted:HOSTED_SESSION_SIGNING_KEY/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -90,6 +92,38 @@ test("publish safety scan passes on the same tree without a credential file", ()
   }
 });
 
+test("publish safety scan rejects nested environment files that would otherwise evade extension checks", () => {
+  const root = makeSandbox({ "staging/.env.hosted": `STRIPE_SECRET_KEY=${sampleToken}` });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 1, `expected a failing scan, got:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /staging\/\.env\.hosted: environment file is present/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publish safety scan rejects raw NUL bytes in first-party source", () => {
+  const root = makeSandbox({ "usage-service.js": "const key = `action\0period`;\n" });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 1, `expected a failing scan, got:\n${result.stdout}${result.stderr}`);
+    assert.match(result.stderr, /usage-service\.js: raw NUL byte/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("publish safety scan excludes ignored agent worktrees from the publishable source set", () => {
+  const root = makeSandbox({ ".claude/worktrees/review/.exam-cram-backend-token": sampleToken });
+  try {
+    const result = runScan(root);
+    assert.equal(result.status, 0, `expected a passing scan, got:\n${result.stdout}${result.stderr}`);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The script derives its project root from its own location, so scanning a sandbox
 // means copying the real script into one. Everything else it reads is data we author here.
 function makeSandbox(files) {
@@ -98,7 +132,9 @@ function makeSandbox(files) {
   copyFileSync(scriptSource, path.join(root, "scripts", "verify-publish-safety.mjs"));
   copyFileSync(path.join(projectRoot, ".gitignore"), path.join(root, ".gitignore"));
   Object.entries(files).forEach(([name, content]) => {
-    writeFileSync(path.join(root, name), content, "utf8");
+    const target = path.join(root, name);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, content, "utf8");
   });
   return root;
 }

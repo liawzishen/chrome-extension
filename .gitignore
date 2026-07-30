@@ -30,6 +30,7 @@ tmp/
 temp/
 .playwright-cli/
 .codex/
+.claude/
 
 # Browser profiles, packaged extensions, and local releases
 chrome-profile*/

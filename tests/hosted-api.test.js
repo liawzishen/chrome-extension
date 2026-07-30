@@ -447,6 +447,52 @@ test("hosted generation refuses an unusable Idempotency-Key before provider work
   assert.equal(fixture.generationRuns.length, 0);
 });
 
+test("hosted request preparation permits variable units only for video processing", async () => {
+  const invalid = await createApiFixture({
+    prepareGenerationRequest: () => ({
+      operation: "notes",
+      input: {},
+      items: [{ action: "study_build", units: 2 }]
+    })
+  });
+  const invalidResponse = await invalid.api(extensionRequest("/v1/generate", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": "invalid-action-units"
+    },
+    body: JSON.stringify({ operation: "notes", input: {} })
+  }));
+  assert.equal(invalidResponse.status, 500);
+  assert.equal(
+    (await invalidResponse.json()).error.code,
+    "GENERATION_PREPARATION_INVALID"
+  );
+  assert.equal(invalid.generationRuns.length, 0);
+
+  const video = await createApiFixture({
+    prepareGenerationRequest: () => ({
+      operation: "video_transcript",
+      input: { mediaId: "media-1" },
+      items: [{ action: "video_processing", units: 1_234 }]
+    })
+  });
+  const videoResponse = await video.api(extensionRequest("/v1/generate", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": "valid-video-units"
+    },
+    body: JSON.stringify({ operation: "video_transcript", input: { mediaId: "media-1" } })
+  }));
+  assert.equal(videoResponse.status, 200);
+  const payload = await videoResponse.json();
+  assert.equal(
+    payload.usage.allowances.find((item) => item.action === "video_processing").committed,
+    1_234
+  );
+});
+
 test("CORS preflight succeeds for allowlisted origins and is denied for unlisted ones", async () => {
   const { api } = await createApiFixture();
   const allowed = await api(new Request("https://api.example.test/v1/generate", {

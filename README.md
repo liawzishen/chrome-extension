@@ -207,23 +207,23 @@ Requirements:
 
 7. Keep the bounded defaults from `.env.example` unless you have a measured reason to change them. They control provider timeouts, concurrent API work, requests per minute, request-body bytes, and maximum study, note, and collection text.
 8. Keep `COST_TELEMETRY_PATH=.exam-cram-cost-telemetry.jsonl` to record privacy-safe local action, retry, validation-rejection, latency, media-duration, token, and estimated-cost data, or leave it blank to disable recording. Configure the provider-specific per-million-token rates in `.env`; Gemini rates are needed for video even when OpenAI handles other actions. Unpriced records are explicitly marked `incomplete`. The local file stops growing at `COST_TELEMETRY_MAX_BYTES` (50 MB by default), contains no source text, prompts, URLs, generated output, or credentials, and can be summarized with `npm run telemetry:report`.
-9. Leave `BACKEND_ACCESS_TOKEN` blank to generate a private token file for non-extension clients, or supply a strong private token through the environment. Never commit `.env`, the generated token file, provider keys, tokens, browser profiles, screenshots, telemetry, or logs.
+9. Leave `BACKEND_ACCESS_TOKEN` blank to generate a private token file, or supply a strong private token through the environment. Tokenless access is disabled by default because a local non-browser process can forge an `Origin` header. Keep `ALLOW_TOKENLESS_EXTENSION=false` and paste the token into Settings for the stronger boundary. Set it to `true` only when you deliberately accept the single-user local-process trade-off. Never commit `.env`, the generated token file, provider keys, tokens, browser profiles, screenshots, telemetry, or logs.
 10. Start the loopback backend:
 
    ```powershell
    npm start
    ```
 
-11. In NeatMind Settings, keep the bundled endpoint and leave the token field empty:
+11. In NeatMind Settings, keep the bundled endpoint and enter the configured token or the value from `.exam-cram-backend-token`:
 
     ```text
     Endpoint: http://127.0.0.1:8787/api/study-session
-    Backend access token: leave blank for the allowlisted bundled backend
+    Backend access token: your generated or configured local token
     ```
 
 12. Open a study page and choose **Allow this site** if the access banner appears. Chrome grants only that current website pattern; NeatMind reads the page only after an explicit study or save action. Repeat this step separately for another website when needed.
 
-The provider key stays in the backend `.env` and is never placed in the extension. The bundled server accepts tokenless API posts only when it is listening on loopback, the socket is loopback, and Chrome supplies an exact origin listed in `ALLOWED_EXTENSION_ORIGINS`. Preview pages, missing or different origins, and other clients require the generated or configured bearer token. A supplied wrong token is rejected even when the request uses the trusted extension origin.
+The provider key stays in the backend `.env` and is never placed in the extension. When explicitly enabled, the bundled server accepts tokenless API posts only when it is listening on loopback, the socket is loopback, and the request supplies an exact origin listed in `ALLOWED_EXTENSION_ORIGINS`. That is a browser-web-attack boundary, not proof that Chrome made the request: local programs can forge the header. Preview pages, missing or different origins, and all clients in the default configuration require the generated or configured bearer token. A supplied wrong token is always rejected.
 
 Health check:
 
@@ -397,12 +397,12 @@ The MV3 worker stores an absolute deadline, recreates alarms after restart, inst
 - AI-estimated transcript times are not equivalent to publisher captions.
 - Public YouTube URL support depends on Gemini's current preview capability and provider limits.
 - Private/unlisted YouTube videos, DRM players, closed shadow roots, frames for which Chrome has not granted access, and videos without detectable audio may require a local HTML/PDF file, captions, or a pasted transcript.
-- Journey data, saved sessions, focus history, and completed automatic transcripts are stored in extension-local storage.
+- Journey data, saved sessions, focus history, and completed automatic transcripts are stored in extension-local storage. The manifest requests `unlimitedStorage` because the bounded Journey schema can legitimately exceed Chrome's default local-storage quota; this does not add cloud sync or make the data available to websites.
 - Page/video reading and tab capture are explicit user actions.
 - HTML/PDF reading is explicit. Remote PDFs are fetched without cookies or a referrer; local file-picker input stays in memory until a note is created. Only bounded extracted text is stored with the source-grounded note and sent to the configured backend; raw PDF bytes are never stored or exported.
 - PDF JavaScript evaluation is disabled. Attachments, forms, actions, and external links inside a PDF are not executed by the reader.
 - Website access is granted per site through **Allow this site**. Focus separately requests only the distracting-site origins still missing, and NeatMind does not inspect browsing history.
-- The local backend binds to `127.0.0.1`, validates the exact configured extension Origin, and permits that trusted loopback extension to connect without manual token entry. Other clients require the separate access token.
+- The local backend binds to `127.0.0.1`, validates the exact configured extension Origin, and requires the separate access token by default. Optional tokenless extension access trusts the local-process boundary and must be explicitly enabled.
 - Provider keys exist only in the backend `.env`. A custom backend token is stored in extension-local settings, which is convenient but is not an operating-system password vault; use a scoped token and protect the browser profile.
 
 ## Security And Publication
@@ -415,7 +415,7 @@ No application can be guaranteed impossible to compromise. NeatMind reduces expo
 - Page, document, Focus, and custom-backend permissions are requested only for the relevant site or origin when an action needs them. External source links are restricted to expected safe schemes.
 - Custom remote backend URLs must use HTTPS; unencrypted HTTP is accepted only for `localhost` and loopback addresses. URL credentials are stripped during normalization.
 - Saved bearer tokens are associated with one backend origin. Changing the endpoint origin clears a reused token, and request builders omit the token when a derived URL does not match its stored origin.
-- The bundled backend listens only on `127.0.0.1`. Tokenless API access requires both a loopback socket and an exact configured extension Origin. Other allowed clients must present the generated or configured bearer token, which is compared in constant time.
+- The bundled backend listens only on `127.0.0.1`. All API clients require the generated or configured bearer token by default, and it is compared in constant time. Optional tokenless API access must be explicitly enabled and still requires both a loopback socket and an exact configured extension Origin; it blocks browser-origin attacks but does not authenticate a local process, which can forge that header.
 - API posts must use JSON. Declared and streamed bodies are bounded, provider requests have timeouts, concurrent work is capped, and a per-origin/address minute bucket returns `429` when the configured limit is exceeded.
 - Backend and preview responses set no-store/MIME/framing/referrer/permissions protections and restrictive CSP headers. Server errors redact configured keys, tokens, authorization values, and credential query parameters before logging or returning a generic failure.
 - Page text, notes, transcripts, and collection blocks are handled as untrusted source data rather than executable instructions. Generated structures are schema checked and evidence checked before storage. Backend quiz answers additionally require a separate provider-backed semantic verdict against their quoted evidence; missing, malformed, or unsupported verdicts fail closed. The no-key local and curated paths remain deterministic/extractive and lexically checked.

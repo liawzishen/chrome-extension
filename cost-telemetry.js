@@ -20,7 +20,8 @@ const PROVIDER_OPERATIONS = new Map([
   ["visual_followup", "visual_followup"],
   ["classify_sources", "classification"],
   ["journey_summary", "journey_summary"],
-  ["video_transcript", "video_transcription"]
+  ["video_transcript", "video_transcription"],
+  ["audio_transcription", "audio_transcription"]
 ]);
 
 function createCostTelemetry(options = {}) {
@@ -108,9 +109,9 @@ function createCostTelemetry(options = {}) {
     const context = actionStorage.getStore();
     if (!context) return;
     const usage = extractProviderUsage(provider, result);
-    const priceConfigured = hasConfiguredPrice(prices, provider, model);
+    const priceConfigured = hasConfiguredPrice(prices, provider, model, operation);
     const providerEvent = recordProviderCall(context, provider, model, operation, priceConfigured);
-    const cost = estimateCost(prices, provider, model, usage);
+    const cost = estimateCost(prices, provider, model, operation, usage);
     context.inputTokens += usage.inputTokens;
     context.outputTokens += usage.outputTokens;
     context.estimatedCostUsd += cost;
@@ -127,7 +128,7 @@ function createCostTelemetry(options = {}) {
       provider,
       model,
       operation,
-      hasConfiguredPrice(prices, provider, model)
+      hasConfiguredPrice(prices, provider, model, operation)
     );
     context.transportFailures += 1;
     providerEvent.transportFailures += 1;
@@ -145,7 +146,7 @@ function createCostTelemetry(options = {}) {
       provider,
       model,
       operation,
-      hasConfiguredPrice(prices, provider, model)
+      hasConfiguredPrice(prices, provider, model, operation)
     );
     context.validationRejections += 1;
     providerEvent.validationRejections += 1;
@@ -190,7 +191,7 @@ function normalizePrices(value = {}) {
     const amount = Number(price);
     const normalizedKey = String(key || "").trim().toLowerCase();
     if (
-      /^[a-z0-9._/:-]+:(input|output)$/.test(normalizedKey) &&
+      /^[a-z0-9._/:-]+:(input|audio_input|output)$/.test(normalizedKey) &&
       normalizedKey.length <= 260 &&
       Number.isFinite(amount) &&
       amount >= 0
@@ -201,16 +202,23 @@ function normalizePrices(value = {}) {
   return normalized;
 }
 
-function estimateCost(prices, provider, model, usage) {
+function estimateCost(prices, provider, model, operation, usage) {
   const prefix = `${String(provider || "").toLowerCase()}.${String(model || "").toLowerCase()}`;
-  const inputRate = prices[`${prefix}:input`] || 0;
+  const inputRate = prices[`${prefix}:${inputPriceKind(operation)}`] || 0;
   const outputRate = prices[`${prefix}:output`] || 0;
   return (usage.inputTokens * inputRate + usage.outputTokens * outputRate) / 1_000_000;
 }
 
-function hasConfiguredPrice(prices, provider, model) {
+function hasConfiguredPrice(prices, provider, model, operation) {
   const prefix = `${String(provider || "").toLowerCase()}.${String(model || "").toLowerCase()}`;
-  return Object.hasOwn(prices, `${prefix}:input`) && Object.hasOwn(prices, `${prefix}:output`);
+  return Object.hasOwn(prices, `${prefix}:${inputPriceKind(operation)}`)
+    && Object.hasOwn(prices, `${prefix}:output`);
+}
+
+function inputPriceKind(operation) {
+  return String(operation || "").trim().toLowerCase() === "audio_transcription"
+    ? "audio_input"
+    : "input";
 }
 
 function estimateInputSize(input) {
@@ -295,6 +303,7 @@ function getProviderEvent(context, provider, model, operation, priceConfigured =
       provider: normalizedProvider,
       model: normalizedModel,
       operation: normalizedOperation,
+      inputModality: rawOperation === "audio_transcription" ? "audio" : rawOperation === "video_transcript" ? "video" : "text",
       calls: 0,
       retries: 0,
       transportFailures: 0,

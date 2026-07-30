@@ -1,5 +1,9 @@
 const { randomUUID } = require("crypto");
 const { assertDomain } = require("../domain/errors.js");
+const {
+  createCommittedTombstone,
+  idempotencyIndex
+} = require("../domain/idempotency.js");
 
 // Billing history retention. Stripe stops retrying a webhook long before this
 // window closes, so replaying an event older than the window is not a realistic
@@ -27,7 +31,10 @@ const DURABLE_COLLECTIONS = Object.freeze([
   "activeCheckoutAccounts",
   "checkoutSessions",
   "authSessions",
-  "identityAccounts"
+  "identityAccounts",
+  // Committed metering that has to outlive reservation pruning. Losing this on a
+  // restart would let an already-charged action be replayed as fresh work.
+  "committedIdempotency"
 ]);
 
 class MemoryHostedStore {
@@ -60,9 +67,18 @@ class MemoryHostedStore {
       // source reservation while leaving its counters or expiry index mutated.
       usageTotals: new JournaledMap(seed.usageTotals || [], this.journal, "usageTotals"),
       activeReservations: new JournaledMap(seed.activeReservations || [], this.journal, "activeReservations"),
-      finalizedReservations: new JournaledMap(seed.finalizedReservations || [], this.journal, "finalizedReservations")
+      finalizedReservations: new JournaledMap(seed.finalizedReservations || [], this.journal, "finalizedReservations"),
+      // Unlike the three indexes above, this one is not derived: it is the compact
+      // committed-usage authority that outlives finalized-reservation pruning, so
+      // it is named and persisted rather than rebuilt.
+      committedIdempotency: new JournaledMap(seed.committedIdempotency || [], this.journal, "committedIdempotency")
     };
-    if (!seed.usageTotals || !seed.activeReservations || !seed.finalizedReservations) {
+    if (
+      !seed.usageTotals ||
+      !seed.activeReservations ||
+      !seed.finalizedReservations ||
+      !seed.committedIdempotency
+    ) {
       rebuildUsageIndexes(this.state);
     }
     this.now = typeof options.now === "function" ? options.now : Date.now;
@@ -402,6 +418,9 @@ function rebuildUsageIndexes(state) {
   state.usageTotals.clear();
   state.activeReservations.clear();
   state.finalizedReservations.clear();
+  // A supplied compact tombstone can outlive its pruned detailed reservation.
+  // Preserve it while rebuilding the other derived indexes, then add any
+  // committed reservations that are still present.
   for (const reservation of state.reservations.values()) {
     const stateName = String(reservation?.state || "");
     if (stateName === "reserved") {
@@ -413,7 +432,13 @@ function rebuildUsageIndexes(state) {
       addReservationTotals(state, reservation, "reserved");
       continue;
     }
-    if (stateName === "committed") addReservationTotals(state, reservation, "committed");
+    if (stateName === "committed") {
+      addReservationTotals(state, reservation, "committed");
+      state.committedIdempotency.set(
+        idempotencyIndex(reservation.accountId, reservation.idempotencyKey),
+        createCommittedTombstone(reservation)
+      );
+    }
     const finalizedAt = Date.parse(
       reservation?.committedAt || reservation?.releasedAt || reservation?.createdAt
     );
@@ -431,7 +456,7 @@ function addReservationTotals(state, reservation, field) {
     state.usageTotals.set(reservation.accountId, buckets);
   }
   for (const item of Array.isArray(reservation.items) ? reservation.items : []) {
-    const action = String(item?.action || "");
+    const action = String(item?.bucketAction || item?.action || "");
     const periodKey = String(item?.periodKey || "");
     const units = Number(item?.units);
     if (!action || !periodKey || !Number.isSafeInteger(units) || units <= 0) continue;
