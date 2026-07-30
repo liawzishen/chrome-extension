@@ -21,6 +21,11 @@ test("manifest declares the exact optional all-sites superset used by Focus", ()
   assert.ok(manifest.optional_host_permissions.includes("file:///*"));
 });
 
+test("manifest protects the bounded learning history from Chrome's default local-storage quota", () => {
+  assert.ok(manifest.permissions.includes("storage"));
+  assert.ok(manifest.permissions.includes("unlimitedStorage"));
+});
+
 test("manifest explicitly locks extension pages to locally bundled scripts", () => {
   assert.equal(
     manifest.content_security_policy?.extension_pages,

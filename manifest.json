@@ -32,6 +32,7 @@
     "sidePanel",
     "scripting",
     "storage",
+    "unlimitedStorage",
     "tabCapture"
   ],
   "host_permissions": [

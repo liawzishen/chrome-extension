@@ -84,7 +84,8 @@ const state = {
   hostedAccountSnapshot: null,
   hostedAccessToken: "",
   hostedAccountRefresh: null,
-  hostedDialogError: null
+  hostedDialogError: null,
+  hostedModeSelected: false
 };
 
 const elements = {
@@ -239,6 +240,7 @@ const elements = {
   notesHostedAllowanceNotice: document.getElementById("notesHostedAllowanceNotice"),
   journeyHostedAllowanceNotice: document.getElementById("journeyHostedAllowanceNotice"),
   quizHostedAllowanceNotice: document.getElementById("quizHostedAllowanceNotice"),
+  classificationHostedAllowanceNotice: document.getElementById("classificationHostedAllowanceNotice"),
   videoHostedAllowanceNotice: document.getElementById("videoHostedAllowanceNotice"),
   settingsButton: document.getElementById("settingsButton"),
   settingsDialog: document.getElementById("settingsDialog"),
@@ -354,7 +356,7 @@ function init() {
   elements.hostedAccountWebButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account")));
   elements.hostedRefreshAccountButton?.addEventListener("click", () => void handleHostedAccountAction(() => refreshHostedAccount({ force: true })));
   elements.hostedManageBillingButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/account/billing")));
-  elements.hostedUpgradeButton?.addEventListener("click", () => void handleHostedAccountAction(() => openHostedWebPath("/pricing")));
+  elements.hostedUpgradeButton?.addEventListener("click", () => void handleHostedAccountAction(handleHostedDialogPrimaryAction));
   elements.hostedUseOwnBackendButton?.addEventListener("click", handleUseOwnBackendFromHostedDialog);
 
   void initializePersistentPanel();
@@ -1366,20 +1368,17 @@ async function classifyImportSourcesWithBackend(files, journey) {
   const configuredEndpoint = getConfiguredApiEndpoint(settings);
   if (!configuredEndpoint) throw new Error("No classification backend is configured.");
   const endpoint = deriveBackendEndpoint(configuredEndpoint, "classify-sources");
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: await getMeteredBackendHeaders(
-      settings,
-      endpoint,
-      HostedAccount?.ACTIONS.CLASSIFICATION_BATCH
-    ),
-    body: JSON.stringify({
+  const { response, payload } = await requestBackendAction({
+    settings,
+    endpoint,
+    routeName: "classify-sources",
+    action: HostedAccount?.ACTIONS.CLASSIFICATION_BATCH,
+    input: {
       files: files.map(({ fileId, excerpt }) => ({ fileId, excerpt })),
       existingChapters: journey.chapters.map((chapter) => chapter.title),
       chapterHints: globalThis.ExamCramJourney.buildChapterClassificationHints(journey)
-    })
+    }
   });
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw surfaceHostedAccessError(
       backendRequestError(
@@ -2742,25 +2741,24 @@ async function requestAutomaticYouTubeTranscript(tab, identity) {
   const endpoint = deriveBackendEndpoint(configuredEndpoint, "video-transcript");
   updateGenerationProgress(18, "Gemini is reading this public video...");
   let response;
+  let payload;
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: await getMeteredBackendHeaders(
-        settings,
-        endpoint,
-        HostedAccount?.ACTIONS.VIDEO_PROCESSING,
-        Math.max(1, Math.round(Number(identity.durationMs) || 1))
-      ),
-      body: JSON.stringify({
+    ({ response, payload } = await requestBackendAction({
+      settings,
+      endpoint,
+      routeName: "video-transcript",
+      action: HostedAccount?.ACTIONS.VIDEO_PROCESSING,
+      units: Math.max(1, Math.round(Number(identity.durationMs) || 1)),
+      input: {
         sourceUrl: tab.url,
         title: identity.title || tab.title,
         durationMs: identity.durationMs
-      })
-    });
-  } catch {
+      }
+    }));
+  } catch (error) {
+    if (error?.isHostedAccess) throw error;
     throw new Error("Gemini public-YouTube analysis could not reach the configured backend. Start or configure the backend, or use explicit tab-audio transcription.");
   }
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw surfaceHostedAccessError(
       backendRequestError(
@@ -2898,6 +2896,11 @@ function openVideoCaptureConsent() {
   state.videoCaptureAuthorization = null;
   resetVideoCaptureAuthorizationUi();
   elements.reloadExtensionButton?.classList.add("hidden");
+  const requestedMs = Math.min(
+    15 * 60 * 1000,
+    Math.max(1, Math.round(Number(state.detectedSource?.durationMs) || 15 * 60 * 1000))
+  );
+  renderHostedVideoAllowanceNotice(requestedMs);
   if (typeof elements.videoCaptureDialog?.showModal === "function") {
     elements.videoCaptureDialog.showModal();
   }
@@ -3888,25 +3891,24 @@ async function createAndRecordStudyArtifact(input) {
 async function generateNotesWithBackend(endpoint, input, settings = {}) {
   const stopProgress = startSimulatedProgress(35, 86, "Gemini is cleaning your notes...");
   let response;
+  let payload;
+  const action = input.sourceType === "collection"
+    ? HostedAccount?.multiSourceMeteringAction(state.hostedAccountSnapshot)
+    : HostedAccount?.ACTIONS.STUDY_BUILD;
   try {
-    response = await fetch(endpoint, {
-    method: "POST",
-    headers: await getMeteredBackendHeaders(
+    ({ response, payload } = await requestBackendAction({
       settings,
       endpoint,
-      input.sourceType === "collection"
-        ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
-        : HostedAccount?.ACTIONS.STUDY_BUILD
-    ),
-    body: JSON.stringify(input)
-    });
+      routeName: "notes",
+      action,
+      input
+    }));
   } finally {
     stopProgress();
   }
 
   updateGenerationProgress(90, "Processing notes...");
 
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw surfaceHostedAccessError(
       backendRequestError(
@@ -3915,9 +3917,7 @@ async function generateNotesWithBackend(endpoint, input, settings = {}) {
         "AI notes backend failed. Check your endpoint or clear settings for local mode.",
         {
           settings,
-          action: input.sourceType === "collection"
-            ? HostedAccount?.ACTIONS.MULTI_SOURCE_PREVIEW
-            : HostedAccount?.ACTIONS.STUDY_BUILD
+          action
         }
       ),
       settings
@@ -4149,7 +4149,12 @@ async function handleGenerateRecoveryQuiz() {
     let usedLocalFallback = false;
     try {
       quiz = endpoint
-        ? await generateQuizWithBackend(deriveBackendEndpoint(endpoint, "recovery-quiz"), recoveryRequest, settings)
+        ? await generateQuizWithBackend(
+            deriveBackendEndpoint(endpoint, "recovery-quiz"),
+            recoveryRequest,
+            settings,
+            "recovery-quiz"
+          )
         : generateLocalRecoveryQuizArtifact(recoveryRequest);
     } catch (error) {
       usedLocalFallback = true;
@@ -4701,23 +4706,21 @@ function assertQuizSemanticVerification(quiz, label = "Quiz service") {
   return quiz;
 }
 
-async function generateQuizWithBackend(endpoint, input, settings = {}) {
+async function generateQuizWithBackend(endpoint, input, settings = {}, routeName = "quiz") {
   const stopProgress = startSimulatedProgress(35, 88, "Generating source-grounded questions…");
   let response;
+  let payload;
   try {
-    response = await fetch(endpoint, {
-      method: "POST",
-      headers: await getMeteredBackendHeaders(
-        settings,
-        endpoint,
-        HostedAccount?.ACTIONS.QUIZ_BUILD
-      ),
-      body: JSON.stringify(input)
-    });
+    ({ response, payload } = await requestBackendAction({
+      settings,
+      endpoint,
+      routeName,
+      action: HostedAccount?.ACTIONS.QUIZ_BUILD,
+      input
+    }));
   } finally {
     stopProgress();
   }
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw surfaceHostedAccessError(
       backendRequestError(
@@ -5129,23 +5132,21 @@ function fingerprintTranscriptSegments(segments) {
 async function generateWithBackend(endpoint, input, settings = {}) {
   const stopProgress = startSimulatedProgress(38, 88, "Gemini is generating your quiz...");
   let response;
+  let payload;
   try {
-    response = await fetch(endpoint, {
-    method: "POST",
-    headers: await getMeteredBackendHeaders(
+    ({ response, payload } = await requestBackendAction({
       settings,
       endpoint,
-      HostedAccount?.ACTIONS.STUDY_BUILD
-    ),
-    body: JSON.stringify(input)
-    });
+      routeName: "study-session",
+      action: HostedAccount?.ACTIONS.STUDY_BUILD,
+      input
+    }));
   } finally {
     stopProgress();
   }
 
   updateGenerationProgress(90, "Processing quiz...");
 
-  const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw surfaceHostedAccessError(
       backendRequestError(
@@ -7987,7 +7988,10 @@ function renderVisualFollowup(model, context, getSelectedNode, getActiveScenario
       if (completed && input.value.trim() === question) input.value = "";
     });
   });
-  section.append(chips, form, responsePanel);
+  const hostedNotice = createHostedActionNotice(HostedAccount?.ACTIONS.VISUAL_FOLLOWUP);
+  section.append(chips, form);
+  if (hostedNotice) section.append(hostedNotice);
+  section.append(responsePanel);
   return section;
 }
 
@@ -8005,14 +8009,12 @@ async function requestVisualFollowup({ question, model, context, selectedNode, s
     const configuredEndpoint = getConfiguredApiEndpoint(settings);
     if (!configuredEndpoint) throw new Error("Local-only mode is enabled.");
     const endpoint = deriveVisualFollowupEndpoint(configuredEndpoint);
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: await getMeteredBackendHeaders(
-        settings,
-        endpoint,
-        HostedAccount?.ACTIONS.VISUAL_FOLLOWUP
-      ),
-      body: JSON.stringify({
+    const { response, payload } = await requestBackendAction({
+      settings,
+      endpoint,
+      routeName: "visual-followup",
+      action: HostedAccount?.ACTIONS.VISUAL_FOLLOWUP,
+      input: {
         question,
         title: context.title || model.title,
         sourceType: context.sourceType || "notes",
@@ -8021,9 +8023,8 @@ async function requestVisualFollowup({ question, model, context, selectedNode, s
         selectedNode,
         activeScenario: scenario,
         visualModel: model
-      })
+      }
     });
-    const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw surfaceHostedAccessError(
         backendRequestError(
@@ -10871,6 +10872,10 @@ function renderJourneyChapterDetail(journey, chapter, savedItems = []) {
   buildButton.disabled = chapter.sources.length < 1;
   buildButton.addEventListener("click", () => void handleBuildChapterLesson(chapter.id));
   actions.append(buildButton);
+  const multiSourceNotice = createHostedActionNotice(
+    HostedAccount?.multiSourceMeteringAction(state.hostedAccountSnapshot)
+  );
+  if (multiSourceNotice) actions.append(multiSourceNotice);
   elements.journeyChapterDetail.replaceChildren(heading, artifacts, sources, actions);
 }
 
@@ -11058,14 +11063,12 @@ async function handleSummarizeJourney() {
     const rangeChapters = getJourneyChaptersInRange(journey, elements.journeyRange.value);
     if (summaryEndpoint && rangeChapters.length) {
       try {
-        const response = await fetch(summaryEndpoint, {
-          method: "POST",
-          headers: await getMeteredBackendHeaders(
-            settings,
-            summaryEndpoint,
-            HostedAccount?.ACTIONS.JOURNEY_SUMMARY
-          ),
-          body: JSON.stringify({
+        const { response, payload } = await requestBackendAction({
+          settings,
+          endpoint: summaryEndpoint,
+          routeName: "journey-summary",
+          action: HostedAccount?.ACTIONS.JOURNEY_SUMMARY,
+          input: {
             journeyTitle: journey.title,
             range: elements.journeyRange.value,
             revision: journey.revision,
@@ -11086,9 +11089,8 @@ async function handleSummarizeJourney() {
                 summary: session.summary
               })).slice(0, 8)
             })).slice(0, 24)
-          })
+          }
         });
-        const payload = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw surfaceHostedAccessError(
             backendRequestError(
@@ -11571,7 +11573,7 @@ async function saveSettings(event) {
       && hostedAccountConfig.active === true;
     const useHostedBackend = hostedFeatureActive && Boolean(elements.hostedModeInput?.checked);
     const permissionEndpoint = useHostedBackend
-      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/api/study-session")
+      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/v1/generate")
       : apiEndpoint;
     const permitted = await requestEndpointPermission(permissionEndpoint);
     if (!permitted) {
@@ -11647,17 +11649,16 @@ function requestEndpointPermission(endpoint) {
 }
 
 function getConfiguredApiEndpoint(settings) {
-  if (
-    typeof hostedAccountConfig !== "undefined"
-    && typeof HostedAccount !== "undefined"
-    && hostedAccountConfig.enabled
-    && HostedAccount?.isHostedRequested(settings)
-  ) {
+  if (isHostedBackendRequested(settings)) {
     return hostedAccountConfig.active
-      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/api/study-session")
+      ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/v1/generate")
       : "";
   }
   return getConfiguredCustomApiEndpoint(settings);
+}
+
+function isHostedBackendRequested(settings) {
+  return String(settings?.backendMode || "").trim().toLowerCase() === "hosted";
 }
 
 function getConfiguredCustomApiEndpoint(settings) {
@@ -11757,12 +11758,14 @@ function renderHostedAccountUi(settings = {}, error = null) {
   const featureAvailable = Boolean(HostedAccount && hostedAccountConfig.active);
   elements.hostedAccountSection?.classList.toggle("hidden", !featureAvailable);
   if (!featureAvailable) {
+    state.hostedModeSelected = false;
     renderHostedAllowanceNotices(null, false);
     return;
   }
 
   const hostedSelected = HostedAccount.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)
     || Boolean(elements.hostedModeInput?.checked);
+  state.hostedModeSelected = hostedSelected;
   if (elements.hostedModeInput) elements.hostedModeInput.checked = hostedSelected;
   const snapshot = state.hostedAccountSnapshot;
   if (elements.hostedPlanBadge) {
@@ -11807,6 +11810,7 @@ function renderHostedAllowanceNotices(snapshot, hostedSelected) {
     [elements.notesHostedAllowanceNotice, HostedAccount?.ACTIONS.STUDY_BUILD],
     [elements.quizHostedAllowanceNotice, HostedAccount?.ACTIONS.QUIZ_BUILD],
     [elements.journeyHostedAllowanceNotice, HostedAccount?.ACTIONS.JOURNEY_SUMMARY],
+    [elements.classificationHostedAllowanceNotice, HostedAccount?.ACTIONS.CLASSIFICATION_BATCH],
     [elements.videoHostedAllowanceNotice, HostedAccount?.ACTIONS.VIDEO_PROCESSING]
   ];
   noticeMap.forEach(([element, action]) => {
@@ -11819,6 +11823,30 @@ function renderHostedAllowanceNotices(snapshot, hostedSelected) {
       ? `${HostedAccount.allowanceLabel(allowance)}${HostedAccount.resetLabel(allowance) ? ` · ${HostedAccount.resetLabel(allowance)}` : ""}`
       : "";
   });
+}
+
+function hostedAllowanceNoticeText(action, units = 1) {
+  if (!state.hostedModeSelected || !state.hostedAccountSnapshot) return "";
+  const allowance = state.hostedAccountSnapshot.allowances?.find((item) => item.action === action);
+  if (!allowance) return "";
+  const requested = action === HostedAccount?.ACTIONS.VIDEO_PROCESSING && units > 1
+    ? `This action needs about ${HostedAccount.formatMinutes(units)}. `
+    : "";
+  const reset = HostedAccount.resetLabel(allowance);
+  return `${requested}${HostedAccount.allowanceLabel(allowance)}${reset ? ` Â· ${reset}` : ""}`;
+}
+
+function createHostedActionNotice(action, units = 1) {
+  const text = hostedAllowanceNoticeText(action, units);
+  if (!text) return null;
+  return createElement("small", text, "hosted-allowance-notice");
+}
+
+function renderHostedVideoAllowanceNotice(units) {
+  if (!elements.videoHostedAllowanceNotice) return;
+  const text = hostedAllowanceNoticeText(HostedAccount?.ACTIONS.VIDEO_PROCESSING, units);
+  elements.videoHostedAllowanceNotice.textContent = text;
+  elements.videoHostedAllowanceNotice.classList.toggle("hidden", !text);
 }
 
 async function refreshHostedAccount({ force = false } = {}) {
@@ -11837,8 +11865,7 @@ async function refreshHostedAccount({ force = false } = {}) {
     const session = await readHostedSession();
     const accessToken = normalizeHostedAccessToken(session?.accessToken, session?.expiresAt);
     if (!accessToken) {
-      state.hostedAccessToken = "";
-      state.hostedAccountSnapshot = null;
+      await clearHostedSessionState();
       throw createHostedAccessError({ code: "HOSTED_AUTH_REQUIRED" });
     }
     const headers = {
@@ -11858,15 +11885,17 @@ async function refreshHostedAccount({ force = false } = {}) {
       cache: "no-store"
     })));
     const payloads = await Promise.all(responses.map((response) => response.json().catch(() => ({}))));
-    responses.forEach((response, index) => {
+    for (let index = 0; index < responses.length; index += 1) {
+      const response = responses[index];
       if (!response.ok) {
+        if (response.status === 401) await clearHostedSessionState();
         throw backendRequestError(
           response,
           payloads[index],
           "The hosted account service could not refresh your allowance."
         );
       }
-    });
+    }
     const [profilePayload, usagePayload] = payloads;
     state.hostedAccessToken = accessToken;
     state.hostedAccountSnapshot = HostedAccount.normalizeSnapshot({
@@ -11906,13 +11935,117 @@ function normalizeHostedAccessToken(value, expiresAt) {
   const token = String(value || "").trim();
   if (token.length < 16 || token.length > 4096) return "";
   const expiry = Date.parse(expiresAt || "");
-  if (Number.isFinite(expiry) && expiry <= Date.now() + 30_000) return "";
+  if (!Number.isFinite(expiry) || expiry <= Date.now() + 30_000) return "";
   return token;
 }
 
+async function requestBackendAction({
+  settings = {},
+  endpoint = "",
+  routeName,
+  action,
+  units = 1,
+  input,
+  idempotencyKey = ""
+} = {}) {
+  const hostedRequested = isHostedBackendRequested(settings);
+  const hosted = Boolean(HostedAccount?.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG));
+  if (hostedRequested && !hosted) {
+    const error = createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE", action });
+    queueHostedAccessDialog(error);
+    throw error;
+  }
+  const requestEndpoint = hosted
+    ? HostedAccount.buildApiUrl(HOSTED_ACCOUNT_CONFIG, "/v1/generate")
+    : endpoint;
+  if (!requestEndpoint) {
+    throw new Error(hosted ? "Hosted generation is not configured." : "No AI backend is configured.");
+  }
+  const headers = await getMeteredBackendHeaders(settings, requestEndpoint, action, units);
+  const operation = normalizeHostedOperation(routeName);
+  if (hosted) {
+    headers["Idempotency-Key"] = normalizeHostedIdempotencyKey(
+      idempotencyKey,
+      operation
+    );
+  }
+  const body = JSON.stringify(hosted ? { operation, input } : input);
+  const send = () => fetch(requestEndpoint, {
+    method: "POST",
+    headers,
+    body,
+    cache: hosted ? "no-store" : "default"
+  });
+  let response;
+  try {
+    response = await send();
+  } catch (error) {
+    if (!hosted) throw error;
+    // A lost response must retry with the exact same server-scoped operation key.
+    response = await send();
+  }
+  const rawPayload = await response.json().catch(() => ({}));
+  if (hosted && response.status === 401) {
+    await clearHostedSessionState();
+  }
+  if (hosted && response.ok) {
+    await applyHostedUsageResponse(rawPayload.usage);
+  }
+  return {
+    response,
+    payload: hosted && response.ok ? rawPayload.result ?? {} : rawPayload
+  };
+}
+
+function normalizeHostedOperation(value) {
+  const operation = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_");
+  if (!/^[a-z][a-z0-9_]{2,59}$/.test(operation)) {
+    throw new Error("The hosted generation operation is invalid.");
+  }
+  return operation;
+}
+
+function normalizeHostedIdempotencyKey(value, operation) {
+  const supplied = String(value || "").trim();
+  if (/^[a-zA-Z0-9._:-]{16,160}$/.test(supplied)) return supplied;
+  const randomPart = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  return `exam-cram:${operation}:${randomPart}`.slice(0, 160);
+}
+
+async function applyHostedUsageResponse(usage) {
+  if (!usage || typeof usage !== "object" || !state.hostedAccountSnapshot?.account) return;
+  state.hostedAccountSnapshot = HostedAccount.normalizeSnapshot({
+    account: state.hostedAccountSnapshot.account,
+    entitlement: usage.entitlement,
+    policyVersion: usage.policyVersion,
+    allowances: usage.allowances,
+    refreshedAt: new Date().toISOString()
+  });
+  const settings = await getStorage(STORAGE_KEYS.settings, {}).catch(() => ({}));
+  renderHostedAccountUi(settings);
+}
+
+async function clearHostedSessionState() {
+  state.hostedAccessToken = "";
+  state.hostedAccountSnapshot = null;
+  if (!globalThis.chrome?.storage?.session?.remove) return;
+  await new Promise((resolve) => {
+    chrome.storage.session.remove(HOSTED_SESSION_STORAGE_KEY, () => resolve());
+  });
+}
+
 async function getMeteredBackendHeaders(settings, endpoint, action, units = 1) {
-  if (!HostedAccount?.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)) {
+  if (!isHostedBackendRequested(settings)) {
     return getBackendHeaders(settings, endpoint);
+  }
+  if (!HostedAccount.isHostedMode(settings, HOSTED_ACCOUNT_CONFIG)) {
+    const error = createHostedAccessError({ code: "HOSTED_FEATURE_UNAVAILABLE", action });
+    queueHostedAccessDialog(error);
+    throw error;
   }
   let snapshot;
   try {
@@ -12026,9 +12159,40 @@ function showHostedAccessDialog(error) {
     elements.hostedAllowanceDialogReset.textContent = reset;
     elements.hostedAllowanceDialogReset.classList.toggle("hidden", !reset);
   }
+  if (elements.hostedUpgradeButton) {
+    const isPro = state.hostedAccountSnapshot
+      && HostedAccount.planLabel(state.hostedAccountSnapshot) === "Student Pro";
+    const action = error?.code === "HOSTED_AUTH_REQUIRED"
+      ? "account"
+      : error?.code === "ALLOWANCE_EXHAUSTED" && !isPro
+        ? "pricing"
+        : error?.code === "ALLOWANCE_EXHAUSTED"
+          ? ""
+          : "retry";
+    const labels = {
+      account: "Sign in",
+      pricing: "View Student Pro",
+      retry: "Retry usage check"
+    };
+    elements.hostedUpgradeButton.dataset.hostedAction = action;
+    elements.hostedUpgradeButton.textContent = labels[action] || "";
+    elements.hostedUpgradeButton.classList.toggle("hidden", !action);
+  }
   if (elements.quizSettingsDialog?.open) elements.quizSettingsDialog.close();
   if (elements.videoCaptureDialog?.open) elements.videoCaptureDialog.close();
   if (!elements.hostedAllowanceDialog.open) elements.hostedAllowanceDialog.showModal();
+}
+
+async function handleHostedDialogPrimaryAction() {
+  const action = elements.hostedUpgradeButton?.dataset.hostedAction;
+  if (action === "account") return openHostedWebPath("/account");
+  if (action === "pricing") return openHostedWebPath("/pricing");
+  if (action === "retry") {
+    const snapshot = await refreshHostedAccount({ force: true });
+    if (snapshot && elements.hostedAllowanceDialog?.open) elements.hostedAllowanceDialog.close();
+    return snapshot;
+  }
+  return null;
 }
 
 async function handleUseOwnBackendFromHostedDialog() {

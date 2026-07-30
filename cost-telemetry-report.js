@@ -4,24 +4,21 @@ function summarizeCostTelemetry(events) {
     : [];
   const actions = new Map();
   const operations = new Map();
+  const sourceSizeBuckets = new Map();
 
   for (const event of validEvents) {
     const action = getAggregate(actions, event.action);
-    action.actions += 1;
-    action.successes += event.outcome === "succeeded" ? 1 : 0;
-    action.failures += event.outcome === "failed" ? 1 : 0;
-    action.providerCalls += boundedNumber(event.providerCalls);
-    action.providerRetries += boundedNumber(event.providerRetries);
-    action.transportFailures += boundedNumber(event.transportFailures);
-    action.transportRetries += boundedNumber(event.transportRetries);
-    action.validationRejections += boundedNumber(event.validationRejections);
-    action.validationRetries += boundedNumber(event.validationRetries);
-    action.inputTokens += boundedNumber(event.inputTokens);
-    action.outputTokens += boundedNumber(event.outputTokens);
-    action.estimatedCostUsd += boundedNumber(event.estimatedCostUsd);
-    action.mediaDurationMs += boundedNumber(event.mediaDurationMs);
-    action.incompleteCostEvents += event.costStatus === "incomplete" ? 1 : 0;
-    action.latencies.push(boundedNumber(event.latencyMs));
+    const sourceType = normalizeLabel(event.sourceType);
+    const inputSizeBucket = normalizeLabel(event.inputSizeBucket);
+    const sourceSize = getAggregate(
+      sourceSizeBuckets,
+      `${normalizeLabel(event.action)}:${sourceType}:${inputSizeBucket}`
+    );
+    sourceSize.action = normalizeLabel(event.action);
+    sourceSize.sourceType = sourceType;
+    sourceSize.inputSizeBucket = inputSizeBucket;
+    accumulateEvent(action, event);
+    accumulateEvent(sourceSize, event);
 
     for (const usage of Array.isArray(event.providerUsage) ? event.providerUsage : []) {
       const key = [
@@ -42,6 +39,7 @@ function summarizeCostTelemetry(events) {
       operation.inputTokens += boundedNumber(usage?.inputTokens);
       operation.outputTokens += boundedNumber(usage?.outputTokens);
       operation.estimatedCostUsd += boundedNumber(usage?.estimatedCostUsd);
+      operation.costs.push(boundedNumber(usage?.estimatedCostUsd));
       operation.incompleteCostEvents += usage?.costStatus === "incomplete" ? 1 : 0;
     }
   }
@@ -52,26 +50,21 @@ function summarizeCostTelemetry(events) {
     actions: [...actions.entries()]
       .map(([action, totals]) => ({
         action,
-        actions: totals.actions,
-        successes: totals.successes,
-        failures: totals.failures,
-        successRate: round(totals.actions ? totals.successes / totals.actions : 0, 4),
-        providerCalls: totals.providerCalls,
-        providerRetries: totals.providerRetries,
-        transportFailures: totals.transportFailures,
-        transportRetries: totals.transportRetries,
-        validationRejections: totals.validationRejections,
-        validationRetries: totals.validationRetries,
-        inputTokens: totals.inputTokens,
-        outputTokens: totals.outputTokens,
-        estimatedCostUsd: round(totals.estimatedCostUsd, 6),
-        costStatus: totals.incompleteCostEvents ? "incomplete"
-          : totals.providerCalls ? "configured" : "not_applicable",
-        mediaMinutes: round(totals.mediaDurationMs / 60_000, 3),
-        latencyP50Ms: percentile(totals.latencies, 0.5),
-        latencyP95Ms: percentile(totals.latencies, 0.95)
+        ...formatActionAggregate(totals)
       }))
       .sort((left, right) => left.action.localeCompare(right.action)),
+    sourceSizeBuckets: [...sourceSizeBuckets.values()]
+      .map((totals) => ({
+        action: totals.action,
+        sourceType: totals.sourceType,
+        inputSizeBucket: totals.inputSizeBucket,
+        ...formatActionAggregate(totals)
+      }))
+      .sort((left, right) => (
+        left.action.localeCompare(right.action)
+        || left.sourceType.localeCompare(right.sourceType)
+        || left.inputSizeBucket.localeCompare(right.inputSizeBucket)
+      )),
     providerOperations: [...operations.values()]
       .map((totals) => ({
         provider: totals.provider,
@@ -86,9 +79,58 @@ function summarizeCostTelemetry(events) {
         inputTokens: totals.inputTokens,
         outputTokens: totals.outputTokens,
         estimatedCostUsd: round(totals.estimatedCostUsd, 6),
+        costPerCallP50Usd: round(percentile(totals.costs, 0.5), 6),
+        costPerCallP90Usd: round(percentile(totals.costs, 0.9), 6),
+        costPerCallP95Usd: round(percentile(totals.costs, 0.95), 6),
         costStatus: totals.incompleteCostEvents ? "incomplete" : "configured"
       }))
       .sort((left, right) => left.operation.localeCompare(right.operation))
+  };
+}
+
+function accumulateEvent(target, event) {
+  target.actions += 1;
+  target.successes += event.outcome === "succeeded" ? 1 : 0;
+  target.failures += event.outcome === "failed" ? 1 : 0;
+  target.providerCalls += boundedNumber(event.providerCalls);
+  target.providerRetries += boundedNumber(event.providerRetries);
+  target.transportFailures += boundedNumber(event.transportFailures);
+  target.transportRetries += boundedNumber(event.transportRetries);
+  target.validationRejections += boundedNumber(event.validationRejections);
+  target.validationRetries += boundedNumber(event.validationRetries);
+  target.inputTokens += boundedNumber(event.inputTokens);
+  target.outputTokens += boundedNumber(event.outputTokens);
+  target.estimatedCostUsd += boundedNumber(event.estimatedCostUsd);
+  target.mediaDurationMs += boundedNumber(event.mediaDurationMs);
+  target.incompleteCostEvents += event.costStatus === "incomplete" ? 1 : 0;
+  target.latencies.push(boundedNumber(event.latencyMs));
+  target.costs.push(boundedNumber(event.estimatedCostUsd));
+}
+
+function formatActionAggregate(totals) {
+  return {
+    actions: totals.actions,
+    successes: totals.successes,
+    failures: totals.failures,
+    successRate: round(totals.actions ? totals.successes / totals.actions : 0, 4),
+    providerCalls: totals.providerCalls,
+    providerRetries: totals.providerRetries,
+    transportFailures: totals.transportFailures,
+    transportRetries: totals.transportRetries,
+    validationRejections: totals.validationRejections,
+    validationRetries: totals.validationRetries,
+    inputTokens: totals.inputTokens,
+    outputTokens: totals.outputTokens,
+    estimatedCostUsd: round(totals.estimatedCostUsd, 6),
+    costPerActionP50Usd: round(percentile(totals.costs, 0.5), 6),
+    costPerActionP90Usd: round(percentile(totals.costs, 0.9), 6),
+    costPerActionP95Usd: round(percentile(totals.costs, 0.95), 6),
+    costStatus: totals.incompleteCostEvents ? "incomplete"
+      : totals.providerCalls ? "configured" : "not_applicable",
+    mediaMinutes: round(totals.mediaDurationMs / 60_000, 3),
+    latencyP50Ms: percentile(totals.latencies, 0.5),
+    latencyP90Ms: percentile(totals.latencies, 0.9),
+    latencyP95Ms: percentile(totals.latencies, 0.95)
   };
 }
 
@@ -123,7 +165,8 @@ function getAggregate(collection, key) {
       estimatedCostUsd: 0,
       mediaDurationMs: 0,
       incompleteCostEvents: 0,
-      latencies: []
+      latencies: [],
+      costs: []
     });
   }
   return collection.get(key);

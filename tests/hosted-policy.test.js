@@ -5,6 +5,7 @@ const {
   POLICIES,
   getAllowanceWindow,
   getAnchoredMonthWindow,
+  resolveAllowance,
   resolveEntitlement
 } = require("../services/hosted-api/src/domain/policy.js");
 
@@ -31,7 +32,10 @@ test("active and trialing subscriptions receive Student Pro through the paid per
       cancelAtPeriodEnd: status === "active"
     }, now);
     assert.equal(entitlement.plan, "student_pro");
-    assert.equal(entitlement.status, status);
+    assert.equal(
+      entitlement.status,
+      status === "active" ? "canceled_at_period_end" : status
+    );
     assert.equal(entitlement.cancelAtPeriodEnd, status === "active");
   }
 });
@@ -50,7 +54,7 @@ test("past-due subscriptions only retain Pro during an explicitly dated grace pe
     graceEndsAt: "2026-07-31T00:00:00.000Z"
   }, "2026-08-01T00:00:00.000Z");
   assert.equal(beforeEnd.plan, "student_pro");
-  assert.equal(beforeEnd.status, "grace");
+  assert.equal(beforeEnd.status, "grace_period");
   assert.equal(afterEnd.plan, "free");
 });
 
@@ -86,7 +90,7 @@ test("a paid subscription without a period end fails closed instead of running f
     graceEndsAt: "2026-07-31T00:00:00.000Z"
   }, "2026-07-30T00:00:00.000Z");
   assert.equal(datedGrace.plan, "student_pro");
-  assert.equal(datedGrace.status, "grace");
+  assert.equal(datedGrace.status, "grace_period");
 });
 
 test("revocation overrides an otherwise active paid period", () => {
@@ -98,6 +102,33 @@ test("revocation overrides an otherwise active paid period", () => {
   }, "2026-07-28T00:00:00.000Z");
   assert.equal(entitlement.plan, "free");
   assert.equal(entitlement.status, "billing_revoked");
+});
+
+test("expiry, refund, dispute, and explicit revocation retain distinct entitlement states", () => {
+  const now = "2026-07-28T12:00:00.000Z";
+  const ended = resolveEntitlement({
+    status: "active",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    currentPeriodEnd: "2026-07-01T00:00:00.000Z"
+  }, now);
+  const canceled = resolveEntitlement({
+    status: "canceled",
+    createdAt: "2026-06-01T00:00:00.000Z",
+    currentPeriodEnd: "2026-07-01T00:00:00.000Z"
+  }, now);
+  assert.equal(ended.status, "expired");
+  assert.equal(canceled.status, "expired");
+
+  for (const status of ["refunded", "disputed", "revoked"]) {
+    const entitlement = resolveEntitlement({
+      status,
+      createdAt: "2026-07-01T00:00:00.000Z",
+      currentPeriodEnd: "2026-08-01T00:00:00.000Z",
+      revokedAt: "2026-07-15T00:00:00.000Z"
+    }, now);
+    assert.equal(entitlement.plan, "free");
+    assert.equal(entitlement.status, status);
+  }
 });
 
 test("Free allowances reset at the first instant of each UTC calendar month", () => {
@@ -131,8 +162,43 @@ test("the launch policy encodes the approved bounded allowances", () => {
   assert.equal(POLICIES.free.allowances[ACTIONS.STUDY_BUILD].limit, 3);
   assert.equal(POLICIES.free.allowances[ACTIONS.QUIZ_BUILD].limit, 5);
   assert.equal(POLICIES.free.allowances[ACTIONS.VIDEO_PROCESSING].limit, 15 * 60 * 1000);
+  assert.deepEqual(POLICIES.free.allowances[ACTIONS.MULTI_SOURCE_PREVIEW], {
+    unit: "action",
+    limit: 1,
+    periodKind: "lifetime"
+  });
   assert.equal(POLICIES.student_pro.allowances[ACTIONS.STUDY_BUILD].limit, 30);
   assert.equal(POLICIES.student_pro.allowances[ACTIONS.QUIZ_BUILD].limit, 60);
   assert.equal(POLICIES.student_pro.allowances[ACTIONS.VIDEO_PROCESSING].limit, 120 * 60 * 1000);
-  assert.equal(POLICIES.student_pro.allowances[ACTIONS.MULTI_SOURCE_PREVIEW].limit, null);
+  assert.equal(
+    POLICIES.student_pro.allowances[ACTIONS.MULTI_SOURCE_PREVIEW].bucketAction,
+    ACTIONS.STUDY_BUILD
+  );
+  assert.deepEqual(
+    resolveAllowance(POLICIES.student_pro, ACTIONS.MULTI_SOURCE_PREVIEW),
+    {
+      bucketAction: ACTIONS.STUDY_BUILD,
+      definition: POLICIES.student_pro.allowances[ACTIONS.STUDY_BUILD]
+    }
+  );
+});
+
+test("Student Pro multi-source lessons use the study-build allowance window", () => {
+  const subscription = {
+    effectiveStartAt: "2026-07-08T12:00:00.000Z",
+    allowanceAnchorAt: "2026-07-08T12:00:00.000Z"
+  };
+  const study = getAllowanceWindow(
+    POLICIES.student_pro,
+    ACTIONS.STUDY_BUILD,
+    "2026-07-28T12:00:00.000Z",
+    subscription
+  );
+  const multiSource = getAllowanceWindow(
+    POLICIES.student_pro,
+    ACTIONS.MULTI_SOURCE_PREVIEW,
+    "2026-07-28T12:00:00.000Z",
+    subscription
+  );
+  assert.deepEqual(multiSource, study);
 });

@@ -44,7 +44,10 @@ function checkoutSession(overrides = {}) {
     customer: "cus_unit123",
     subscription: "sub_unit123",
     metadata: {
-      account_id: "account-123"
+      account_id: "account-123",
+      checkout_attempt_id: "checkout-attempt-123",
+      interval: "month",
+      price_id: "price_monthly123"
     },
     ...overrides
   };
@@ -83,6 +86,27 @@ async function createBillingFixture(configOverrides = {}, serviceOverrides = {})
     createdAt: new Date(NOW - DAY_MS).toISOString()
   });
   const config = billingConfig(configOverrides);
+  await store.transaction((state) => {
+    const nowIso = new Date(NOW).toISOString();
+    const attempt = {
+      id: "checkout-attempt-123",
+      accountId: "account-123",
+      idempotencyKey: "billing-fixture-key",
+      requestDigest: "billing-fixture-digest",
+      interval: "month",
+      providerPriceId: config.priceIds.month,
+      providerIdempotencyKey: "checkout:billing-fixture",
+      providerSessionId: "cs_test_unit123",
+      status: "open",
+      lockExpiresAt: null,
+      expiresAt: new Date(NOW + DAY_MS).toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso
+    };
+    state.checkoutAttempts.set(attempt.id, attempt);
+    state.checkoutSessions.set(attempt.providerSessionId, attempt.id);
+    state.activeCheckoutAccounts.set(attempt.accountId, attempt.id);
+  });
   const logged = [];
   const billing = new BillingService({
     store,
@@ -206,7 +230,7 @@ test("older subscription and invoice events are recorded but cannot overwrite ne
     outcome: "stale_invoice_event"
   });
   const subscription = fixture.store.state.subscriptions.get("account-123");
-  assert.equal(subscription.status, "active");
+  assert.equal(subscription.status, "canceled_at_period_end");
   assert.equal(subscription.cancelAtPeriodEnd, true);
   assert.equal(subscription.graceEndsAt, null);
   assert.equal(subscription.lastStripeEventCreated, NOW_SECONDS + 20);
@@ -264,6 +288,116 @@ test("a later delivery for an older subscription cannot replace the current subs
   assert.equal(fixture.store.state.subscriptions.get("account-123").status, "active");
 });
 
+test("a paid renewal invoice advances the subscription period without allowing regression", async () => {
+  const fixture = await createBillingFixture();
+  await linkAndActivate(fixture, NOW_SECONDS);
+  const renewedStartSeconds = NOW_SECONDS + 30 * 24 * 60 * 60;
+  const renewedEndSeconds = NOW_SECONDS + 60 * 24 * 60 * 60;
+
+  fixture.clock = NOW + 30 * DAY_MS + 60_000;
+  const renewed = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_invoice_renewal",
+    "invoice.paid",
+    renewedStartSeconds + 60,
+    {
+      id: "in_renewal",
+      customer: "cus_unit123",
+      subscription: "sub_unit123",
+      period_start: renewedStartSeconds,
+      period_end: renewedEndSeconds
+    }
+  ));
+
+  assert.deepEqual(renewed, {
+    duplicate: false,
+    outcome: "renewal_period_advanced"
+  });
+  let subscription = fixture.store.state.subscriptions.get("account-123");
+  assert.equal(
+    subscription.currentPeriodStart,
+    new Date(renewedStartSeconds * 1000).toISOString()
+  );
+  assert.equal(
+    subscription.currentPeriodEnd,
+    new Date(renewedEndSeconds * 1000).toISOString()
+  );
+  const usage = new UsageService({
+    store: fixture.store,
+    now: () => fixture.clock,
+    graceMs: 3 * DAY_MS
+  });
+  assert.equal((await usage.getEntitlement("account-123")).plan, "student_pro");
+
+  const olderPeriod = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_invoice_older_period",
+    "invoice.paid",
+    renewedStartSeconds + 120,
+    {
+      id: "in_older_period",
+      customer: "cus_unit123",
+      subscription: "sub_unit123",
+      period_start: NOW_SECONDS,
+      period_end: renewedStartSeconds
+    }
+  ));
+  assert.equal(olderPeriod.outcome, "payment_confirmed");
+  subscription = fixture.store.state.subscriptions.get("account-123");
+  assert.equal(
+    subscription.currentPeriodEnd,
+    new Date(renewedEndSeconds * 1000).toISOString()
+  );
+});
+
+test("scheduled cancellation remains Pro until its period expires, then projects ordinary expiry", async () => {
+  const fixture = await createBillingFixture();
+  await linkAndActivate(fixture, NOW_SECONDS);
+  const periodEndSeconds = NOW_SECONDS + 30 * 24 * 60 * 60;
+
+  const scheduled = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_subscription_cancel_scheduled",
+    "customer.subscription.updated",
+    NOW_SECONDS + 1,
+    subscriptionObject({ cancel_at_period_end: true })
+  ));
+  assert.equal(scheduled.outcome, "subscription_projected");
+  let subscription = fixture.store.state.subscriptions.get("account-123");
+  assert.equal(subscription.providerStatus, "active");
+  assert.equal(subscription.status, "canceled_at_period_end");
+  assert.equal(subscription.cancelAtPeriodEnd, true);
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
+  assert.equal(
+    fixture.store.state.entitlements.get("account-123").status,
+    "canceled_at_period_end"
+  );
+
+  fixture.clock = periodEndSeconds * 1000;
+  const usage = new UsageService({
+    store: fixture.store,
+    now: () => fixture.clock,
+    graceMs: 3 * DAY_MS
+  });
+  const ended = await usage.getEntitlement("account-123");
+  assert.equal(ended.plan, "free");
+  assert.equal(ended.status, "expired");
+
+  const deleted = await fixture.billing.processVerifiedEvent(stripeEvent(
+    "evt_subscription_cancel_completed",
+    "customer.subscription.deleted",
+    periodEndSeconds,
+    subscriptionObject({
+      status: "canceled",
+      cancel_at_period_end: true
+    })
+  ));
+  assert.equal(deleted.outcome, "subscription_projected");
+  subscription = fixture.store.state.subscriptions.get("account-123");
+  assert.equal(subscription.providerStatus, "canceled");
+  assert.equal(subscription.status, "expired");
+  assert.equal(subscription.revokedAt, new Date(fixture.clock).toISOString());
+  assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
+  assert.equal(fixture.store.state.entitlements.get("account-123").status, "expired");
+});
+
 test("failed payment grants a dated grace period and a later payment restores Pro", async () => {
   const fixture = await createBillingFixture({ graceDays: 3 });
   await linkAndActivate(fixture, NOW_SECONDS);
@@ -289,7 +423,7 @@ test("failed payment grants a dated grace period and a later payment restores Pr
   assert.deepEqual(fixture.store.state.entitlements.get("account-123"), {
     plan: "student_pro",
     policyVersion: "student-pro.v1",
-    status: "grace",
+    status: "grace_period",
     effectiveStart: "2026-07-27T23:50:00.000Z",
     effectiveEnd: "2026-07-31T00:00:00.000Z",
     cancelAtPeriodEnd: false,
@@ -353,7 +487,7 @@ test("a past_due status projected without any invoice event still gets a bounded
   });
   const inGrace = await usage.getEntitlement("account-123");
   assert.equal(inGrace.plan, "student_pro");
-  assert.equal(inGrace.status, "grace");
+  assert.equal(inGrace.status, "grace_period");
   assert.equal(inGrace.effectiveEnd, "2026-07-31T00:00:00.000Z");
 
   fixture.clock = NOW + 3 * DAY_MS;
@@ -531,14 +665,14 @@ test("only a full refund revokes access when the configured policy requires it",
   ));
   assert.deepEqual(full, {
     duplicate: false,
-    outcome: "entitlement_revoked"
+    outcome: "entitlement_refunded"
   });
   const subscription = fixture.store.state.subscriptions.get("account-123");
-  assert.equal(subscription.status, "revoked");
+  assert.equal(subscription.status, "refunded");
   assert.equal(subscription.revokedAt, "2026-07-28T00:00:00.000Z");
   assert.equal(subscription.graceEndsAt, null);
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
-  assert.equal(fixture.store.state.entitlements.get("account-123").status, "billing_revoked");
+  assert.equal(fixture.store.state.entitlements.get("account-123").status, "refunded");
 });
 
 test("refund events remain non-revoking when that policy is explicitly disabled", async () => {
@@ -569,7 +703,7 @@ test("refund events remain non-revoking when that policy is explicitly disabled"
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "student_pro");
 });
 
-test("a late invoice cannot revive revoked access, while a new subscription can", async () => {
+test("a late invoice cannot revive refunded access, while a new subscription can", async () => {
   const fixture = await createBillingFixture({
     refundRevokesAccess: true
   });
@@ -600,7 +734,7 @@ test("a late invoice cannot revive revoked access, while a new subscription can"
   ));
   assert.equal(lateInvoice.outcome, "terminal_subscription_unchanged");
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
-  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "revoked");
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "refunded");
 
   fixture.clock = NOW + 3_000;
   const resubscribed = await fixture.billing.processVerifiedEvent(stripeEvent(
@@ -688,8 +822,9 @@ test("a verified invoice lookup can tie a bare refunded Charge to the current su
       refunded: true
     }
   ));
-  assert.equal(result.outcome, "entitlement_revoked");
+  assert.equal(result.outcome, "entitlement_refunded");
   assert.deepEqual(resolvedCharges, ["ch_with_invoice"]);
-  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "revoked");
+  assert.equal(fixture.store.state.subscriptions.get("account-123").status, "refunded");
   assert.equal(fixture.store.state.entitlements.get("account-123").plan, "free");
+  assert.equal(fixture.store.state.entitlements.get("account-123").status, "refunded");
 });

@@ -1,6 +1,6 @@
 const { createHmac } = require("crypto");
 const { HostedDomainError, assertDomain } = require("./domain/errors.js");
-const { ACTIONS } = require("./domain/policy.js");
+const { ACTIONS, isValidUsageUnits } = require("./domain/policy.js");
 
 const JSON_BODY_LIMIT = 16 * 1024;
 const GENERATION_BODY_LIMIT = 3 * 1024 * 1024;
@@ -152,11 +152,12 @@ async function handleGeneration(request, options, account, requestFingerprintKey
       result
     }),
     loadCommittedResult: typeof options.loadGenerationResult === "function"
-      ? (reservationId) => options.loadGenerationResult({
+      ? (resultReference, reservation) => options.loadGenerationResult({
           account,
           items,
           operation,
-          reservationId
+          reservationId: reservation?.id || resultReference,
+          resultReference
         })
       : undefined
   });
@@ -189,18 +190,19 @@ function normalizePreparedGenerationRequest(value) {
     "The hosted generation adapter did not map one to four usage items.",
     500
   );
+  const seenActions = new Set();
   const items = source.map((item) => {
     const action = String(item?.action || "").trim().toLowerCase();
     const units = item?.units === undefined || item?.units === null ? 1 : Number(item.units);
     assertDomain(
       ALLOWED_USAGE_ACTIONS.has(action) &&
-        Number.isSafeInteger(units) &&
-        units > 0 &&
-        units <= 12 * 60 * 60 * 1000,
+        isValidUsageUnits(action, units) &&
+        !seenActions.has(action),
       "GENERATION_PREPARATION_INVALID",
       "The hosted generation adapter produced an invalid usage item.",
       500
     );
+    seenActions.add(action);
     return Object.freeze({ action, units });
   });
   return Object.freeze({

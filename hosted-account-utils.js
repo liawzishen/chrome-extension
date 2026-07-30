@@ -90,7 +90,7 @@
     const rawLimit = value.limit;
     const rawRemaining = value.remaining;
     const limit = rawLimit === null ? null : toNonNegativeNumber(rawLimit);
-    const remaining = rawRemaining === null
+    const remaining = limit === null && rawRemaining === null
       ? null
       : Math.min(limit === null ? Number.MAX_SAFE_INTEGER : limit, toNonNegativeNumber(rawRemaining));
     const period = value.period && typeof value.period === "object" ? value.period : {};
@@ -191,6 +191,9 @@
 
   function resetLabel(allowance) {
     const normalized = normalizeAllowance(allowance);
+    if (normalized?.period.kind === "lifetime") {
+      return "Lifetime allowance · does not reset";
+    }
     if (!normalized?.period.end) return "";
     const formatted = new Date(normalized.period.end).toLocaleDateString(undefined, {
       day: "numeric",
@@ -210,6 +213,13 @@
   function planLabel(snapshot) {
     const normalized = normalizeSnapshot(snapshot);
     return normalized.entitlement?.plan === "student_pro" ? "Student Pro" : "Free";
+  }
+
+  function multiSourceMeteringAction(snapshot) {
+    const normalized = normalizeSnapshot(snapshot || {});
+    return normalized.entitlement?.plan === "student_pro"
+      ? ACTIONS.STUDY_BUILD
+      : ACTIONS.MULTI_SOURCE_PREVIEW;
   }
 
   function normalizeDate(value) {
@@ -237,6 +247,7 @@
     formatMinutes,
     isHostedMode,
     isHostedRequested,
+    multiSourceMeteringAction,
     normalizeAllowance,
     normalizeHttpsOrigin,
     normalizeSnapshot,

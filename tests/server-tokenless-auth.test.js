@@ -7,6 +7,7 @@ const TOKEN = "test-token-that-is-long-enough-123456";
 process.env.BACKEND_ACCESS_TOKEN = TOKEN;
 process.env.ALLOWED_EXTENSION_ORIGINS = TRUSTED_ORIGIN;
 process.env.ALLOWED_PREVIEW_ORIGINS = "http://127.0.0.1:8788";
+process.env.ALLOW_TOKENLESS_EXTENSION = "true";
 process.env.GEMINI_API_KEY = "test-gemini-key";
 
 const { server } = require("../server.js");

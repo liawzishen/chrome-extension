@@ -1,10 +1,17 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const { MemoryHostedStore } = require("../services/hosted-api/src/adapters/memory-store.js");
 const { HostedGenerationGateway } = require("../services/hosted-api/src/domain/generation-gateway.js");
 const { ACTIONS } = require("../services/hosted-api/src/domain/policy.js");
 const { UsageService } = require("../services/hosted-api/src/domain/usage-service.js");
+
+const MIGRATION = readFileSync(
+  path.resolve(__dirname, "../services/hosted-api/migrations/001_initial.sql"),
+  "utf8"
+);
 
 async function createFixture(overrides = {}) {
   let now = Date.parse("2026-07-28T12:00:00.000Z");
@@ -151,7 +158,7 @@ test("idempotency replays the same reservation and rejects changed work", async 
   await assert.rejects(
     fixture.usageService.reserve({
       ...input,
-      items: [{ action: ACTIONS.QUIZ_BUILD, units: 2 }]
+      items: [{ action: ACTIONS.STUDY_BUILD, units: 1 }]
     }),
     (error) => error.code === "IDEMPOTENCY_CONFLICT"
   );
@@ -231,6 +238,164 @@ test("video usage is metered in exact successful milliseconds", async () => {
     )),
     (error) => error.code === "ALLOWANCE_EXHAUSTED"
   );
+});
+
+test("action and batch allowances accept exactly one unit while video accepts milliseconds", async () => {
+  const fixture = await createFixture();
+  const nonVideoActions = Object.values(ACTIONS)
+    .filter((action) => action !== ACTIONS.VIDEO_PROCESSING);
+  for (const [index, action] of nonVideoActions.entries()) {
+    await assert.rejects(
+      fixture.usageService.reserve(reservationInput(
+        fixture.account.id,
+        `invalid-units-${index}`,
+        [{ action, units: 2 }]
+      )),
+      (error) => error.code === "INVALID_USAGE_UNITS"
+    );
+  }
+  await assert.rejects(
+    fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      "duplicate-action-units",
+      [
+        { action: ACTIONS.STUDY_BUILD, units: 1 },
+        { action: ACTIONS.STUDY_BUILD, units: 1 }
+      ]
+    )),
+    (error) => error.code === "INVALID_USAGE_UNITS"
+  );
+
+  const video = await fixture.usageService.reserve(reservationInput(
+    fixture.account.id,
+    "valid-video-units",
+    [{ action: ACTIONS.VIDEO_PROCESSING, units: 1_234 }]
+  ));
+  await fixture.usageService.commit(video.id);
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  assert.equal(
+    usage.allowances.find((item) => item.action === ACTIONS.VIDEO_PROCESSING).committed,
+    1_234
+  );
+});
+
+test("the PostgreSQL usage contract enforces unit semantics and opaque result references", () => {
+  assert.match(
+    MIGRATION,
+    /CONSTRAINT usage_operation_items_metering_units_check\s+CHECK \(action = 'video_processing' OR units = 1\)/
+  );
+  assert.match(
+    MIGRATION,
+    /result_reference varchar\(255\)[\s\S]*?state = 'committed'[\s\S]*?result_reference IS NOT NULL/
+  );
+});
+
+test("Student Pro multi-source lessons consume the shared study-build allowance", async () => {
+  const fixture = await createFixture();
+  await fixture.store.transaction((state) => {
+    state.subscriptions.set(fixture.account.id, {
+      status: "active",
+      effectiveStartAt: "2026-07-01T00:00:00.000Z",
+      allowanceAnchorAt: "2026-07-01T00:00:00.000Z",
+      currentPeriodEnd: "2026-08-01T00:00:00.000Z"
+    });
+  });
+
+  const multiSource = await fixture.usageService.reserve(reservationInput(
+    fixture.account.id,
+    "pro-multi-source",
+    [{ action: ACTIONS.MULTI_SOURCE_PREVIEW, units: 1 }]
+  ));
+  assert.equal(multiSource.items[0].action, ACTIONS.MULTI_SOURCE_PREVIEW);
+  assert.equal(multiSource.items[0].bucketAction, ACTIONS.STUDY_BUILD);
+  await fixture.usageService.commit(multiSource.id);
+
+  const study = await fixture.usageService.reserve(reservationInput(
+    fixture.account.id,
+    "pro-study-build",
+    [{ action: ACTIONS.STUDY_BUILD, units: 1 }]
+  ));
+  await fixture.usageService.commit(study.id);
+
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  const studyAllowance = usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD);
+  const multiSourceAllowance = usage.allowances.find(
+    (item) => item.action === ACTIONS.MULTI_SOURCE_PREVIEW
+  );
+  assert.equal(studyAllowance.committed, 2);
+  assert.equal(studyAllowance.remaining, 28);
+  assert.equal(multiSourceAllowance.committed, 2);
+  assert.equal(multiSourceAllowance.remaining, 28);
+  assert.equal(multiSourceAllowance.sharedWith, ACTIONS.STUDY_BUILD);
+});
+
+test("Free keeps one lifetime multi-source preview separate from monthly study builds", async () => {
+  const fixture = await createFixture();
+  const preview = await fixture.usageService.reserve(reservationInput(
+    fixture.account.id,
+    "free-multi-source-preview",
+    [{ action: ACTIONS.MULTI_SOURCE_PREVIEW, units: 1 }]
+  ));
+  await fixture.usageService.commit(preview.id);
+
+  fixture.setNow("2026-09-01T00:00:00.000Z");
+  await assert.rejects(
+    fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      "free-multi-source-second",
+      [{ action: ACTIONS.MULTI_SOURCE_PREVIEW, units: 1 }]
+    )),
+    (error) => error.code === "ALLOWANCE_EXHAUSTED"
+  );
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  const study = usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD);
+  const multiSource = usage.allowances.find(
+    (item) => item.action === ACTIONS.MULTI_SOURCE_PREVIEW
+  );
+  assert.equal(study.committed, 0);
+  assert.equal(study.remaining, 3);
+  assert.equal(multiSource.committed, 1);
+  assert.equal(multiSource.remaining, 0);
+  assert.equal(multiSource.period.kind, "lifetime");
+  assert.equal("sharedWith" in multiSource, false);
+});
+
+test("a reservation cannot overdraw the Pro study bucket through its multi-source alias", async () => {
+  const fixture = await createFixture();
+  await fixture.store.transaction((state) => {
+    state.subscriptions.set(fixture.account.id, {
+      status: "active",
+      effectiveStartAt: "2026-07-01T00:00:00.000Z",
+      allowanceAnchorAt: "2026-07-01T00:00:00.000Z",
+      currentPeriodEnd: "2026-08-01T00:00:00.000Z"
+    });
+  });
+  for (let index = 0; index < 29; index += 1) {
+    const reservation = await fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      `shared-bucket-seed-${index}`,
+      [{ action: ACTIONS.STUDY_BUILD, units: 1 }]
+    ));
+    await fixture.usageService.commit(reservation.id);
+  }
+
+  await assert.rejects(
+    fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      "shared-bucket-overdraw",
+      [
+        { action: ACTIONS.STUDY_BUILD, units: 1 },
+        { action: ACTIONS.MULTI_SOURCE_PREVIEW, units: 1 }
+      ]
+    )),
+    (error) => error.code === "ALLOWANCE_EXHAUSTED"
+  );
+  const usage = await fixture.usageService.getUsage(fixture.account.id);
+  assert.equal(
+    usage.allowances.find((item) => item.action === ACTIONS.STUDY_BUILD).committed,
+    29
+  );
+  assert.equal(fixture.store.state.activeReservations.size, 0);
 });
 
 test("generation gateway commits only success and releases provider failures", async () => {
@@ -316,6 +481,40 @@ test("generation idempotency never repeats provider work and can replay a stored
   assert.equal(providerCalls, 1);
 });
 
+test("a committed tombstone replays its opaque result reference after detail pruning", async () => {
+  const fixture = await createFixture({ finalizedRetentionMs: 60 * 60_000 });
+  const gateway = new HostedGenerationGateway({ usageService: fixture.usageService });
+  let providerCalls = 0;
+  const input = {
+    accountId: fixture.account.id,
+    idempotencyKey: "gateway-tombstone-replay",
+    requestFingerprint: fingerprint("gateway-tombstone-request"),
+    items: [{ action: ACTIONS.QUIZ_BUILD, units: 1 }],
+    resultReference: "artifact_quiz_tombstone_123",
+    run: async () => {
+      providerCalls += 1;
+      return { artifactId: "quiz_tombstone_123" };
+    },
+    validateResult: async (result) => result
+  };
+  await gateway.execute(input);
+  fixture.setNow("2026-07-28T14:00:00.000Z");
+  await fixture.usageService.getUsage(fixture.account.id);
+  assert.equal(fixture.store.state.reservations.size, 0);
+
+  let loadedReference = "";
+  const replay = await gateway.execute({
+    ...input,
+    loadCommittedResult: async (resultReference) => {
+      loadedReference = resultReference;
+      return { artifactId: "quiz_tombstone_123" };
+    }
+  });
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(loadedReference, "artifact_quiz_tombstone_123");
+  assert.equal(providerCalls, 1);
+});
+
 test("a released reservation lets the same idempotency key reserve fresh work", async () => {
   const fixture = await createFixture();
   const input = reservationInput(
@@ -342,7 +541,7 @@ test("a released reservation lets the same idempotency key reserve fresh work", 
   await assert.rejects(
     fixture.usageService.reserve({
       ...input,
-      items: [{ action: ACTIONS.STUDY_BUILD, units: 2 }]
+      items: [{ action: ACTIONS.QUIZ_BUILD, units: 1 }]
     }),
     (error) => error.code === "IDEMPOTENCY_CONFLICT"
   );
@@ -400,7 +599,7 @@ test("the generation gateway retries a failed request under the same idempotency
   assert.equal(study.remaining, 2);
 });
 
-test("finalized reservations are evicted once retention lapses without losing committed usage", async () => {
+test("pruning detailed reservations retains committed idempotency authority", async () => {
   const fixture = await createFixture({ finalizedRetentionMs: 60 * 60_000 });
   for (let index = 0; index < 60; index += 1) {
     const reservation = await fixture.usageService.reserve(reservationInput(
@@ -419,6 +618,30 @@ test("finalized reservations are evicted once retention lapses without losing co
   assert.equal(video.remaining, 15 * 60 * 1000 - 60_000);
   assert.equal(fixture.store.state.reservations.size, 0);
   assert.equal(fixture.store.state.idempotency.size, 0);
+  assert.equal(fixture.store.state.committedIdempotency.size, 60);
+
+  const replay = await fixture.usageService.reserve(reservationInput(
+    fixture.account.id,
+    "evict-0",
+    [{ action: ACTIONS.VIDEO_PROCESSING, units: 1000 }]
+  ));
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.state, "committed");
+  assert.equal(replay.tombstone, true);
+  assert.equal(replay.resultReference, replay.id);
+  assert.equal(
+    (await fixture.usageService.getUsage(fixture.account.id)).allowances
+      .find((item) => item.action === ACTIONS.VIDEO_PROCESSING).committed,
+    60_000
+  );
+  await assert.rejects(
+    fixture.usageService.reserve(reservationInput(
+      fixture.account.id,
+      "evict-0",
+      [{ action: ACTIONS.VIDEO_PROCESSING, units: 1001 }]
+    )),
+    (error) => error.code === "IDEMPOTENCY_CONFLICT"
+  );
 
   await assert.rejects(
     fixture.usageService.reserve(reservationInput(

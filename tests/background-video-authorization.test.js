@@ -27,11 +27,17 @@ function createStorageArea(store, events, label) {
   };
 }
 
-function createWorkerHarness({ authorization, tabUrl = authorization?.sourceSnapshot?.canonicalUrl } = {}) {
+function createWorkerHarness({
+  authorization,
+  tabUrl = authorization?.sourceSnapshot?.canonicalUrl,
+  settings,
+  fetchImpl = fetch
+} = {}) {
   const events = [];
   const localStore = new Map();
   const sessionStore = new Map();
   if (authorization) sessionStore.set("examCramVideoCaptureAuthorization", structuredClone(authorization));
+  if (settings) localStore.set("examCramSettings", structuredClone(settings));
   const listeners = {};
   const runtimeMessages = [];
   const offscreenMessages = [];
@@ -144,7 +150,7 @@ function createWorkerHarness({ authorization, tabUrl = authorization?.sourceSnap
     console: { log() {}, warn() {}, error() {} },
     crypto: webcrypto,
     DOMException,
-    fetch,
+    fetch: fetchImpl,
     queueMicrotask,
     setInterval,
     clearInterval,
@@ -160,6 +166,7 @@ function createWorkerHarness({ authorization, tabUrl = authorization?.sourceSnap
   vm.runInContext(fs.readFileSync(path.join(root, "background.js"), "utf8"), context, { filename: "background.js" });
 
   return {
+    context,
     events,
     listeners,
     localStore,
@@ -249,4 +256,34 @@ test("real worker refuses a changed page and expires the armed request without t
     message.type === "VIDEO_CAPTURE_AUTHORIZATION_CHANGED"
     && message.state?.status === "expired"
   )));
+});
+
+test("real worker refuses hosted tab-audio before deriving or calling a custom backend", async () => {
+  let fetchCalls = 0;
+  const harness = createWorkerHarness({
+    settings: {
+      backendMode: "hosted",
+      apiEndpoint: "not-a-valid-backend-url",
+      backendAccessToken: "stale-custom-backend-token"
+    },
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error("hosted mode must not reach fetch");
+    }
+  });
+  const isHostedUnavailable = (error) => {
+    assert.equal(error?.code, "HOSTED_VIDEO_TRANSCRIPTION_UNAVAILABLE");
+    assert.match(error?.message || "", /Hosted tab-audio transcription is not enabled/i);
+    return true;
+  };
+
+  await assert.rejects(
+    harness.context.transcribeVideoChunk({ id: "chunk-1" }, "job-1"),
+    isHostedUnavailable
+  );
+  await assert.rejects(
+    harness.context.preflightVideoTranscriptionBackend(),
+    isHostedUnavailable
+  );
+  assert.equal(fetchCalls, 0);
 });

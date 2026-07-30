@@ -1049,6 +1049,7 @@ async function stopVideoCapture(reason, discard) {
 async function transcribeVideoChunk(chunk, jobId) {
   const settingsResult = await chrome.storage.local.get("examCramSettings");
   const settings = settingsResult.examCramSettings || {};
+  assertWorkerVideoTranscriptionMode(settings);
   const configuredEndpoint = Object.prototype.hasOwnProperty.call(settings, "apiEndpoint")
     ? settings.apiEndpoint
     : DEFAULT_BACKEND_ENDPOINT;
@@ -1129,6 +1130,7 @@ async function transcribeVideoChunk(chunk, jobId) {
 async function preflightVideoTranscriptionBackend() {
   const settingsResult = await chrome.storage.local.get("examCramSettings");
   const settings = settingsResult.examCramSettings || {};
+  assertWorkerVideoTranscriptionMode(settings);
   const configuredEndpoint = Object.prototype.hasOwnProperty.call(settings, "apiEndpoint")
     ? settings.apiEndpoint
     : DEFAULT_BACKEND_ENDPOINT;
@@ -1182,6 +1184,14 @@ async function preflightVideoTranscriptionBackend() {
     );
   }
   return payload;
+}
+
+function assertWorkerVideoTranscriptionMode(settings) {
+  if (String(settings?.backendMode || "").trim().toLowerCase() !== "hosted") return;
+  throw new Video.VideoCaptureError(
+    "HOSTED_VIDEO_TRANSCRIPTION_UNAVAILABLE",
+    "Hosted tab-audio transcription is not enabled in this build. Select a local or custom backend before starting tab audio."
+  );
 }
 
 function getVideoBackendAuthorizationMessage(code) {

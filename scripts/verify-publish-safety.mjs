@@ -4,15 +4,16 @@ import { fileURLToPath } from "node:url";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const excludedDirectories = new Set([
-  ".git", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
+  ".git", ".claude", ".codex", ".playwright-cli", "node_modules", "output", "release", "tmp", "temp", "coverage", ".nyc_output"
 ]);
-const excludedFiles = new Set([".env", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
+const excludedFiles = new Set([".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl"]);
 const textExtensions = new Set([".css", ".html", ".js", ".json", ".md", ".mjs", ".txt", ".yaml", ".yml"]);
 // Credential files carry no useful extension, so extname-based scanning skips them entirely.
 // Match them by name instead: a rename is what let a committed backend token pass this gate once.
 const secretFilePattern = /(?:^|[.\-])backend-token$/;
+const environmentFilePattern = /^\.env(?:\.|$)/;
 const requiredIgnoreEntries = [
-  ".env", ".env.*", "*-backend-token", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
+  ".env", ".env.*", "*-backend-token", ".exam-cram-backend-token", ".exam-cram-cost-telemetry.jsonl", ".claude/", ".codex/", ".playwright-cli/", "node_modules/", "output/", "release/", "tmp/", "coverage/", "*.pem", "*.key", "*.crx"
 ];
 
 const findings = [];
@@ -24,6 +25,7 @@ for (const filename of candidates) {
   const content = await readFile(filename, "utf8");
   const displayName = relative(projectRoot, filename).replaceAll("\\", "/");
   const checks = [
+    ["raw NUL byte", /\0/],
     ["private key material", /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
     ["Google API credential", /AIza[0-9A-Za-z_-]{35}/],
     ["OpenAI credential", /\bsk-(?:proj-)?[A-Za-z0-9_-]{20,}\b/],
@@ -69,16 +71,25 @@ async function collect(directory) {
       continue;
     }
     if (!entry.isFile()) continue;
-    // The credential check runs before excludedFiles so the exclusion list, which names
-    // .exam-cram-backend-token, cannot hide the very file this gate exists to catch.
-    if (secretFilePattern.test(entry.name)) {
-      findings.push(`${relative(projectRoot, fullPath).replaceAll("\\", "/")}: credential file is present in a publishable tree`);
-      continue;
-    }
-    if (excludedFiles.has(entry.name)) continue;
+    const displayName = relative(projectRoot, fullPath).replaceAll("\\", "/");
     const isEnvironmentTemplate =
       entry.name === ".env.example" ||
       (entry.name.startsWith(".env.") && entry.name.endsWith(".example"));
+    if (environmentFilePattern.test(entry.name) && !isEnvironmentTemplate) {
+      // Root environment files are the local secret source against which publishable
+      // files are checked. A nested one is publishable-tree residue and must fail.
+      if (dirname(fullPath) !== projectRoot) {
+        findings.push(`${displayName}: environment file is present in a publishable tree`);
+      }
+      continue;
+    }
+    // The credential check runs before excludedFiles so the exclusion list, which names
+    // .exam-cram-backend-token, cannot hide the very file this gate exists to catch.
+    if (secretFilePattern.test(entry.name)) {
+      findings.push(`${displayName}: credential file is present in a publishable tree`);
+      continue;
+    }
+    if (excludedFiles.has(entry.name)) continue;
     if (textExtensions.has(extname(entry.name).toLowerCase()) || entry.name === ".gitignore" || isEnvironmentTemplate) {
       candidates.push(fullPath);
     }
@@ -87,15 +98,26 @@ async function collect(directory) {
 
 async function loadLocalSecrets() {
   const secrets = [];
-  const env = await readFile(resolve(projectRoot, ".env"), "utf8").catch(() => "");
-  env.split(/\r?\n/).forEach((line) => {
-    const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
-    const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
-    const sensitiveName = /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|ALLOWED_EXTENSION_ORIGINS)/.test(match?.[1] || "");
-    if (match && sensitiveName && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
-      secrets.push({ name: match[1], value });
-    }
-  });
+  const rootEntries = await readdir(projectRoot, { withFileTypes: true });
+  const environmentFiles = rootEntries
+    .filter((entry) => (
+      entry.isFile() &&
+      environmentFilePattern.test(entry.name) &&
+      entry.name !== ".env.example" &&
+      !entry.name.endsWith(".example")
+    ))
+    .map((entry) => entry.name);
+  for (const name of environmentFiles) {
+    const env = await readFile(resolve(projectRoot, name), "utf8").catch(() => "");
+    env.split(/\r?\n/).forEach((line) => {
+      const match = line.match(/^\s*([A-Z][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
+      const value = String(match?.[2] || "").replace(/^['"]|['"]$/g, "");
+      const sensitiveName = /(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|ALLOWED_EXTENSION_ORIGINS)/.test(match?.[1] || "");
+      if (match && sensitiveName && value.length >= 12 && !/^(?:replace-|your-)/i.test(value)) {
+        secrets.push({ name: `${name}:${match[1]}`, value });
+      }
+    });
+  }
   const backendToken = (await readFile(resolve(projectRoot, ".exam-cram-backend-token"), "utf8").catch(() => "")).trim();
   if (backendToken.length >= 12) secrets.push({ name: "BACKEND_ACCESS_TOKEN_FILE", value: backendToken });
   return secrets;

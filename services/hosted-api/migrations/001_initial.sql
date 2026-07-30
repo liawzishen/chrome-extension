@@ -343,6 +343,7 @@ CREATE TABLE hosted.usage_operations (
   source_type varchar(24),
   input_size_bucket varchar(24),
   result_code varchar(80),
+  result_reference varchar(255),
   expires_at timestamptz NOT NULL,
   committed_at timestamptz,
   released_at timestamptz,
@@ -375,6 +376,11 @@ CREATE TABLE hosted.usage_operations (
       result_code IS NULL
       OR result_code ~ '^[A-Z][A-Z0-9_]{0,79}$'
     ),
+  CONSTRAINT usage_operations_result_reference_check
+    CHECK (
+      result_reference IS NULL
+      OR result_reference ~ '^[A-Za-z0-9._:-]{1,255}$'
+    ),
   CONSTRAINT usage_operations_expiry_check
     CHECK (expires_at > created_at),
   CONSTRAINT usage_operations_transition_timestamps_check
@@ -384,18 +390,21 @@ CREATE TABLE hosted.usage_operations (
         AND committed_at IS NULL
         AND released_at IS NULL
         AND result_code IS NULL
+        AND result_reference IS NULL
       )
       OR (
         state = 'committed'
         AND committed_at IS NOT NULL
         AND released_at IS NULL
         AND result_code IS NOT NULL
+        AND result_reference IS NOT NULL
       )
       OR (
         state IN ('released', 'expired')
         AND committed_at IS NULL
         AND released_at IS NOT NULL
         AND result_code IS NOT NULL
+        AND result_reference IS NULL
       )
     )
 );
@@ -458,6 +467,8 @@ CREATE TABLE hosted.usage_operation_items (
     ),
   CONSTRAINT usage_operation_items_units_check
     CHECK (units BETWEEN 1 AND 43200000),
+  CONSTRAINT usage_operation_items_metering_units_check
+    CHECK (action = 'video_processing' OR units = 1),
   CONSTRAINT usage_operation_items_limit_check
     CHECK (
       allowance_limit_at_reservation IS NULL

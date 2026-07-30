@@ -167,6 +167,9 @@ The API boundary must produce the request fingerprint with a server-only HMAC ke
 Never put raw source text into the usage store, and do not use an unsalted content hash
 as an analytics identifier. A duplicate committed operation must replay its stored
 artifact/result; it must never execute provider work a second time.
+The detailed in-memory reservation record may be pruned, but a compact committed
+idempotency tombstone and opaque result reference must survive so a delayed retry
+remains authoritative.
 
 The private generation adapter must also provide `prepareGenerationRequest` and
 `validateGenerationResult`. Those trusted server functions validate the operation
@@ -177,7 +180,8 @@ schema-check the result before usage can commit. The browser's `action`, `items`
 For a combined study session, both `study_build` and `quiz_build` are reserved and
 committed atomically. Video usage is stored as exact integer milliseconds. Duplicate
 tab-audio chunks must reuse a stable chunk idempotency key so they cannot consume time
-twice.
+twice. Every non-video action or batch is exactly one unit; only `video_processing`
+accepts variable units.
 
 `webhook_receipts` is inserted only after signature verification. Its primary key
 deduplicates deliveries. Because provider events can arrive out of order, the durable
@@ -202,7 +206,7 @@ The current domain policies are provisional launch defaults from the handoff:
 | Journey summaries | 1 per UTC calendar month | 10 per subscription month |
 | Classification batches | 1 per UTC calendar month | 10 per subscription month |
 | Captionless processing | One lifetime 15-minute preview | 120 minutes per subscription month |
-| Multi-source hosted lesson | One lifetime preview | Included |
+| Multi-source hosted lesson | One lifetime preview | Included within the 30 study builds |
 
 Free periods reset at 00:00 UTC on the first day of each calendar month. Pro periods
 are monthly windows anchored to subscription start, including annual subscriptions.

@@ -6,6 +6,8 @@ const {
   createStripeBillingAdapter
 } = require("../services/hosted-api/src/adapters/stripe-billing.js");
 
+const CHECKOUT_ATTEMPT_ID = "checkout-attempt-unit123";
+
 function adapterConfig(overrides = {}) {
   return {
     billingEnabled: true,
@@ -125,6 +127,7 @@ test("checkout maps a monthly choice to server-owned price and redirect values",
   const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
 
   const result = await adapter.createCheckoutSession({
+    attemptId: CHECKOUT_ATTEMPT_ID,
     interval: "month",
     idempotencyKey: "checkout:account-123:0001",
     account: {
@@ -155,8 +158,10 @@ test("checkout maps a monthly choice to server-owned price and redirect values",
       automatic_tax: { enabled: false },
       metadata: {
         account_id: "account-123",
+        checkout_attempt_id: CHECKOUT_ATTEMPT_ID,
         plan: "student_pro",
-        interval: "month"
+        interval: "month",
+        price_id: "price_monthly123"
       },
       subscription_data: {
         metadata: {
@@ -180,6 +185,7 @@ test("annual checkout reuses only the authenticated account's stored Stripe cust
   }), { stripe });
 
   await adapter.createCheckoutSession({
+    attemptId: CHECKOUT_ATTEMPT_ID,
     interval: "year",
     idempotencyKey: "checkout:account-123:0002",
     account: {
@@ -259,6 +265,7 @@ test("checkout fails closed when a configured Price has the wrong amount or inte
 
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "month",
       idempotencyKey: "checkout:account-123:catalog",
       account: { id: "account-123" }
@@ -284,6 +291,7 @@ test("a transient Stripe price outage does not permanently poison the catalog me
   );
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "month",
       idempotencyKey: "checkout:account-123:outage",
       account: { id: "account-123" }
@@ -298,6 +306,7 @@ test("a transient Stripe price outage does not permanently poison the catalog me
   assert.equal(catalog.year.id, "price_annual123");
 
   const result = await adapter.createCheckoutSession({
+    attemptId: CHECKOUT_ATTEMPT_ID,
     interval: "month",
     idempotencyKey: "checkout:account-123:recovered",
     account: { id: "account-123" }
@@ -332,6 +341,7 @@ test("the provisional founding offer cannot use the ordinary recurring checkout 
 
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "founding_year",
       idempotencyKey: "checkout:account-123:founding",
       account: { id: "account-123" }
@@ -340,13 +350,14 @@ test("the provisional founding offer cannot use the ordinary recurring checkout 
   );
 });
 
-test("checkout rejects unsupported intervals and missing idempotency before calling Stripe", async () => {
+test("checkout rejects unsupported intervals and missing association or idempotency before calling Stripe", async () => {
   const { calls, stripe } = createFakeStripe();
   const adapter = createStripeBillingAdapter(adapterConfig(), { stripe });
   const account = { id: "account-123" };
 
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "founding-year",
       idempotencyKey: "checkout:account-123:0003",
       account
@@ -355,10 +366,19 @@ test("checkout rejects unsupported intervals and missing idempotency before call
   );
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "month",
       account
     }),
     (error) => assertHostedError(error, "IDEMPOTENCY_REQUIRED")
+  );
+  await assert.rejects(
+    adapter.createCheckoutSession({
+      interval: "month",
+      idempotencyKey: "checkout:account-123:missing-attempt",
+      account
+    }),
+    (error) => assertHostedError(error, "CHECKOUT_ATTEMPT_REQUIRED")
   );
   assert.equal(calls.checkout.length, 0);
 });
@@ -414,6 +434,7 @@ test("adapter rejects non-Stripe Checkout and Portal response URLs", async () =>
 
   await assert.rejects(
     adapter.createCheckoutSession({
+      attemptId: CHECKOUT_ATTEMPT_ID,
       interval: "month",
       idempotencyKey: "checkout:account-123:0004",
       account: { id: "account-123" }

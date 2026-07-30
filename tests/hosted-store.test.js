@@ -71,7 +71,8 @@ function snapshotState(state) {
       [...buckets.entries()]
     ]),
     activeReservations: [...state.activeReservations.entries()],
-    finalizedReservations: [...state.finalizedReservations.entries()]
+    finalizedReservations: [...state.finalizedReservations.entries()],
+    committedIdempotency: [...state.committedIdempotency.entries()]
   });
 }
 
@@ -154,12 +155,36 @@ test("derived usage indexes roll back atomically with their source reservation",
       state.activeReservations.delete("res_indexed");
       state.usageTotals.get("account_indexed").get("study_build\u0000period-indexed").reserved = 0;
       state.finalizedReservations.set("res_indexed", BASE);
+      state.committedIdempotency.set("account_indexed:committed-key", {
+        id: "res_committed",
+        state: "committed"
+      });
       throw new Error("roll back indexes");
     }),
     /roll back indexes/
   );
 
   assert.deepEqual(snapshotState(store.state), before);
+});
+
+test("rebuilding derived indexes preserves seeded committed idempotency tombstones", () => {
+  const tombstone = {
+    id: "res_pruned",
+    accountId: "account_pruned",
+    idempotencyKey: "pruned-committed-key",
+    requestDigest: "a".repeat(64),
+    state: "committed",
+    items: [],
+    resultReference: "artifact_pruned",
+    tombstone: true
+  };
+  const store = new MemoryHostedStore({
+    committedIdempotency: [["account_pruned:pruned-committed-key", tombstone]]
+  });
+  assert.deepEqual(
+    store.state.committedIdempotency.get("account_pruned:pruned-committed-key"),
+    tombstone
+  );
 });
 
 test("concurrent transactions serialize and a failed one leaves the next ones consistent", async () => {

@@ -78,6 +78,19 @@ function checkoutInput(account, overrides = {}) {
   };
 }
 
+function createBilling(store) {
+  return new BillingService({
+    store,
+    config: {
+      graceDays: 0,
+      refundRevokesAccess: false,
+      priceIds: { month: "price_monthly", year: "price_annual" }
+    },
+    now: () => NOW,
+    logger: { error() {} }
+  });
+}
+
 test("Checkout retries recover one provider session and never trust the client key at Stripe", async () => {
   const fixture = await createFixture();
   const first = await fixture.checkout.createSession(checkoutInput(fixture.account));
@@ -89,6 +102,8 @@ test("Checkout retries recover one provider session and never trust the client k
   assert.equal(replay.idempotentReplay, true);
   assert.equal(fixture.calls.create.length, 1);
   assert.equal(fixture.calls.retrieve.length, 1);
+  const attempt = [...fixture.store.state.checkoutAttempts.values()][0];
+  assert.equal(fixture.calls.create[0].attemptId, attempt.id);
   assert.match(fixture.calls.create[0].idempotencyKey, /^checkout:[a-f0-9]{64}$/);
   assert.notEqual(
     fixture.calls.create[0].idempotencyKey,
@@ -193,16 +208,8 @@ test("an ambiguous provider failure remains locked but the same key can recover 
 test("a verified Checkout webhook completes the pending attempt", async () => {
   const fixture = await createFixture();
   await fixture.checkout.createSession(checkoutInput(fixture.account));
-  const billing = new BillingService({
-    store: fixture.store,
-    config: {
-      graceDays: 0,
-      refundRevokesAccess: false,
-      priceIds: { month: "price_monthly", year: "price_annual" }
-    },
-    now: () => NOW,
-    logger: { error() {} }
-  });
+  const pendingAttempt = [...fixture.store.state.checkoutAttempts.values()][0];
+  const billing = createBilling(fixture.store);
   await billing.processVerifiedEvent({
     id: "evt_checkout_completed",
     type: "checkout.session.completed",
@@ -213,14 +220,157 @@ test("a verified Checkout webhook completes the pending attempt", async () => {
         client_reference_id: fixture.account.id,
         customer: "cus_checkout",
         subscription: "sub_checkout",
-        metadata: { account_id: fixture.account.id }
+        metadata: {
+          account_id: fixture.account.id,
+          checkout_attempt_id: pendingAttempt.id,
+          interval: pendingAttempt.interval,
+          price_id: pendingAttempt.providerPriceId
+        }
       }
     }
   });
 
-  const attempt = [...fixture.store.state.checkoutAttempts.values()][0];
-  assert.equal(attempt.status, "completed");
+  assert.equal(pendingAttempt.status, "completed");
   assert.equal(fixture.store.state.activeCheckoutAccounts.has(fixture.account.id), false);
+});
+
+test("an unmatched completed session cannot link billing or clear the real pending attempt", async () => {
+  const fixture = await createFixture();
+  await fixture.checkout.createSession(checkoutInput(fixture.account));
+  const pendingAttempt = [...fixture.store.state.checkoutAttempts.values()][0];
+  const billing = createBilling(fixture.store);
+  const event = {
+    id: "evt_checkout_unmatched",
+    type: "checkout.session.completed",
+    created: Math.floor(NOW / 1000),
+    data: {
+      object: {
+        id: "cs_test_unmatched",
+        client_reference_id: fixture.account.id,
+        customer: "cus_unmatched",
+        subscription: "sub_unmatched",
+        metadata: {
+          account_id: fixture.account.id,
+          interval: "month",
+          price_id: pendingAttempt.providerPriceId
+        }
+      }
+    }
+  };
+
+  await assert.rejects(
+    billing.processVerifiedEvent(event),
+    (error) => error?.code === "CHECKOUT_ATTEMPT_UNMATCHED"
+  );
+  assert.equal(pendingAttempt.status, "open");
+  assert.equal(
+    fixture.store.state.activeCheckoutAccounts.get(fixture.account.id),
+    pendingAttempt.id
+  );
+  assert.equal(fixture.store.state.accounts.get(fixture.account.id).stripeCustomerId, null);
+  assert.equal(fixture.store.state.customerAccounts.has("cus_unmatched"), false);
+  assert.equal(fixture.store.state.subscriptionAccounts.has("sub_unmatched"), false);
+  assert.equal(fixture.store.state.processedBillingEvents.has(event.id), false);
+});
+
+test("a stale completed session cannot clear a newer pending attempt", async () => {
+  const fixture = await createFixture();
+  await fixture.checkout.createSession(checkoutInput(fixture.account));
+  const pendingAttempt = [...fixture.store.state.checkoutAttempts.values()][0];
+  const staleAttempt = {
+    ...structuredClone(pendingAttempt),
+    id: "checkout-attempt-stale",
+    idempotencyKey: "checkout-client-key-stale",
+    providerSessionId: "cs_test_stale",
+    status: "expired"
+  };
+  await fixture.store.transaction((state) => {
+    state.checkoutAttempts.set(staleAttempt.id, staleAttempt);
+    state.checkoutSessions.set(staleAttempt.providerSessionId, staleAttempt.id);
+  });
+  const billing = createBilling(fixture.store);
+  const event = {
+    id: "evt_checkout_stale",
+    type: "checkout.session.completed",
+    created: Math.floor(NOW / 1000),
+    data: {
+      object: {
+        id: staleAttempt.providerSessionId,
+        client_reference_id: fixture.account.id,
+        customer: "cus_stale",
+        subscription: "sub_stale",
+        metadata: {
+          account_id: fixture.account.id,
+          checkout_attempt_id: staleAttempt.id,
+          interval: staleAttempt.interval,
+          price_id: staleAttempt.providerPriceId
+        }
+      }
+    }
+  };
+
+  await assert.rejects(
+    billing.processVerifiedEvent(event),
+    (error) => error?.code === "CHECKOUT_ATTEMPT_STALE"
+  );
+  assert.equal(staleAttempt.status, "expired");
+  assert.equal(pendingAttempt.status, "open");
+  assert.equal(
+    fixture.store.state.activeCheckoutAccounts.get(fixture.account.id),
+    pendingAttempt.id
+  );
+  assert.equal(fixture.store.state.accounts.get(fixture.account.id).stripeCustomerId, null);
+  assert.equal(fixture.store.state.customerAccounts.has("cus_stale"), false);
+  assert.equal(fixture.store.state.processedBillingEvents.has(event.id), false);
+});
+
+test("a create-session response cannot regress a webhook-completed attempt to open", async () => {
+  let billing;
+  const fixture = await createFixture({
+    async createCheckoutSession(input, calls, sessions) {
+      const session = {
+        id: "cs_test_webhook_race",
+        url: "https://checkout.stripe.com/c/pay/cs_test_webhook_race",
+        status: "open",
+        expiresAt: "2026-07-29T12:00:00.000Z"
+      };
+      await billing.processVerifiedEvent({
+        id: "evt_checkout_webhook_race",
+        type: "checkout.session.completed",
+        created: Math.floor(NOW / 1000),
+        data: {
+          object: {
+            id: session.id,
+            client_reference_id: fixture.account.id,
+            customer: "cus_webhook_race",
+            subscription: "sub_webhook_race",
+            metadata: {
+              account_id: fixture.account.id,
+              checkout_attempt_id: input.attemptId,
+              interval: input.interval,
+              price_id: "price_monthly"
+            }
+          }
+        }
+      });
+      sessions.set(session.id, session);
+      return session;
+    }
+  });
+  billing = createBilling(fixture.store);
+
+  const response = await fixture.checkout.createSession(checkoutInput(fixture.account));
+  const attempt = [...fixture.store.state.checkoutAttempts.values()][0];
+
+  assert.equal(response.id, "cs_test_webhook_race");
+  assert.equal(attempt.status, "completed");
+  assert.equal(attempt.providerSessionId, response.id);
+  assert.equal(fixture.store.state.checkoutSessions.get(response.id), attempt.id);
+  assert.equal(fixture.store.state.activeCheckoutAccounts.has(fixture.account.id), false);
+  assert.equal(
+    fixture.store.state.accounts.get(fixture.account.id).stripeCustomerId,
+    "cus_webhook_race"
+  );
 });
 
 test("a nonterminal existing subscription must be repaired in the Portal, not duplicated", async () => {
